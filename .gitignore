@@ -1,0 +1,73 @@
+# Node / React + Vite
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+backend/.venv/
+backend/venv/
+backend/env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Databases and local RAG stores
+*.sqlite
+*.sqlite3
+*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/*.db
+chroma/
+chromadb/
+.chroma/
+backend/chroma/
+backend/chromadb/
+backend/.chroma/
+data/chroma/
+data/chromadb/
+
+# Uploaded user files and generated artifacts
+uploads/
+backend/uploads/
+data/uploads/
+tmp/
+temp/
+*.tmp
+*.temp
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

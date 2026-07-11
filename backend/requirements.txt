@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 python-multipart
+chromadb
+sentence-transformers
+pypdf
+python-docx

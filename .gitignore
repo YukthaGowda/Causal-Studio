@@ -49,12 +49,15 @@ backend/*.sqlite3
 backend/*.db
 chroma/
 chromadb/
+chroma_db/
 .chroma/
 backend/chroma/
 backend/chromadb/
+backend/chroma_db/
 backend/.chroma/
 data/chroma/
 data/chromadb/
+data/chroma_db/
 
 # Uploaded user files and generated artifacts
 uploads/

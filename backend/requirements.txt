@@ -6,3 +6,5 @@ sentence-transformers
 pypdf
 python-docx
 pandas
+openai
+python-dotenv

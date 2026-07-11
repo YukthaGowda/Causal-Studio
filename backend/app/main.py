@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.causal_questions import router as causal_questions_router
 from app.api.datasets import router as datasets_router
 from app.api.documents import router as documents_router
 from app.api.rag import router as rag_router
@@ -26,6 +27,7 @@ app.add_middleware(
 app.include_router(documents_router)
 app.include_router(rag_router)
 app.include_router(datasets_router)
+app.include_router(causal_questions_router)
 
 
 @app.get("/")

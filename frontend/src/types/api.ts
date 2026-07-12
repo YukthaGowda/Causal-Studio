@@ -290,3 +290,35 @@ export type CausalGraphValidationResponse = {
   graph_draft: CausalGraphDraft;
   backend_validation: BackendCausalGraphValidation;
 };
+
+export type IdentificationIssue = {
+  issue_type: string;
+  variable_name?: string | null;
+  source?: string | null;
+  target?: string | null;
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+  suggested_fix: string;
+};
+
+export type IdentificationCheckResponse = {
+  status: string;
+  identification_status:
+    | "ready_for_analysis_planning"
+    | "requires_revision"
+    | "not_identifiable_with_current_design"
+    | "identifiable_only_under_additional_assumptions";
+  exposure: string | null;
+  outcome: string | null;
+  proposed_adjustment_set: string[];
+  adjustment_set_status: "acceptable" | "needs_review" | "invalid" | "unavailable";
+  open_issues: IdentificationIssue[];
+  warnings: IdentificationIssue[];
+  errors: IdentificationIssue[];
+  assumptions_required: string[];
+  missing_variables: string[];
+  recommended_next_action: string;
+  safe_to_continue_to_analysis_strategy: boolean;
+  plain_language_summary: string;
+  evidence_chunks_used: number;
+};

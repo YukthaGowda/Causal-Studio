@@ -11,6 +11,7 @@ import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
 import { recommendAndValidateRoles } from "../api/causalRoles";
 import { generateAndValidateGraph } from "../api/causalGraph";
+import { runIdentificationCheck } from "../api/identification";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
   BackendCausalRoleValidation,
@@ -21,6 +22,7 @@ import type {
   CausalRoleRecommendation,
   DatasetSchemaResponse,
   DerivedFeatureRecommendation,
+  IdentificationCheckResponse,
   IngestionStatusResponse,
   RagSearchResult,
   UploadedDataset,
@@ -309,6 +311,104 @@ export function HomePage() {
   const [graphMessage, setGraphMessage] = useState("");
   const [graphError, setGraphError] = useState("");
   const [graphBusy, setGraphBusy] = useState(false);
+  const [identificationDataset, setIdentificationDataset] = useState("");
+  const [identificationGraphJson, setIdentificationGraphJson] = useState(`{
+  "graph_type": "DAG",
+  "nodes": [
+    {
+      "node_id": "acc_mean_magnitude",
+      "variable_name": "acc_mean_magnitude",
+      "role": "exposure",
+      "temporal_role": "window t",
+      "data_category": "smartphone_sensing",
+      "is_observed": true
+    },
+    {
+      "node_id": "label",
+      "variable_name": "label",
+      "role": "outcome",
+      "temporal_role": "next observation window",
+      "data_category": "ema_self_report",
+      "is_observed": true
+    },
+    {
+      "node_id": "time_of_day",
+      "variable_name": "time_of_day",
+      "role": "temporal_context_variable",
+      "temporal_role": "window t",
+      "data_category": "temporal_contextual",
+      "is_observed": true
+    },
+    {
+      "node_id": "day_of_week",
+      "variable_name": "day_of_week",
+      "role": "temporal_context_variable",
+      "temporal_role": "window t",
+      "data_category": "temporal_contextual",
+      "is_observed": true
+    },
+    {
+      "node_id": "avg_latitude",
+      "variable_name": "avg_latitude",
+      "role": "time_varying_covariate",
+      "temporal_role": "window t",
+      "data_category": "smartphone_sensing",
+      "is_observed": true
+    }
+  ],
+  "edges": [
+    {
+      "source": "acc_mean_magnitude",
+      "target": "label",
+      "edge_type": "directed",
+      "confidence": "medium",
+      "temporal_assumption": "window t precedes next observation label"
+    },
+    {
+      "source": "time_of_day",
+      "target": "acc_mean_magnitude",
+      "edge_type": "directed",
+      "confidence": "medium",
+      "temporal_assumption": "same window context"
+    },
+    {
+      "source": "day_of_week",
+      "target": "acc_mean_magnitude",
+      "edge_type": "directed",
+      "confidence": "medium",
+      "temporal_assumption": "same window context"
+    },
+    {
+      "source": "day_of_week",
+      "target": "label",
+      "edge_type": "directed",
+      "confidence": "low",
+      "temporal_assumption": "calendar context may precede outcome"
+    },
+    {
+      "source": "avg_latitude",
+      "target": "acc_mean_magnitude",
+      "edge_type": "directed",
+      "confidence": "low",
+      "temporal_assumption": "same window mobility context"
+    },
+    {
+      "source": "avg_latitude",
+      "target": "label",
+      "edge_type": "directed",
+      "confidence": "low",
+      "temporal_assumption": "window t precedes next observation label"
+    }
+  ]
+}`);
+  const [adjustmentSetText, setAdjustmentSetText] = useState(
+    "time_of_day, day_of_week, avg_latitude",
+  );
+  const [identificationResult, setIdentificationResult] =
+    useState<IdentificationCheckResponse | null>(null);
+  const [identificationMessage, setIdentificationMessage] = useState("");
+  const [identificationError, setIdentificationError] = useState("");
+  const [identificationBusy, setIdentificationBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -351,6 +451,9 @@ export function HomePage() {
     }
     if (!graphDataset && datasetList.datasets.length > 0) {
       setGraphDataset(datasetList.datasets[0].filename);
+    }
+    if (!identificationDataset && datasetList.datasets.length > 0) {
+      setIdentificationDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -597,6 +700,43 @@ export function HomePage() {
       setGraphError((error as Error).message);
     } finally {
       setGraphBusy(false);
+    }
+  }
+
+  async function handleIdentificationCheck() {
+    if (!identificationDataset) {
+      setIdentificationError("Select a dataset first.");
+      return;
+    }
+
+    setIdentificationBusy(true);
+    setIdentificationError("");
+    setIdentificationMessage("");
+
+    try {
+      const graph = JSON.parse(identificationGraphJson);
+      const roleRecommendations = JSON.parse(roleRecommendationsJson);
+      const userAdjustmentSet = adjustmentSetText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      const response = await runIdentificationCheck({
+        confirmedQuestion,
+        datasetFilename: identificationDataset,
+        graph,
+        roleRecommendations,
+        userAdjustmentSet,
+        topKEvidence: topK,
+      });
+      setIdentificationResult(response);
+      setIdentificationMessage(
+        `Identification status: ${response.identification_status}. Adjustment set: ${response.adjustment_set_status}.`,
+      );
+    } catch (error) {
+      setIdentificationError((error as Error).message);
+    } finally {
+      setIdentificationBusy(false);
     }
   }
 
@@ -1455,6 +1595,187 @@ export function HomePage() {
                         </strong>
                         <p>{error.message}</p>
                         <span>{error.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Analysis Readiness</p>
+                <h2>Identification Check</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="identification-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="identification-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setIdentificationDataset(event.target.value)}
+                value={identificationDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={identificationBusy}
+                onClick={handleIdentificationCheck}
+                type="button"
+              >
+                Run Identification Check
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="identification-graph-json">
+              Graph JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="identification-graph-json"
+              onChange={(event) => setIdentificationGraphJson(event.target.value)}
+              rows={12}
+              value={identificationGraphJson}
+            />
+
+            <label className="field-label" htmlFor="identification-roles-json">
+              Role Recommendations JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="identification-roles-json"
+              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
+              rows={8}
+              value={roleRecommendationsJson}
+            />
+
+            <label className="field-label" htmlFor="adjustment-set">
+              User Adjustment Set
+            </label>
+            <input
+              id="adjustment-set"
+              onChange={(event) => setAdjustmentSetText(event.target.value)}
+              value={adjustmentSetText}
+            />
+
+            <StatusMessage
+              error={identificationError}
+              message={identificationMessage}
+            />
+
+            {identificationResult && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{identificationResult.identification_status}</strong>
+                  <span>Identification Status</span>
+                </div>
+                <div>
+                  <strong>
+                    {identificationResult.safe_to_continue_to_analysis_strategy
+                      ? "Yes"
+                      : "No"}
+                  </strong>
+                  <span>Safe To Plan</span>
+                </div>
+                <p>{identificationResult.plain_language_summary}</p>
+              </section>
+            )}
+
+            {identificationResult && (
+              <section className="role-section">
+                <h3>Adjustment Set</h3>
+                <div className="schema-summary">
+                  <div>
+                    <strong>{identificationResult.exposure ?? "Unknown"}</strong>
+                    <span>Exposure</span>
+                  </div>
+                  <div>
+                    <strong>{identificationResult.outcome ?? "Unknown"}</strong>
+                    <span>Outcome</span>
+                  </div>
+                  <div>
+                    <strong>{identificationResult.adjustment_set_status}</strong>
+                    <span>Adjustment Status</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {identificationResult.proposed_adjustment_set.join(", ") ||
+                        "None"}
+                    </strong>
+                    <span>Proposed Set</span>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {identificationResult && (
+              <section className="role-section">
+                <h3>Warnings</h3>
+                <div className="issue-list">
+                  {identificationResult.warnings.length === 0 ? (
+                    <p>No warnings returned.</p>
+                  ) : (
+                    identificationResult.warnings.map((warning, index) => (
+                      <article className="issue-card" key={`${warning.issue_type}-${index}`}>
+                        <strong>
+                          {warning.variable_name ??
+                            warning.source ??
+                            "General"}{" "}
+                          - {warning.severity}
+                        </strong>
+                        <p>{warning.message}</p>
+                        <span>{warning.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>Errors</h3>
+                <div className="issue-list">
+                  {identificationResult.errors.length === 0 ? (
+                    <p>No errors returned.</p>
+                  ) : (
+                    identificationResult.errors.map((error, index) => (
+                      <article className="issue-card issue-card--error" key={`${error.issue_type}-${index}`}>
+                        <strong>
+                          {error.variable_name ?? error.source ?? "General"} -{" "}
+                          {error.severity}
+                        </strong>
+                        <p>{error.message}</p>
+                        <span>{error.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>Open Issues</h3>
+                <div className="issue-list">
+                  {identificationResult.open_issues.length === 0 ? (
+                    <p>No open issues returned.</p>
+                  ) : (
+                    identificationResult.open_issues.map((issue, index) => (
+                      <article className="issue-card" key={`${issue.issue_type}-${index}`}>
+                        <strong>
+                          {issue.variable_name ?? issue.source ?? "General"} -{" "}
+                          {issue.severity}
+                        </strong>
+                        <p>{issue.message}</p>
+                        <span>{issue.suggested_fix}</span>
                       </article>
                     ))
                   )}

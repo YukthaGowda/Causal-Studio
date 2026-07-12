@@ -9,10 +9,13 @@ import { getDatasetSchema, listDatasets, uploadDataset } from "../api/datasets";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
+import { recommendAndValidateRoles } from "../api/causalRoles";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
+  BackendCausalRoleValidation,
   CandidateCausalQuestion,
   CandidateVariableRecommendation,
+  CausalRoleRecommendation,
   DatasetSchemaResponse,
   DerivedFeatureRecommendation,
   IngestionStatusResponse,
@@ -120,6 +123,90 @@ export function HomePage() {
   const [variableMessage, setVariableMessage] = useState("");
   const [variableError, setVariableError] = useState("");
   const [variableBusy, setVariableBusy] = useState(false);
+  const [roleDataset, setRoleDataset] = useState("");
+  const [selectedVariablesJson, setSelectedVariablesJson] = useState(`[
+  {
+    "variable_name": "pid",
+    "source_field": "pid",
+    "data_category": "baseline_demographic",
+    "direct_or_derived": "direct",
+    "measurement_timing": "id/grouping variable",
+    "possible_role_hint": "id_or_grouping_variable"
+  },
+  {
+    "variable_name": "label",
+    "source_field": "label",
+    "data_category": "ema_self_report",
+    "direct_or_derived": "direct",
+    "measurement_timing": "next observation window",
+    "possible_role_hint": "candidate outcome"
+  },
+  {
+    "variable_name": "time_stamp",
+    "source_field": "time_stamp",
+    "data_category": "temporal_contextual",
+    "direct_or_derived": "direct",
+    "measurement_timing": "time index",
+    "possible_role_hint": "temporal context"
+  },
+  {
+    "variable_name": "time_of_day",
+    "source_field": "time_of_day",
+    "data_category": "temporal_contextual",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t context",
+    "possible_role_hint": "temporal context"
+  },
+  {
+    "variable_name": "day_of_week",
+    "source_field": "day_of_week",
+    "data_category": "temporal_contextual",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t context",
+    "possible_role_hint": "temporal context"
+  },
+  {
+    "variable_name": "acc_min_magnitude",
+    "source_field": "acc_min_magnitude",
+    "data_category": "smartphone_sensing",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t",
+    "possible_role_hint": "activity proxy"
+  },
+  {
+    "variable_name": "acc_max_magnitude",
+    "source_field": "acc_max_magnitude",
+    "data_category": "smartphone_sensing",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t",
+    "possible_role_hint": "activity proxy"
+  },
+  {
+    "variable_name": "acc_mean_magnitude",
+    "source_field": "acc_mean_magnitude",
+    "data_category": "smartphone_sensing",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t",
+    "possible_role_hint": "activity proxy"
+  },
+  {
+    "variable_name": "avg_latitude",
+    "source_field": "avg_latitude",
+    "data_category": "smartphone_sensing",
+    "direct_or_derived": "direct",
+    "measurement_timing": "window t",
+    "missingness_warning": "known high missingness",
+    "possible_role_hint": "mobility proxy"
+  }
+]`);
+  const [roleRecommendations, setRoleRecommendations] = useState<
+    CausalRoleRecommendation[]
+  >([]);
+  const [roleValidation, setRoleValidation] =
+    useState<BackendCausalRoleValidation | null>(null);
+  const [roleMessage, setRoleMessage] = useState("");
+  const [roleError, setRoleError] = useState("");
+  const [roleBusy, setRoleBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -156,6 +243,9 @@ export function HomePage() {
     }
     if (!variableDataset && datasetList.datasets.length > 0) {
       setVariableDataset(datasetList.datasets[0].filename);
+    }
+    if (!roleDataset && datasetList.datasets.length > 0) {
+      setRoleDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -326,6 +416,40 @@ export function HomePage() {
       setVariableError((error as Error).message);
     } finally {
       setVariableBusy(false);
+    }
+  }
+
+  async function handleRoleValidation() {
+    if (!roleDataset) {
+      setRoleError("Select a dataset first.");
+      return;
+    }
+
+    setRoleBusy(true);
+    setRoleError("");
+    setRoleMessage("");
+
+    try {
+      const selectedVariables = JSON.parse(selectedVariablesJson);
+      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
+        throw new Error("Selected variables must be a non-empty JSON array.");
+      }
+
+      const response = await recommendAndValidateRoles({
+        confirmedQuestion,
+        datasetFilename: roleDataset,
+        selectedVariables,
+        topKEvidence: topK,
+      });
+      setRoleRecommendations(response.role_recommendations);
+      setRoleValidation(response.backend_validation);
+      setRoleMessage(
+        `Validated ${response.role_recommendations.length} role recommendations. Status: ${response.backend_validation.validation_status}.`,
+      );
+    } catch (error) {
+      setRoleError((error as Error).message);
+    } finally {
+      setRoleBusy(false);
     }
   }
 
@@ -843,6 +967,149 @@ export function HomePage() {
                       </dl>
                     </article>
                   ))}
+                </div>
+              </section>
+            )}
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Deterministic Validation</p>
+                <h2>Causal Role Validation</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="role-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="role-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setRoleDataset(event.target.value)}
+                value={roleDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={roleBusy}
+                onClick={handleRoleValidation}
+                type="button"
+              >
+                Recommend & Validate Roles
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="selected-variables-json">
+              Selected Variables JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="selected-variables-json"
+              onChange={(event) => setSelectedVariablesJson(event.target.value)}
+              rows={12}
+              value={selectedVariablesJson}
+            />
+
+            <StatusMessage error={roleError} message={roleMessage} />
+
+            {roleValidation && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{roleValidation.validation_status}</strong>
+                  <span>Validation Status</span>
+                </div>
+                <div>
+                  <strong>
+                    {roleValidation.safe_to_continue_to_graph ? "Yes" : "No"}
+                  </strong>
+                  <span>Safe To Continue</span>
+                </div>
+                <p>{roleValidation.recommended_next_action}</p>
+              </section>
+            )}
+
+            {roleRecommendations.length > 0 && (
+              <section className="role-section">
+                <h3>LLM Role Recommendations</h3>
+                <div className="candidate-list">
+                  {roleRecommendations.map((recommendation) => (
+                    <article
+                      className="variable-card"
+                      key={`${recommendation.variable_name}-${recommendation.primary_role}`}
+                    >
+                      <div className="candidate-header">
+                        <strong>{recommendation.variable_name}</strong>
+                        <span>{recommendation.confidence} confidence</span>
+                      </div>
+                      <dl>
+                        <dt>Roles</dt>
+                        <dd>{recommendation.recommended_roles.join(", ")}</dd>
+                        <dt>Primary</dt>
+                        <dd>{recommendation.primary_role}</dd>
+                        <dt>Temporal</dt>
+                        <dd>{recommendation.temporal_role}</dd>
+                        <dt>Measurement</dt>
+                        <dd>{recommendation.measurement_role}</dd>
+                        <dt>Adjustment</dt>
+                        <dd>{recommendation.adjustment_recommendation}</dd>
+                        <dt>Rationale</dt>
+                        <dd>{recommendation.rationale}</dd>
+                        <dt>Uncertainty</dt>
+                        <dd>{recommendation.uncertainty_notes}</dd>
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {roleValidation && (
+              <section className="role-section">
+                <h3>Backend Validation Warnings</h3>
+                <div className="issue-list">
+                  {roleValidation.warnings.length === 0 ? (
+                    <p>No warnings returned.</p>
+                  ) : (
+                    roleValidation.warnings.map((warning, index) => (
+                      <article className="issue-card" key={`${warning.warning_type}-${index}`}>
+                        <strong>
+                          {warning.variable_name ?? "General"} -{" "}
+                          {warning.severity}
+                        </strong>
+                        <p>{warning.message}</p>
+                        <span>{warning.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>Backend Validation Errors</h3>
+                <div className="issue-list">
+                  {roleValidation.errors.length === 0 ? (
+                    <p>No errors returned.</p>
+                  ) : (
+                    roleValidation.errors.map((error, index) => (
+                      <article className="issue-card issue-card--error" key={`${error.error_type}-${index}`}>
+                        <strong>
+                          {error.variable_name ?? "General"} - {error.severity}
+                        </strong>
+                        <p>{error.message}</p>
+                        <span>{error.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
                 </div>
               </section>
             )}

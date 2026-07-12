@@ -164,3 +164,57 @@ export type CandidateVariableRecommendationResponse = {
   variable_groups: Record<string, CandidateVariableRecommendation[]>;
   derived_features: DerivedFeatureRecommendation[];
 };
+
+export type SelectedCausalVariable = {
+  variable_name: string;
+  source_field?: string;
+  data_category?: string;
+  direct_or_derived?: string;
+  measurement_timing?: string;
+  user_notes?: string;
+  missingness_warning?: string;
+  possible_role_hint?: string;
+};
+
+export type CausalRoleRecommendation = {
+  variable_name: string;
+  source_field?: string;
+  recommended_roles: string[];
+  primary_role: string;
+  temporal_role: string;
+  measurement_role: string;
+  adjustment_recommendation: string;
+  rationale: string;
+  supporting_evidence: string[];
+  uncertainty_notes: string;
+  confidence: string;
+};
+
+export type CausalRoleValidationIssue = {
+  variable_name: string | null;
+  warning_type?: string;
+  error_type?: string;
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+  suggested_fix: string;
+};
+
+export type BackendCausalRoleValidation = {
+  validation_status: "passed" | "passed_with_warnings" | "failed";
+  warnings: CausalRoleValidationIssue[];
+  errors: CausalRoleValidationIssue[];
+  recommended_next_action: string;
+  safe_to_continue_to_graph: boolean;
+};
+
+export type CausalRoleValidationResponse = {
+  status: string;
+  confirmed_question: string;
+  dataset_filename: string;
+  estimand_type: string;
+  model: string;
+  evidence_chunks_used: number;
+  selected_variables: SelectedCausalVariable[];
+  role_recommendations: CausalRoleRecommendation[];
+  backend_validation: BackendCausalRoleValidation;
+};

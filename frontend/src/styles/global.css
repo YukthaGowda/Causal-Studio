@@ -341,6 +341,12 @@ textarea {
   resize: vertical;
 }
 
+.code-textarea {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .field-label {
   display: block;
   margin: 12px 0 6px;
@@ -657,6 +663,92 @@ textarea {
   color: #034ee7;
   padding: 0 12px;
   font-weight: 700;
+}
+
+.validation-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 160px)) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid #dbe5f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.validation-summary div {
+  border: 1px solid #e0e7f1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.validation-summary strong,
+.validation-summary span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.validation-summary strong {
+  color: #071228;
+}
+
+.validation-summary span {
+  color: #61748e;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.validation-summary p {
+  margin: 0;
+  color: #25344b;
+  font-size: 0.86rem;
+}
+
+.role-section,
+.issue-list {
+  display: grid;
+  gap: 10px;
+}
+
+.role-section h3 {
+  margin: 0;
+  color: #52657d;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.issue-list p {
+  margin: 0;
+  color: #61748e;
+}
+
+.issue-card {
+  border: 1px solid #f3c75b;
+  border-radius: 8px;
+  background: #fff9e6;
+  color: #784900;
+  padding: 12px;
+}
+
+.issue-card--error {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.issue-card strong,
+.issue-card span {
+  display: block;
+}
+
+.issue-card p {
+  margin: 6px 0;
+  color: inherit;
+}
+
+.issue-card span {
+  font-size: 0.82rem;
 }
 
 .assistant-panel {

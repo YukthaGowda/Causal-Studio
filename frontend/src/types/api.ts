@@ -322,3 +322,53 @@ export type IdentificationCheckResponse = {
   plain_language_summary: string;
   evidence_chunks_used: number;
 };
+
+export type StrategyIssue = {
+  issue_type: string;
+  variable_name?: string | null;
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+  suggested_fix: string;
+};
+
+export type AnalysisStrategyPlan = {
+  strategy_status:
+    | "ready_for_review"
+    | "requires_design_revision"
+    | "not_ready_for_analysis"
+    | "ready_only_under_additional_assumptions";
+  target_estimand: string;
+  exposure_definition: string;
+  comparator_definition: string;
+  outcome_definition: string;
+  time_window: string;
+  unit_of_analysis: string;
+  adjustment_set: string[];
+  repeated_measures_handling: string;
+  missing_data_strategy: string;
+  recommended_estimator_family: string[];
+  estimator_rationale: string;
+  data_requirements: string[];
+  sensitivity_checks: string[];
+  robustness_checks: string[];
+  limitations: string[];
+  assumptions_needed: string[];
+  what_can_be_claimed: string;
+  what_cannot_be_claimed: string;
+  recommended_next_action: string;
+  confidence: string;
+};
+
+export type AnalysisStrategyResponse = {
+  status: string;
+  confirmed_question: string;
+  dataset_filename: string;
+  estimand_type: string;
+  exposure: string | null;
+  outcome: string | null;
+  adjustment_set: string[];
+  strategy_plan: AnalysisStrategyPlan;
+  deterministic_warnings: StrategyIssue[];
+  deterministic_errors: StrategyIssue[];
+  evidence_chunks_used: number;
+};

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.analysis_strategy import router as analysis_strategy_router
 from app.api.candidate_variables import router as candidate_variables_router
 from app.api.causal_graph import router as causal_graph_router
 from app.api.causal_roles import router as causal_roles_router
@@ -36,6 +37,7 @@ app.include_router(candidate_variables_router)
 app.include_router(causal_roles_router)
 app.include_router(causal_graph_router)
 app.include_router(identification_router)
+app.include_router(analysis_strategy_router)
 
 
 @app.get("/")

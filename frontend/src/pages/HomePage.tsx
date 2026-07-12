@@ -12,8 +12,10 @@ import { recommendCandidateVariables } from "../api/candidateVariables";
 import { recommendAndValidateRoles } from "../api/causalRoles";
 import { generateAndValidateGraph } from "../api/causalGraph";
 import { runIdentificationCheck } from "../api/identification";
+import { generateAnalysisStrategy } from "../api/analysisStrategy";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
+  AnalysisStrategyResponse,
   BackendCausalRoleValidation,
   BackendCausalGraphValidation,
   CandidateCausalQuestion,
@@ -409,6 +411,39 @@ export function HomePage() {
   const [identificationMessage, setIdentificationMessage] = useState("");
   const [identificationError, setIdentificationError] = useState("");
   const [identificationBusy, setIdentificationBusy] = useState(false);
+  const [strategyDataset, setStrategyDataset] = useState("");
+  const [identificationResultJson, setIdentificationResultJson] = useState(`{
+  "identification_status": "identifiable_only_under_additional_assumptions",
+  "exposure": "acc_mean_magnitude",
+  "outcome": "label",
+  "proposed_adjustment_set": ["time_of_day", "day_of_week", "avg_latitude"],
+  "adjustment_set_status": "needs_review",
+  "open_issues": [],
+  "warnings": [
+    {
+      "issue_type": "high_missingness_adjustment_variable",
+      "variable_name": "avg_latitude",
+      "message": "avg_latitude has 40.69% missingness in the uploaded dataset.",
+      "severity": "warning",
+      "suggested_fix": "Review missing-data handling before using this adjustment variable."
+    }
+  ],
+  "errors": [],
+  "assumptions_required": [
+    "The graph draft is accepted by the user as a planning graph, not as proven causal truth.",
+    "Weak or uncertain edges are reviewed before analysis strategy planning."
+  ],
+  "missing_variables": [],
+  "recommended_next_action": "Review high-priority issues and document assumptions before analysis strategy planning.",
+  "safe_to_continue_to_analysis_strategy": true,
+  "plain_language_summary": "No causal effect has been estimated or proven.",
+  "evidence_chunks_used": 5
+}`);
+  const [strategyResult, setStrategyResult] =
+    useState<AnalysisStrategyResponse | null>(null);
+  const [strategyMessage, setStrategyMessage] = useState("");
+  const [strategyError, setStrategyError] = useState("");
+  const [strategyBusy, setStrategyBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -454,6 +489,9 @@ export function HomePage() {
     }
     if (!identificationDataset && datasetList.datasets.length > 0) {
       setIdentificationDataset(datasetList.datasets[0].filename);
+    }
+    if (!strategyDataset && datasetList.datasets.length > 0) {
+      setStrategyDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -730,6 +768,7 @@ export function HomePage() {
         topKEvidence: topK,
       });
       setIdentificationResult(response);
+      setIdentificationResultJson(JSON.stringify(response, null, 2));
       setIdentificationMessage(
         `Identification status: ${response.identification_status}. Adjustment set: ${response.adjustment_set_status}.`,
       );
@@ -737,6 +776,46 @@ export function HomePage() {
       setIdentificationError((error as Error).message);
     } finally {
       setIdentificationBusy(false);
+    }
+  }
+
+  async function handleAnalysisStrategy() {
+    if (!strategyDataset) {
+      setStrategyError("Select a dataset first.");
+      return;
+    }
+
+    setStrategyBusy(true);
+    setStrategyError("");
+    setStrategyMessage("");
+
+    try {
+      const graph = JSON.parse(identificationGraphJson);
+      const roleRecommendations = JSON.parse(roleRecommendationsJson);
+      const identificationPayload = JSON.parse(identificationResultJson);
+      const adjustmentSet = adjustmentSetText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const response = await generateAnalysisStrategy({
+        confirmedQuestion,
+        datasetFilename: strategyDataset,
+        graph,
+        roleRecommendations,
+        identificationResult: identificationPayload,
+        exposure: identificationPayload.exposure,
+        outcome: identificationPayload.outcome,
+        adjustmentSet,
+        topKEvidence: topK,
+      });
+      setStrategyResult(response);
+      setStrategyMessage(
+        `Strategy status: ${response.strategy_plan.strategy_status}. Estimator family guidance ready for review.`,
+      );
+    } catch (error) {
+      setStrategyError((error as Error).message);
+    } finally {
+      setStrategyBusy(false);
     }
   }
 
@@ -1776,6 +1855,165 @@ export function HomePage() {
                         </strong>
                         <p>{issue.message}</p>
                         <span>{issue.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Estimation Guidance</p>
+                <h2>Analysis Strategy</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="strategy-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="strategy-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setStrategyDataset(event.target.value)}
+                value={strategyDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={strategyBusy}
+                onClick={handleAnalysisStrategy}
+                type="button"
+              >
+                Generate Strategy
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="strategy-identification-json">
+              Identification Result JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="strategy-identification-json"
+              onChange={(event) => setIdentificationResultJson(event.target.value)}
+              rows={10}
+              value={identificationResultJson}
+            />
+
+            <StatusMessage error={strategyError} message={strategyMessage} />
+
+            {strategyResult && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{strategyResult.strategy_plan.strategy_status}</strong>
+                  <span>Strategy Status</span>
+                </div>
+                <div>
+                  <strong>{strategyResult.strategy_plan.confidence}</strong>
+                  <span>Confidence</span>
+                </div>
+                <p>{strategyResult.strategy_plan.recommended_next_action}</p>
+              </section>
+            )}
+
+            {strategyResult && (
+              <section className="role-section">
+                <h3>Plan Summary</h3>
+                <div className="schema-summary">
+                  <div>
+                    <strong>{strategyResult.exposure ?? "Unknown"}</strong>
+                    <span>Exposure</span>
+                  </div>
+                  <div>
+                    <strong>{strategyResult.outcome ?? "Unknown"}</strong>
+                    <span>Outcome</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {strategyResult.strategy_plan.unit_of_analysis}
+                    </strong>
+                    <span>Unit</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {strategyResult.adjustment_set.join(", ") || "None"}
+                    </strong>
+                    <span>Adjustment</span>
+                  </div>
+                </div>
+
+                <div className="variable-card">
+                  <dl>
+                    <dt>Estimand</dt>
+                    <dd>{strategyResult.strategy_plan.target_estimand}</dd>
+                    <dt>Comparator</dt>
+                    <dd>{strategyResult.strategy_plan.comparator_definition}</dd>
+                    <dt>Time Window</dt>
+                    <dd>{strategyResult.strategy_plan.time_window}</dd>
+                    <dt>Estimator Family</dt>
+                    <dd>
+                      {strategyResult.strategy_plan.recommended_estimator_family.join(
+                        ", ",
+                      )}
+                    </dd>
+                    <dt>Repeated Measures</dt>
+                    <dd>
+                      {strategyResult.strategy_plan.repeated_measures_handling}
+                    </dd>
+                    <dt>Missing Data</dt>
+                    <dd>{strategyResult.strategy_plan.missing_data_strategy}</dd>
+                    <dt>Cannot Claim</dt>
+                    <dd>{strategyResult.strategy_plan.what_cannot_be_claimed}</dd>
+                  </dl>
+                </div>
+              </section>
+            )}
+
+            {strategyResult && (
+              <section className="role-section">
+                <h3>Deterministic Strategy Warnings</h3>
+                <div className="issue-list">
+                  {strategyResult.deterministic_warnings.length === 0 ? (
+                    <p>No warnings returned.</p>
+                  ) : (
+                    strategyResult.deterministic_warnings.map((warning, index) => (
+                      <article className="issue-card" key={`${warning.issue_type}-${index}`}>
+                        <strong>
+                          {warning.variable_name ?? "General"} -{" "}
+                          {warning.severity}
+                        </strong>
+                        <p>{warning.message}</p>
+                        <span>{warning.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>Deterministic Strategy Errors</h3>
+                <div className="issue-list">
+                  {strategyResult.deterministic_errors.length === 0 ? (
+                    <p>No errors returned.</p>
+                  ) : (
+                    strategyResult.deterministic_errors.map((error, index) => (
+                      <article className="issue-card issue-card--error" key={`${error.issue_type}-${index}`}>
+                        <strong>
+                          {error.variable_name ?? "General"} - {error.severity}
+                        </strong>
+                        <p>{error.message}</p>
+                        <span>{error.suggested_fix}</span>
                       </article>
                     ))
                   )}

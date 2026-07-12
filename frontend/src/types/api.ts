@@ -125,3 +125,42 @@ export type GenerateCausalQuestionsResponse = {
   evidence_chunks_used: number;
   candidates: CandidateCausalQuestion[];
 };
+
+export type CandidateVariableRecommendation = {
+  variable_name: string;
+  source_field: string;
+  data_category: string;
+  direct_or_derived: string;
+  relevance_to_question: string;
+  possible_role_hint: string;
+  measurement_timing: string;
+  data_quality_notes: string;
+  missingness_warning: string;
+  supporting_evidence: string[];
+  recommendation_status: string;
+  confidence: string;
+  user_decision_default: string;
+};
+
+export type DerivedFeatureRecommendation = {
+  derived_feature_name: string;
+  source_columns_needed: string[];
+  calculation_window: string;
+  aggregation_method: string;
+  minimum_data_requirement: string;
+  leakage_risk: string;
+  missing_data_handling: string;
+  supporting_evidence: string[];
+  confidence: string;
+};
+
+export type CandidateVariableRecommendationResponse = {
+  status: string;
+  confirmed_question: string;
+  dataset_filename: string;
+  model: string;
+  evidence_chunks_used: number;
+  data_categories: string[];
+  variable_groups: Record<string, CandidateVariableRecommendation[]>;
+  derived_features: DerivedFeatureRecommendation[];
+};

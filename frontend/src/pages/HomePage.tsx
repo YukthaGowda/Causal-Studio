@@ -8,10 +8,13 @@ import {
 import { getDatasetSchema, listDatasets, uploadDataset } from "../api/datasets";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
+import { recommendCandidateVariables } from "../api/candidateVariables";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
   CandidateCausalQuestion,
+  CandidateVariableRecommendation,
   DatasetSchemaResponse,
+  DerivedFeatureRecommendation,
   IngestionStatusResponse,
   RagSearchResult,
   UploadedDataset,
@@ -104,6 +107,19 @@ export function HomePage() {
   const [candidateMessage, setCandidateMessage] = useState("");
   const [candidateError, setCandidateError] = useState("");
   const [candidateBusy, setCandidateBusy] = useState(false);
+  const [confirmedQuestion, setConfirmedQuestion] = useState(
+    "Among adults in the uploaded EMA/passive sensing dataset, what is the effect of sleep-related features during window t on alcohol-use-related label during the next observation window?",
+  );
+  const [variableDataset, setVariableDataset] = useState("");
+  const [variableGroups, setVariableGroups] = useState<
+    Record<string, CandidateVariableRecommendation[]>
+  >({});
+  const [derivedFeatures, setDerivedFeatures] = useState<
+    DerivedFeatureRecommendation[]
+  >([]);
+  const [variableMessage, setVariableMessage] = useState("");
+  const [variableError, setVariableError] = useState("");
+  const [variableBusy, setVariableBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -137,6 +153,9 @@ export function HomePage() {
     }
     if (!candidateDataset && datasetList.datasets.length > 0) {
       setCandidateDataset(datasetList.datasets[0].filename);
+    }
+    if (!variableDataset && datasetList.datasets.length > 0) {
+      setVariableDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -275,6 +294,38 @@ export function HomePage() {
       setCandidateError((error as Error).message);
     } finally {
       setCandidateBusy(false);
+    }
+  }
+
+  async function handleVariableRecommendation() {
+    if (!variableDataset) {
+      setVariableError("Select a dataset first.");
+      return;
+    }
+
+    setVariableBusy(true);
+    setVariableError("");
+    setVariableMessage("");
+
+    try {
+      const response = await recommendCandidateVariables({
+        confirmedQuestion,
+        datasetFilename: variableDataset,
+        topKEvidence: topK,
+      });
+      setVariableGroups(response.variable_groups);
+      setDerivedFeatures(response.derived_features);
+      const variableCount = Object.values(response.variable_groups).reduce(
+        (total, recommendations) => total + recommendations.length,
+        0,
+      );
+      setVariableMessage(
+        `Recommended ${variableCount} candidate variables and ${response.derived_features.length} derived features using ${response.evidence_chunks_used} evidence chunks.`,
+      );
+    } catch (error) {
+      setVariableError((error as Error).message);
+    } finally {
+      setVariableBusy(false);
     }
   }
 
@@ -679,6 +730,122 @@ export function HomePage() {
                 </article>
               ))}
             </div>
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Variable Review</p>
+                <h2>Candidate Variables</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="confirmed-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="confirmed-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setVariableDataset(event.target.value)}
+                value={variableDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={variableBusy}
+                onClick={handleVariableRecommendation}
+                type="button"
+              >
+                Recommend Variables
+              </button>
+            </div>
+
+            <StatusMessage error={variableError} message={variableMessage} />
+
+            <div className="variable-group-list">
+              {Object.entries(variableGroups).map(([category, recommendations]) =>
+                recommendations.length > 0 ? (
+                  <section className="variable-group" key={category}>
+                    <h3>{category.replaceAll("_", " ")}</h3>
+                    <div className="candidate-list">
+                      {recommendations.map((recommendation) => (
+                        <article
+                          className="variable-card"
+                          key={`${category}-${recommendation.variable_name}-${recommendation.source_field}`}
+                        >
+                          <div className="candidate-header">
+                            <strong>{recommendation.variable_name}</strong>
+                            <span>
+                              {recommendation.recommendation_status} -{" "}
+                              {recommendation.confidence}
+                            </span>
+                          </div>
+                          <dl>
+                            <dt>Source</dt>
+                            <dd>{recommendation.source_field}</dd>
+                            <dt>Role Hint</dt>
+                            <dd>{recommendation.possible_role_hint}</dd>
+                            <dt>Timing</dt>
+                            <dd>{recommendation.measurement_timing}</dd>
+                            <dt>Missingness</dt>
+                            <dd>{recommendation.missingness_warning}</dd>
+                            <dt>Evidence</dt>
+                            <dd>{recommendation.supporting_evidence.join("; ")}</dd>
+                          </dl>
+                          <button type="button">
+                            {recommendation.user_decision_default}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null,
+              )}
+            </div>
+
+            {derivedFeatures.length > 0 && (
+              <section className="derived-feature-list">
+                <h3>Derived Feature Recommendations</h3>
+                <div className="candidate-list">
+                  {derivedFeatures.map((feature) => (
+                    <article
+                      className="variable-card"
+                      key={feature.derived_feature_name}
+                    >
+                      <div className="candidate-header">
+                        <strong>{feature.derived_feature_name}</strong>
+                        <span>{feature.confidence} confidence</span>
+                      </div>
+                      <dl>
+                        <dt>Source Columns</dt>
+                        <dd>{feature.source_columns_needed.join(", ")}</dd>
+                        <dt>Window</dt>
+                        <dd>{feature.calculation_window}</dd>
+                        <dt>Aggregation</dt>
+                        <dd>{feature.aggregation_method}</dd>
+                        <dt>Data Requirement</dt>
+                        <dd>{feature.minimum_data_requirement}</dd>
+                        <dt>Leakage Risk</dt>
+                        <dd>{feature.leakage_risk}</dd>
+                        <dt>Missing Data</dt>
+                        <dd>{feature.missing_data_handling}</dd>
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
           </article>
         </section>
       </main>

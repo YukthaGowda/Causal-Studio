@@ -604,6 +604,61 @@ textarea {
   font-weight: 700;
 }
 
+.variable-group-list,
+.derived-feature-list {
+  display: grid;
+  gap: 14px;
+}
+
+.variable-group {
+  display: grid;
+  gap: 10px;
+}
+
+.variable-group h3,
+.derived-feature-list h3 {
+  margin: 0;
+  color: #52657d;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.variable-card {
+  border: 1px solid #dbe5f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.variable-card dl {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.variable-card dt {
+  color: #61748e;
+  font-size: 0.78rem;
+}
+
+.variable-card dd {
+  min-width: 0;
+  margin: 0;
+  color: #25344b;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.variable-card button {
+  min-height: 34px;
+  border-radius: 8px;
+  background: #e7f0ff;
+  color: #034ee7;
+  padding: 0 12px;
+  font-weight: 700;
+}
+
 .assistant-panel {
   position: sticky;
   top: 0;
@@ -761,7 +816,8 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .candidate-card dl {
+  .candidate-card dl,
+  .variable-card dl {
     grid-template-columns: 1fr;
   }
 }

@@ -13,8 +13,10 @@ import { recommendAndValidateRoles } from "../api/causalRoles";
 import { generateAndValidateGraph } from "../api/causalGraph";
 import { runIdentificationCheck } from "../api/identification";
 import { generateAnalysisStrategy } from "../api/analysisStrategy";
+import { reviewAssumptions } from "../api/assumptions";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
+  AssumptionReviewResponse,
   AnalysisStrategyResponse,
   BackendCausalRoleValidation,
   BackendCausalGraphValidation,
@@ -441,9 +443,38 @@ export function HomePage() {
 }`);
   const [strategyResult, setStrategyResult] =
     useState<AnalysisStrategyResponse | null>(null);
+  const [strategyResultJson, setStrategyResultJson] = useState(`{
+  "strategy_status": "ready_only_under_additional_assumptions",
+  "target_estimand": "total effect guidance only; no effect estimated",
+  "exposure_definition": "acc_mean_magnitude during window t",
+  "comparator_definition": "higher versus lower acc_mean_magnitude after user review",
+  "outcome_definition": "label during the next observation window",
+  "time_window": "window t exposure preceding next observation window outcome",
+  "unit_of_analysis": "participant-window",
+  "adjustment_set": ["time_of_day", "day_of_week", "avg_latitude"],
+  "repeated_measures_handling": "Use participant-level clustering, GEE, or mixed effects because pid exists.",
+  "missing_data_strategy": "Review or impute high-missingness variables such as avg_latitude; include sensitivity checks.",
+  "recommended_estimator_family": ["GEE", "mixed effects", "regression adjustment"],
+  "estimator_rationale": "Guidance only; no estimation performed.",
+  "data_requirements": ["confirmed timing", "reviewed adjustment set", "missing-data plan"],
+  "sensitivity_checks": ["exclude avg_latitude", "alternative lag windows"],
+  "robustness_checks": ["compare repeated-measures model families"],
+  "limitations": ["Assumptions are not proven."],
+  "assumptions_needed": ["No unmeasured confounding", "correct temporal ordering"],
+  "what_can_be_claimed": "A planned analysis may estimate contrasts only under reviewed assumptions.",
+  "what_cannot_be_claimed": "Do not claim proven causal effects or treatment decisions.",
+  "recommended_next_action": "Review assumptions and sensitivity checks before estimation.",
+  "confidence": "medium"
+}`);
   const [strategyMessage, setStrategyMessage] = useState("");
   const [strategyError, setStrategyError] = useState("");
   const [strategyBusy, setStrategyBusy] = useState(false);
+  const [assumptionsDataset, setAssumptionsDataset] = useState("");
+  const [assumptionReview, setAssumptionReview] =
+    useState<AssumptionReviewResponse | null>(null);
+  const [assumptionMessage, setAssumptionMessage] = useState("");
+  const [assumptionError, setAssumptionError] = useState("");
+  const [assumptionBusy, setAssumptionBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -492,6 +523,9 @@ export function HomePage() {
     }
     if (!strategyDataset && datasetList.datasets.length > 0) {
       setStrategyDataset(datasetList.datasets[0].filename);
+    }
+    if (!assumptionsDataset && datasetList.datasets.length > 0) {
+      setAssumptionsDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -809,6 +843,7 @@ export function HomePage() {
         topKEvidence: topK,
       });
       setStrategyResult(response);
+      setStrategyResultJson(JSON.stringify(response.strategy_plan, null, 2));
       setStrategyMessage(
         `Strategy status: ${response.strategy_plan.strategy_status}. Estimator family guidance ready for review.`,
       );
@@ -816,6 +851,49 @@ export function HomePage() {
       setStrategyError((error as Error).message);
     } finally {
       setStrategyBusy(false);
+    }
+  }
+
+  async function handleAssumptionReview() {
+    if (!assumptionsDataset) {
+      setAssumptionError("Select a dataset first.");
+      return;
+    }
+
+    setAssumptionBusy(true);
+    setAssumptionError("");
+    setAssumptionMessage("");
+
+    try {
+      const graph = JSON.parse(identificationGraphJson);
+      const roleRecommendations = JSON.parse(roleRecommendationsJson);
+      const identificationPayload = JSON.parse(identificationResultJson);
+      const analysisStrategyPayload = JSON.parse(strategyResultJson);
+      const adjustmentSet = adjustmentSetText
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+      const response = await reviewAssumptions({
+        confirmedQuestion,
+        datasetFilename: assumptionsDataset,
+        graph,
+        roleRecommendations,
+        identificationResult: identificationPayload,
+        analysisStrategy: analysisStrategyPayload,
+        exposure: identificationPayload.exposure,
+        outcome: identificationPayload.outcome,
+        adjustmentSet,
+        topKEvidence: topK,
+      });
+      setAssumptionReview(response);
+      setAssumptionMessage(
+        `Assumption review status: ${response.review.review_status}. ${response.evidence_chunks_used} evidence chunks used.`,
+      );
+    } catch (error) {
+      setAssumptionError((error as Error).message);
+    } finally {
+      setAssumptionBusy(false);
     }
   }
 
@@ -2018,6 +2096,174 @@ export function HomePage() {
                     ))
                   )}
                 </div>
+              </section>
+            )}
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Assumption Review</p>
+                <h2>Assumptions & Sensitivity</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="assumptions-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="assumptions-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setAssumptionsDataset(event.target.value)}
+                value={assumptionsDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={assumptionBusy}
+                onClick={handleAssumptionReview}
+                type="button"
+              >
+                Review Assumptions
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="assumptions-graph-json">
+              Graph JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="assumptions-graph-json"
+              onChange={(event) => setIdentificationGraphJson(event.target.value)}
+              rows={8}
+              value={identificationGraphJson}
+            />
+
+            <label className="field-label" htmlFor="assumptions-roles-json">
+              Role Recommendations JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="assumptions-roles-json"
+              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
+              rows={8}
+              value={roleRecommendationsJson}
+            />
+
+            <label className="field-label" htmlFor="assumptions-identification-json">
+              Identification Result JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="assumptions-identification-json"
+              onChange={(event) => setIdentificationResultJson(event.target.value)}
+              rows={8}
+              value={identificationResultJson}
+            />
+
+            <label className="field-label" htmlFor="assumptions-strategy-json">
+              Analysis Strategy JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="assumptions-strategy-json"
+              onChange={(event) => setStrategyResultJson(event.target.value)}
+              rows={10}
+              value={strategyResultJson}
+            />
+
+            <StatusMessage error={assumptionError} message={assumptionMessage} />
+
+            {assumptionReview && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{assumptionReview.review.review_status}</strong>
+                  <span>Review Status</span>
+                </div>
+                <div>
+                  <strong>{assumptionReview.review.confidence}</strong>
+                  <span>Confidence</span>
+                </div>
+                <p>{assumptionReview.review.plain_language_summary}</p>
+              </section>
+            )}
+
+            {assumptionReview && (
+              <section className="role-section">
+                <h3>Assumption Checklist</h3>
+                <div className="issue-list">
+                  {assumptionReview.review.assumptions.map((assumption) => (
+                    <article
+                      className="issue-card"
+                      key={assumption.assumption_name}
+                    >
+                      <strong>
+                        {assumption.assumption_name} - {assumption.status}
+                      </strong>
+                      <p>{assumption.rationale}</p>
+                      <span>{assumption.recommended_check}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {assumptionReview && (
+              <section className="role-section">
+                <h3>Sensitivity Checks</h3>
+                <ul className="warning-list">
+                  {assumptionReview.review.sensitivity_checks.map((check) => (
+                    <li key={check}>{check}</li>
+                  ))}
+                </ul>
+
+                <h3>Robustness Checks</h3>
+                <ul className="warning-list">
+                  {assumptionReview.review.robustness_checks.map((check) => (
+                    <li key={check}>{check}</li>
+                  ))}
+                </ul>
+
+                <h3>Deterministic Assumption Warnings</h3>
+                <div className="issue-list">
+                  {assumptionReview.deterministic_warnings.length === 0 ? (
+                    <p>No deterministic warnings returned.</p>
+                  ) : (
+                    assumptionReview.deterministic_warnings.map((warning, index) => (
+                      <article
+                        className="issue-card"
+                        key={`${warning.issue_type}-${index}`}
+                      >
+                        <strong>
+                          {warning.variable_name ?? "General"} -{" "}
+                          {warning.severity}
+                        </strong>
+                        <p>{warning.message}</p>
+                        <span>{warning.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>What Remains Uncertain</h3>
+                <ul className="warning-list">
+                  {assumptionReview.review.causal_interpretation_limits.map(
+                    (limit) => (
+                      <li key={limit}>{limit}</li>
+                    ),
+                  )}
+                </ul>
               </section>
             )}
           </article>

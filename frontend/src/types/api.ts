@@ -372,3 +372,45 @@ export type AnalysisStrategyResponse = {
   deterministic_errors: StrategyIssue[];
   evidence_chunks_used: number;
 };
+
+export type AssumptionItem = {
+  assumption_name: string;
+  status: "supported" | "uncertain" | "not_supported" | "not_applicable";
+  rationale: string;
+  evidence_summary: string;
+  dataset_support: string;
+  risk_if_violated: string;
+  recommended_check: string;
+  recommended_revision_if_needed: string;
+  severity: "info" | "warning" | "high" | "blocking";
+};
+
+export type AssumptionReview = {
+  review_status:
+    | "ready_for_report_review"
+    | "requires_design_revision"
+    | "needs_additional_user_review"
+    | "not_ready";
+  assumptions: AssumptionItem[];
+  sensitivity_checks: string[];
+  robustness_checks: string[];
+  data_quality_concerns: string[];
+  measurement_concerns: string[];
+  causal_interpretation_limits: string[];
+  recommended_next_action: string;
+  deterministic_warnings?: StrategyIssue[];
+  plain_language_summary: string;
+  confidence: string;
+};
+
+export type AssumptionReviewResponse = {
+  status: string;
+  confirmed_question: string;
+  dataset_filename: string;
+  exposure: string | null;
+  outcome: string | null;
+  adjustment_set: string[];
+  review: AssumptionReview;
+  deterministic_warnings: StrategyIssue[];
+  evidence_chunks_used: number;
+};

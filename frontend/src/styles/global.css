@@ -751,6 +751,12 @@ textarea {
   font-size: 0.82rem;
 }
 
+.graph-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .assistant-panel {
   position: sticky;
   top: 0;
@@ -910,6 +916,10 @@ textarea {
 
   .candidate-card dl,
   .variable-card dl {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-draft-grid {
     grid-template-columns: 1fr;
   }
 }

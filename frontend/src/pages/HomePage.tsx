@@ -10,11 +10,14 @@ import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
 import { recommendAndValidateRoles } from "../api/causalRoles";
+import { generateAndValidateGraph } from "../api/causalGraph";
 import { BackendStatus } from "../components/BackendStatus";
 import type {
   BackendCausalRoleValidation,
+  BackendCausalGraphValidation,
   CandidateCausalQuestion,
   CandidateVariableRecommendation,
+  CausalGraphDraft,
   CausalRoleRecommendation,
   DatasetSchemaResponse,
   DerivedFeatureRecommendation,
@@ -207,6 +210,105 @@ export function HomePage() {
   const [roleMessage, setRoleMessage] = useState("");
   const [roleError, setRoleError] = useState("");
   const [roleBusy, setRoleBusy] = useState(false);
+  const [graphDataset, setGraphDataset] = useState("");
+  const [roleRecommendationsJson, setRoleRecommendationsJson] = useState(`[
+  {
+    "variable_name": "pid",
+    "recommended_roles": ["id_or_grouping_variable"],
+    "primary_role": "id_or_grouping_variable",
+    "temporal_role": "not applicable",
+    "measurement_role": "id/grouping",
+    "adjustment_recommendation": "do_not_adjust",
+    "confidence": "high",
+    "rationale": "Participant identifier only."
+  },
+  {
+    "variable_name": "label",
+    "recommended_roles": ["outcome"],
+    "primary_role": "outcome",
+    "temporal_role": "outcome-window",
+    "measurement_role": "observed outcome label",
+    "adjustment_recommendation": "do_not_adjust",
+    "confidence": "medium",
+    "rationale": "Alcohol-use-related label is the likely outcome candidate."
+  },
+  {
+    "variable_name": "time_stamp",
+    "recommended_roles": ["temporal_context_variable"],
+    "primary_role": "temporal_context_variable",
+    "temporal_role": "time index",
+    "measurement_role": "time structure",
+    "adjustment_recommendation": "review_required",
+    "confidence": "high",
+    "rationale": "Used to define ordering and windows."
+  },
+  {
+    "variable_name": "time_of_day",
+    "recommended_roles": ["temporal_context_variable"],
+    "primary_role": "temporal_context_variable",
+    "temporal_role": "window t context",
+    "measurement_role": "time context",
+    "adjustment_recommendation": "review_required",
+    "confidence": "medium",
+    "rationale": "Contextual timing variable."
+  },
+  {
+    "variable_name": "day_of_week",
+    "recommended_roles": ["temporal_context_variable"],
+    "primary_role": "temporal_context_variable",
+    "temporal_role": "window t context",
+    "measurement_role": "time context",
+    "adjustment_recommendation": "review_required",
+    "confidence": "medium",
+    "rationale": "Contextual timing variable."
+  },
+  {
+    "variable_name": "acc_min_magnitude",
+    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
+    "primary_role": "time_varying_covariate",
+    "temporal_role": "window t",
+    "measurement_role": "proxy measure",
+    "adjustment_recommendation": "review_required",
+    "confidence": "medium",
+    "rationale": "Sensing/activity proxy."
+  },
+  {
+    "variable_name": "acc_max_magnitude",
+    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
+    "primary_role": "time_varying_covariate",
+    "temporal_role": "window t",
+    "measurement_role": "proxy measure",
+    "adjustment_recommendation": "review_required",
+    "confidence": "medium",
+    "rationale": "Sensing/activity proxy."
+  },
+  {
+    "variable_name": "acc_mean_magnitude",
+    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
+    "primary_role": "time_varying_covariate",
+    "temporal_role": "window t",
+    "measurement_role": "proxy measure",
+    "adjustment_recommendation": "review_required",
+    "confidence": "medium",
+    "rationale": "Sensing/activity proxy."
+  },
+  {
+    "variable_name": "avg_latitude",
+    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
+    "primary_role": "time_varying_covariate",
+    "temporal_role": "window t",
+    "measurement_role": "proxy measure",
+    "adjustment_recommendation": "review_required",
+    "confidence": "low",
+    "rationale": "Mobility/location proxy with known missingness."
+  }
+]`);
+  const [graphDraft, setGraphDraft] = useState<CausalGraphDraft | null>(null);
+  const [graphValidation, setGraphValidation] =
+    useState<BackendCausalGraphValidation | null>(null);
+  const [graphMessage, setGraphMessage] = useState("");
+  const [graphError, setGraphError] = useState("");
+  const [graphBusy, setGraphBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -246,6 +348,9 @@ export function HomePage() {
     }
     if (!roleDataset && datasetList.datasets.length > 0) {
       setRoleDataset(datasetList.datasets[0].filename);
+    }
+    if (!graphDataset && datasetList.datasets.length > 0) {
+      setGraphDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -450,6 +555,48 @@ export function HomePage() {
       setRoleError((error as Error).message);
     } finally {
       setRoleBusy(false);
+    }
+  }
+
+  async function handleGraphGeneration() {
+    if (!graphDataset) {
+      setGraphError("Select a dataset first.");
+      return;
+    }
+
+    setGraphBusy(true);
+    setGraphError("");
+    setGraphMessage("");
+
+    try {
+      const selectedVariables = JSON.parse(selectedVariablesJson);
+      const parsedRoleRecommendations = JSON.parse(roleRecommendationsJson);
+      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
+        throw new Error("Selected variables must be a non-empty JSON array.");
+      }
+      if (
+        !Array.isArray(parsedRoleRecommendations) ||
+        parsedRoleRecommendations.length === 0
+      ) {
+        throw new Error("Role recommendations must be a non-empty JSON array.");
+      }
+
+      const response = await generateAndValidateGraph({
+        confirmedQuestion,
+        datasetFilename: graphDataset,
+        selectedVariables,
+        roleRecommendations: parsedRoleRecommendations,
+        topKEvidence: topK,
+      });
+      setGraphDraft(response.graph_draft);
+      setGraphValidation(response.backend_validation);
+      setGraphMessage(
+        `Generated ${response.graph_draft.nodes.length} nodes and ${response.graph_draft.edges.length} edges. Status: ${response.backend_validation.graph_validation_status}.`,
+      );
+    } catch (error) {
+      setGraphError((error as Error).message);
+    } finally {
+      setGraphBusy(false);
     }
   }
 
@@ -1104,6 +1251,207 @@ export function HomePage() {
                       <article className="issue-card issue-card--error" key={`${error.error_type}-${index}`}>
                         <strong>
                           {error.variable_name ?? "General"} - {error.severity}
+                        </strong>
+                        <p>{error.message}</p>
+                        <span>{error.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Graph Draft</p>
+                <h2>Causal Graph Draft</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="graph-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="graph-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setGraphDataset(event.target.value)}
+                value={graphDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={graphBusy}
+                onClick={handleGraphGeneration}
+                type="button"
+              >
+                Generate Graph Draft
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="graph-selected-variables">
+              Selected Variables JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="graph-selected-variables"
+              onChange={(event) => setSelectedVariablesJson(event.target.value)}
+              rows={8}
+              value={selectedVariablesJson}
+            />
+
+            <label className="field-label" htmlFor="graph-role-recommendations">
+              Role Recommendations JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="graph-role-recommendations"
+              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
+              rows={10}
+              value={roleRecommendationsJson}
+            />
+
+            <StatusMessage error={graphError} message={graphMessage} />
+
+            {graphValidation && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{graphValidation.graph_validation_status}</strong>
+                  <span>Graph Status</span>
+                </div>
+                <div>
+                  <strong>
+                    {graphValidation.safe_to_continue_to_identification
+                      ? "Yes"
+                      : "No"}
+                  </strong>
+                  <span>Safe To Identify</span>
+                </div>
+                <p>{graphValidation.suggested_graph_edits.join(" ")}</p>
+              </section>
+            )}
+
+            {graphDraft && (
+              <section className="graph-draft-grid">
+                <div className="role-section">
+                  <h3>Nodes</h3>
+                  <div className="candidate-list">
+                    {graphDraft.nodes.map((node) => (
+                      <article className="variable-card" key={node.node_id}>
+                        <div className="candidate-header">
+                          <strong>{node.display_name || node.variable_name}</strong>
+                          <span>{node.confidence} confidence</span>
+                        </div>
+                        <dl>
+                          <dt>ID</dt>
+                          <dd>{node.node_id}</dd>
+                          <dt>Role</dt>
+                          <dd>{node.role}</dd>
+                          <dt>Temporal</dt>
+                          <dd>{node.temporal_role}</dd>
+                          <dt>Category</dt>
+                          <dd>{node.data_category}</dd>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="role-section">
+                  <h3>Edges</h3>
+                  <div className="candidate-list">
+                    {graphDraft.edges.map((edge) => (
+                      <article
+                        className="variable-card"
+                        key={`${edge.source}-${edge.target}`}
+                      >
+                        <div className="candidate-header">
+                          <strong>
+                            {`${edge.source} -> ${edge.target}`}
+                          </strong>
+                          <span>{edge.confidence} confidence</span>
+                        </div>
+                        <dl>
+                          <dt>Type</dt>
+                          <dd>{edge.edge_type}</dd>
+                          <dt>Timing</dt>
+                          <dd>{edge.temporal_assumption}</dd>
+                          <dt>Rationale</dt>
+                          <dd>{edge.rationale}</dd>
+                          <dt>Evidence</dt>
+                          <dd>{edge.supporting_evidence.join("; ")}</dd>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {graphDraft && graphDraft.uncertain_edges.length > 0 && (
+              <section className="role-section">
+                <h3>Uncertain Edges</h3>
+                <div className="issue-list">
+                  {graphDraft.uncertain_edges.map((edge) => (
+                    <article
+                      className="issue-card"
+                      key={`${edge.source}-${edge.target}-${edge.possible_direction}`}
+                    >
+                      <strong>
+                        {edge.source} / {edge.target} - {edge.possible_direction}
+                      </strong>
+                      <p>{edge.uncertainty_reason}</p>
+                      <span>{edge.recommended_user_review}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {graphValidation && (
+              <section className="role-section">
+                <h3>Backend Graph Validation Warnings</h3>
+                <div className="issue-list">
+                  {graphValidation.warnings.length === 0 ? (
+                    <p>No warnings returned.</p>
+                  ) : (
+                    graphValidation.warnings.map((warning, index) => (
+                      <article className="issue-card" key={`${warning.warning_type}-${index}`}>
+                        <strong>
+                          {(warning.source ?? "General") +
+                            (warning.target ? ` -> ${warning.target}` : "")}{" "}
+                          - {warning.severity}
+                        </strong>
+                        <p>{warning.message}</p>
+                        <span>{warning.suggested_fix}</span>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                <h3>Backend Graph Validation Errors</h3>
+                <div className="issue-list">
+                  {graphValidation.errors.length === 0 ? (
+                    <p>No errors returned.</p>
+                  ) : (
+                    graphValidation.errors.map((error, index) => (
+                      <article className="issue-card issue-card--error" key={`${error.error_type}-${index}`}>
+                        <strong>
+                          {(error.source ?? "General") +
+                            (error.target ? ` -> ${error.target}` : "")}{" "}
+                          - {error.severity}
                         </strong>
                         <p>{error.message}</p>
                         <span>{error.suggested_fix}</span>

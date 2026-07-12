@@ -218,3 +218,75 @@ export type CausalRoleValidationResponse = {
   role_recommendations: CausalRoleRecommendation[];
   backend_validation: BackendCausalRoleValidation;
 };
+
+export type CausalGraphNode = {
+  node_id: string;
+  variable_name: string;
+  display_name: string;
+  role: string;
+  temporal_role: string;
+  data_category: string;
+  is_observed: boolean;
+  confidence: string;
+};
+
+export type CausalGraphEdge = {
+  source: string;
+  target: string;
+  edge_type: string;
+  rationale: string;
+  supporting_evidence: string[];
+  confidence: string;
+  temporal_assumption: string;
+  user_editable: boolean;
+};
+
+export type CausalGraphUncertainEdge = {
+  source: string;
+  target: string;
+  possible_direction: string;
+  uncertainty_reason: string;
+  evidence_gap: string;
+  recommended_user_review: string;
+};
+
+export type CausalGraphDraft = {
+  graph_type: string;
+  nodes: CausalGraphNode[];
+  edges: CausalGraphEdge[];
+  uncertain_edges: CausalGraphUncertainEdge[];
+  omitted_variables: Array<Record<string, string>>;
+  latent_confounder_warnings: string[];
+  graph_rationale: string;
+  evidence_summary: string;
+  limitations: string[];
+};
+
+export type CausalGraphValidationIssue = {
+  warning_type?: string;
+  error_type?: string;
+  source: string | null;
+  target: string | null;
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+  suggested_fix: string;
+};
+
+export type BackendCausalGraphValidation = {
+  graph_validation_status: "passed" | "passed_with_warnings" | "failed";
+  warnings: CausalGraphValidationIssue[];
+  errors: CausalGraphValidationIssue[];
+  suggested_graph_edits: string[];
+  safe_to_continue_to_identification: boolean;
+};
+
+export type CausalGraphValidationResponse = {
+  status: string;
+  confirmed_question: string;
+  dataset_filename: string;
+  estimand_type: string;
+  model: string;
+  evidence_chunks_used: number;
+  graph_draft: CausalGraphDraft;
+  backend_validation: BackendCausalGraphValidation;
+};

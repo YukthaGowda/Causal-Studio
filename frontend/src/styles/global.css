@@ -347,6 +347,8 @@ textarea {
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   font-size: 0.78rem;
   line-height: 1.45;
+  max-height: 320px;
+  overflow: auto;
 }
 
 .field-label {
@@ -525,6 +527,33 @@ textarea {
   margin-bottom: 0;
   color: #40556f;
   font-size: 0.88rem;
+}
+
+.empty-state {
+  margin: 0;
+  border: 1px dashed #c8d6e8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #52657d;
+  padding: 12px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.demo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.demo-actions button {
+  min-height: 34px;
+  border-radius: 8px;
+  background: #e7f0ff;
+  color: #034ee7;
+  padding: 0 12px;
+  font-weight: 700;
 }
 
 .placeholder-grid {

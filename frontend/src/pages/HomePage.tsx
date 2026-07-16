@@ -68,7 +68,7 @@ const workflowSteps = [
     navLabel: "Broad Exploration",
   },
   {
-    shortLabel: "Question Design",
+    shortLabel: "Q/V Design",
     label: "Causal Question and Provisional Variable Design",
     navLabel: "Question & Variables",
   },
@@ -94,11 +94,17 @@ const workflowSteps = [
   },
 ];
 
+const demoObjective =
+  "I want to study temporal relationships between sleep, stress, and next-day alcohol use.";
+
+const demoQuestion =
+  "Among adults in the uploaded EMA/passive sensing dataset, what is the effect of sleep-related features during window t on alcohol-use-related label during the next observation window?";
+
 const warnings = [
-  "GPS missing for some participants",
-  "phone_screen_time is a proxy and does not directly measure craving",
-  "Aim type unconfirmed - causal language may be premature",
+  "Causal Studio supports causal-design planning. It does not diagnose, recommend treatment, or prove causal effects.",
   "Exploratory patterns do not establish causality",
+  "Variable roles are provisional until graph and final role validation",
+  "Graph edges are assumptions, not proven causal relationships",
 ];
 
 function formatBytes(bytes: number) {
@@ -163,7 +169,7 @@ export function HomePage() {
   const [ragError, setRagError] = useState("");
   const [ragBusy, setRagBusy] = useState(false);
   const [researchObjective, setResearchObjective] = useState(
-    "I want to study temporal relationships between sleep, stress, and next-day alcohol use.",
+    demoObjective,
   );
   const [candidateDataset, setCandidateDataset] = useState("");
   const [candidateQuestions, setCandidateQuestions] = useState<
@@ -173,7 +179,7 @@ export function HomePage() {
   const [candidateError, setCandidateError] = useState("");
   const [candidateBusy, setCandidateBusy] = useState(false);
   const [confirmedQuestion, setConfirmedQuestion] = useState(
-    "Among adults in the uploaded EMA/passive sensing dataset, what is the effect of sleep-related features during window t on alcohol-use-related label during the next observation window?",
+    demoQuestion,
   );
   const [variableDataset, setVariableDataset] = useState("");
   const [variableGroups, setVariableGroups] = useState<
@@ -1400,6 +1406,10 @@ export function HomePage() {
     graphValidation?.graph_validation_status ?? "not reviewed";
   const identificationStatus =
     identificationResult?.identification_status ?? "not checked";
+  const feasibilityStatus =
+    targetedFeasibility?.feasibility_status ?? "not checked";
+  const strategyStatus =
+    strategyResult?.strategy_plan.strategy_status ?? "not generated";
   const reportStatus = reportResult ? "generated" : "not generated";
   const activeWorkflowStep = workflowState?.current_step ?? activeStep;
   const progressStages = workflowSteps.map((step, index) => {
@@ -1419,49 +1429,49 @@ export function HomePage() {
 
   const stepGuidance = [
     {
-      purpose: "Define the project and prepare the document knowledge base.",
+      purpose: "Upload project materials and establish the research context.",
       action: "Enter the research objective, upload PDF/DOCX documents, and ingest them when ready.",
       caution: "RAG evidence supports design decisions, but it does not prove causal claims.",
       requirement: "Proceed after the objective is clear and documents are uploaded or intentionally skipped.",
     },
     {
-      purpose: "Understand the uploaded CSV before causal design begins.",
-      action: "Upload/select a dataset and inspect rows, columns, IDs, timestamps, missingness, and types.",
+      purpose: "Understand the uploaded dataset structure before exploring or designing a causal question.",
+      action: "Upload or select a dataset and inspect rows, columns, IDs, timestamps, missingness, and types.",
       caution: "Dataset schema describes available variables only; it is not analysis evidence.",
       requirement: "Proceed after a dataset is selected and schema is reviewed.",
     },
     {
-      purpose: "Explore broad data quality and structure before narrowing variables.",
+      purpose: "Explore broad patterns, missingness, temporal structure, and data quality. These patterns do not establish causality.",
       action: "Run broad exploration and review missingness, temporal structure, and possible outcomes.",
       caution: "Exploratory patterns do not establish causality.",
       requirement: "Proceed after broad warnings are reviewed.",
     },
     {
-      purpose: "Draft candidate causal questions and provisional variables.",
+      purpose: "Generate candidate causal questions and provisional variable recommendations using schema and RAG evidence.",
       action: "Generate questions, confirm one question, then recommend candidate variables.",
       caution: "Variable roles are provisional until graph and final validation.",
       requirement: "Proceed after a question and selected variables are available.",
     },
     {
-      purpose: "Check whether the selected variables can support graph design.",
+      purpose: "Check whether the selected variables and time structure can actually support the proposed causal question.",
       action: "Run targeted feasibility for exposure, outcome, timing, coverage, and missingness.",
       caution: "Feasibility checks implementation readiness, not causal effects.",
       requirement: "Proceed when safe_to_continue_to_graph is true, or continue with an explicit warning.",
     },
     {
-      purpose: "Validate final roles and draft a causal graph.",
+      purpose: "Review and edit the causal graph. Edges represent assumptions, not proven causal relationships.",
       action: "Run role validation, generate the draft graph, and inspect graph warnings.",
       caution: "The graph is a user-reviewed design object, not proven causal structure.",
       requirement: "Proceed after graph validation returns a usable result.",
     },
     {
-      purpose: "Check identification and plan estimation guidance.",
+      purpose: "Check identification readiness and generate analysis strategy guidance under stated assumptions.",
       action: "Run identification, generate strategy guidance, and review assumptions/sensitivity.",
       caution: "No causal estimation is run here.",
       requirement: "Proceed after assumptions and sensitivity planning are reviewed.",
     },
     {
-      purpose: "Generate the final causal design and analysis guidance report.",
+      purpose: "Generate a causal design and analysis guidance report. This is not a causal results report.",
       action: "Review carried-forward state and generate the structured JSON report.",
       caution: "The report is not a causal results report and must not claim proven effects.",
       requirement: "Report generation should include assumptions review or show missing-section warnings.",
@@ -1671,10 +1681,14 @@ export function HomePage() {
                 <dd>{confirmedQuestion ? "Available" : "Not confirmed"}</dd>
                 <dt>Selected Variables</dt>
                 <dd>{selectedVariablesCount}</dd>
+                <dt>Feasibility</dt>
+                <dd>{feasibilityStatus}</dd>
                 <dt>Graph Status</dt>
                 <dd>{graphStatus}</dd>
                 <dt>Identification</dt>
                 <dd>{identificationStatus}</dd>
+                <dt>Strategy</dt>
+                <dd>{strategyStatus}</dd>
                 <dt>Report</dt>
                 <dd>{reportStatus}</dd>
               </dl>
@@ -1828,8 +1842,7 @@ export function HomePage() {
             <p className="section-label">Step 1</p>
             <h2>Project Setup and Document Upload</h2>
             <p>
-              Define the research objective and upload project documents before
-              moving into data foundation work.
+              Upload project materials and establish the research context.
             </p>
           </article>
 
@@ -1846,6 +1859,11 @@ export function HomePage() {
               rows={3}
               value={researchObjective}
             />
+            <div className="demo-actions">
+              <button onClick={() => setResearchObjective(demoObjective)} type="button">
+                Use demo objective
+              </button>
+            </div>
           </article>
 
           <article className="panel feature-panel">
@@ -1866,13 +1884,16 @@ export function HomePage() {
                 type="file"
               />
               <button disabled={documentBusy} onClick={handleDocumentUpload} type="button">
-                Upload
+                {documentBusy ? "Uploading..." : "Upload"}
               </button>
             </div>
 
             <div className="list-box">
               {documents.length === 0 ? (
-                <p>No uploaded documents yet.</p>
+                <p className="empty-state">
+                  No documents uploaded yet. Upload PDF or DOCX project materials
+                  before ingestion.
+                </p>
               ) : (
                 documents.slice(0, 5).map((document) => (
                   <div className="list-row" key={document.filename}>
@@ -1889,7 +1910,7 @@ export function HomePage() {
                 onClick={handleDocumentIngestion}
                 type="button"
               >
-                Ingest Documents
+                {documentBusy ? "Working..." : "Ingest Documents"}
               </button>
               <span className="status-line">
                 {ingestionStatus?.chroma_exists
@@ -1904,8 +1925,8 @@ export function HomePage() {
             <p className="section-label">Step 2</p>
             <h2>Data Foundation and Understanding</h2>
             <p>
-              Upload datasets, inspect schema, confirm observation units, ID
-              columns, timestamp columns, missingness, and data quality warnings.
+              Understand the uploaded dataset structure before exploring or
+              designing a causal question.
             </p>
           </article>
 
@@ -1927,7 +1948,7 @@ export function HomePage() {
                 type="file"
               />
               <button disabled={datasetBusy} onClick={handleDatasetUpload} type="button">
-                Upload
+                {datasetBusy ? "Uploading..." : "Upload"}
               </button>
             </div>
 
@@ -1944,9 +1965,23 @@ export function HomePage() {
                 ))}
               </select>
               <button disabled={datasetBusy} onClick={handleSchemaLoad} type="button">
-                View Schema
+                {datasetBusy ? "Loading..." : "View Schema"}
               </button>
             </div>
+
+            {datasets.length === 0 && (
+              <p className="empty-state">
+                No CSV datasets uploaded yet. Add a dataset to review schema,
+                timestamps, IDs, and missingness.
+              </p>
+            )}
+
+            {!datasetSchema && datasets.length > 0 && (
+              <p className="empty-state">
+                Select a dataset and choose View Schema to inspect the available
+                columns. The full dataset is not displayed here.
+              </p>
+            )}
 
             {datasetSchema && (
               <div className="schema-summary">
@@ -2012,8 +2047,8 @@ export function HomePage() {
             <p className="section-label">Step 3</p>
             <h2>Broad Data Exploration</h2>
             <p>
-              Explore the whole dataset before narrowing to causal variables.
-              Exploratory patterns do not establish causality.
+              Explore broad patterns, missingness, temporal structure, and data
+              quality. These patterns do not establish causality.
             </p>
           </article>
 
@@ -2042,7 +2077,7 @@ export function HomePage() {
                 onClick={handleBroadExploration}
                 type="button"
               >
-                Run Broad Exploration
+                {broadBusy ? "Running..." : "Run Broad Exploration"}
               </button>
             </div>
 
@@ -2071,6 +2106,14 @@ export function HomePage() {
             </p>
 
             <StatusMessage error={broadError} message={broadMessage} />
+
+            {!broadExploration && (
+              <p className="empty-state">
+                Broad exploration has not run yet. Start here to inspect
+                distributions, missingness, temporal structure, and data quality
+                before designing a causal question.
+              </p>
+            )}
 
             {broadExploration && (
               <section className="schema-summary">
@@ -2299,13 +2342,19 @@ export function HomePage() {
                 value={topK}
               />
               <button disabled={ragBusy} onClick={handleRagSearch} type="button">
-                Search
+                {ragBusy ? "Searching..." : "Search"}
               </button>
             </div>
 
             <StatusMessage error={ragError} message={ragMessage} />
 
             <div className="rag-results">
+              {ragResults.length === 0 && (
+                <p className="empty-state">
+                  No RAG results yet. Search after documents have been ingested
+                  into ChromaDB.
+                </p>
+              )}
               {ragResults.map((result, index) => (
                 <article className="result-card" key={`${result.source_filename}-${index}`}>
                   <div className="result-meta">
@@ -2328,9 +2377,8 @@ export function HomePage() {
             <p className="section-label">Step 4</p>
             <h2>Causal Question and Provisional Variable Design</h2>
             <p>
-              Generate candidate questions, recommend variables, and draft
-              provisional role hints. Roles are not final until Step 6 graph and
-              role validation.
+              Generate candidate causal questions and provisional variable
+              recommendations using schema and RAG evidence.
             </p>
           </article>
 
@@ -2351,6 +2399,11 @@ export function HomePage() {
               rows={3}
               value={researchObjective}
             />
+            <div className="demo-actions">
+              <button onClick={() => setResearchObjective(demoObjective)} type="button">
+                Use demo objective
+              </button>
+            </div>
 
             <div className="control-row">
               <select
@@ -2369,13 +2422,19 @@ export function HomePage() {
                 onClick={handleCandidateGeneration}
                 type="button"
               >
-                Generate Questions
+                {candidateBusy ? "Generating..." : "Generate Questions"}
               </button>
             </div>
 
             <StatusMessage error={candidateError} message={candidateMessage} />
 
             <div className="candidate-list">
+              {candidateQuestions.length === 0 && (
+                <p className="empty-state">
+                  No candidate questions generated yet. Choose a dataset, confirm
+                  the objective, then generate draft causal questions.
+                </p>
+              )}
               {candidateQuestions.map((candidate) => (
                 <article className="candidate-card" key={candidate.candidate_id}>
                   <div className="candidate-header">
@@ -2420,6 +2479,11 @@ export function HomePage() {
               rows={3}
               value={confirmedQuestion}
             />
+            <div className="demo-actions">
+              <button onClick={() => setConfirmedQuestion(demoQuestion)} type="button">
+                Use demo question
+              </button>
+            </div>
 
             <div className="control-row">
               <select
@@ -2438,13 +2502,19 @@ export function HomePage() {
                 onClick={handleVariableRecommendation}
                 type="button"
               >
-                Recommend Variables
+                {variableBusy ? "Recommending..." : "Recommend Variables"}
               </button>
             </div>
 
             <StatusMessage error={variableError} message={variableMessage} />
 
             <div className="variable-group-list">
+              {Object.values(variableGroups).flat().length === 0 && (
+                <p className="empty-state">
+                  No variable recommendations yet. Generate candidate variables
+                  after a question and dataset are selected.
+                </p>
+              )}
               {Object.entries(variableGroups).map(([category, recommendations]) =>
                 recommendations.length > 0 ? (
                   <section className="variable-group" key={category}>
@@ -2523,9 +2593,8 @@ export function HomePage() {
             <p className="section-label">Step 5</p>
             <h2>Targeted Variable Data Exploration and Feasibility Check</h2>
             <p>
-              Inspect selected variables in detail before graph finalization. If
-              exposure, outcome, timing, overlap, or person-time are infeasible,
-              return to Step 4 and revise the question or variables.
+              Check whether the selected variables and time structure can
+              actually support the proposed causal question.
             </p>
           </article>
 
@@ -2564,7 +2633,7 @@ export function HomePage() {
                 onClick={handleTargetedFeasibility}
                 type="button"
               >
-                Run Feasibility Check
+                {targetedBusy ? "Checking..." : "Run Feasibility Check"}
               </button>
             </div>
 
@@ -2578,6 +2647,12 @@ export function HomePage() {
               rows={7}
               value={targetedVariablesText}
             />
+            {selectedVariablesCount === 0 && (
+              <p className="empty-state">
+                No selected variables yet. Add one variable per line or carry
+                forward recommendations from Step 4.
+              </p>
+            )}
 
             <div className="placeholder-grid">
               <input
@@ -2631,6 +2706,14 @@ export function HomePage() {
             </p>
 
             <StatusMessage error={targetedError} message={targetedMessage} />
+
+            {!targetedFeasibility && (
+              <p className="empty-state">
+                Feasibility has not been checked yet. This step should verify
+                timing, missingness, overlap, and whether selected variables can
+                support the proposed design.
+              </p>
+            )}
 
             {targetedFeasibility && (
               <section className="validation-summary">
@@ -2788,9 +2871,8 @@ export function HomePage() {
             <p className="section-label">Step 6</p>
             <h2>Causal Graph and Final Role Validation</h2>
             <p>
-              Use provisional roles to draft the graph, inspect chains, forks,
-              and colliders, and validate final roles before identification.
-              Graph types may include DAG, CPDAG, PAG, or MAG.
+              Review and edit the causal graph. Edges represent assumptions, not
+              proven causal relationships.
             </p>
           </article>
 
@@ -2829,7 +2911,7 @@ export function HomePage() {
                 onClick={handleRoleValidation}
                 type="button"
               >
-                Recommend & Validate Roles
+                {roleBusy ? "Validating..." : "Recommend & Validate Roles"}
               </button>
             </div>
 
@@ -2845,6 +2927,14 @@ export function HomePage() {
             />
 
             <StatusMessage error={roleError} message={roleMessage} />
+
+            {!roleValidation && (
+              <p className="empty-state">
+                Final role validation has not run yet. Use this step to keep ID,
+                timing, exposure, outcome, and adjustment roles separate before
+                graph design.
+              </p>
+            )}
 
             {roleValidation && (
               <section className="validation-summary">
@@ -2979,7 +3069,7 @@ export function HomePage() {
                 onClick={handleGraphGeneration}
                 type="button"
               >
-                Generate Graph Draft
+                {graphBusy ? "Generating..." : "Generate Graph Draft"}
               </button>
             </div>
 
@@ -3050,7 +3140,7 @@ export function HomePage() {
                 onClick={handleEditedGraphValidation}
                 type="button"
               >
-                Validate Edited Graph
+                {graphBusy ? "Validating..." : "Validate Edited Graph"}
               </button>
               <span className="status-line">
                 {editedGraphDraft
@@ -3075,6 +3165,14 @@ export function HomePage() {
                 </div>
                 <p>{graphValidation.suggested_graph_edits.join(" ")}</p>
               </section>
+            )}
+
+            {!graphDraft && (
+              <p className="empty-state">
+                No graph draft yet. Generate a first-pass graph, then review the
+                React Flow canvas and validate edited assumptions before moving
+                to identification.
+              </p>
             )}
 
             {graphDraft && (
@@ -3201,9 +3299,8 @@ export function HomePage() {
             <p className="section-label">Step 7</p>
             <h2>Identification and Estimation Strategy</h2>
             <p>
-              Review adjustment sets, identification status, repeated-measures
-              handling, missing-data strategy, positivity, overlap, and
-              sensitivity/robustness planning. No causal estimation is run here.
+              Check identification readiness and generate analysis strategy
+              guidance under stated assumptions.
             </p>
           </article>
 
@@ -3242,7 +3339,7 @@ export function HomePage() {
                 onClick={handleIdentificationCheck}
                 type="button"
               >
-                Run Identification Check
+                {identificationBusy ? "Checking..." : "Run Identification Check"}
               </button>
             </div>
 
@@ -3281,6 +3378,14 @@ export function HomePage() {
               error={identificationError}
               message={identificationMessage}
             />
+
+            {!identificationResult && (
+              <p className="empty-state">
+                Identification has not been checked yet. Provide a graph and
+                adjustment set to assess whether the proposed design is ready
+                for strategy guidance.
+              </p>
+            )}
 
             {identificationResult && (
               <section className="validation-summary">
@@ -3423,7 +3528,7 @@ export function HomePage() {
                 onClick={handleAnalysisStrategy}
                 type="button"
               >
-                Generate Strategy
+                {strategyBusy ? "Generating..." : "Generate Strategy"}
               </button>
             </div>
 
@@ -3439,6 +3544,13 @@ export function HomePage() {
             />
 
             <StatusMessage error={strategyError} message={strategyMessage} />
+
+            {!strategyResult && (
+              <p className="empty-state">
+                No analysis strategy has been generated yet. Strategy guidance is
+                planning support only and does not estimate a causal effect.
+              </p>
+            )}
 
             {strategyResult && (
               <section className="validation-summary">
@@ -3582,7 +3694,7 @@ export function HomePage() {
                 onClick={handleAssumptionReview}
                 type="button"
               >
-                Review Assumptions
+                {assumptionBusy ? "Reviewing..." : "Review Assumptions"}
               </button>
             </div>
 
@@ -3631,6 +3743,14 @@ export function HomePage() {
             />
 
             <StatusMessage error={assumptionError} message={assumptionMessage} />
+
+            {!assumptionReview && (
+              <p className="empty-state">
+                No assumptions or sensitivity review yet. This stage should
+                document unmeasured confounding, missing data, timing, and
+                robustness plans before export.
+              </p>
+            )}
 
             {assumptionReview && (
               <section className="validation-summary">
@@ -3719,9 +3839,8 @@ export function HomePage() {
             <p className="section-label">Step 8</p>
             <h2>Review and Export</h2>
             <p>
-              Generate the final Causal Design and Analysis Guidance Report.
-              This is not a causal-results report and does not prove a causal
-              effect.
+              Generate a causal design and analysis guidance report. This is not
+              a causal results report.
             </p>
           </article>
 
@@ -3779,7 +3898,7 @@ export function HomePage() {
                 onClick={handleReportGeneration}
                 type="button"
               >
-                Generate Report
+                {reportBusy ? "Generating..." : "Generate Report"}
               </button>
             </div>
 
@@ -3865,6 +3984,13 @@ export function HomePage() {
             </p>
 
             <StatusMessage error={reportError} message={reportMessage} />
+
+            {!reportResult && (
+              <p className="empty-state">
+                No report generated yet. Review the carried-forward design state,
+                then generate a causal design and analysis guidance report.
+              </p>
+            )}
 
             {reportResult && (
               <section className="validation-summary">
@@ -4114,9 +4240,45 @@ function StatusMessage({
     return null;
   }
 
+  const displayText = formatStatusText(error || message, Boolean(error));
+
   return (
     <p className={`status-message ${error ? "status-message--error" : ""}`}>
-      {error || message}
+      {displayText}
     </p>
   );
+}
+
+function formatStatusText(text: string, isError: boolean) {
+  if (!isError) {
+    return text;
+  }
+
+  const normalized = text.toLowerCase();
+
+  if (normalized.includes("failed to fetch")) {
+    return "Backend not connected. Start FastAPI and confirm the frontend API URL points to the running backend port.";
+  }
+
+  if (normalized.includes("openai_api_key")) {
+    return "OPENAI_API_KEY is not configured. Add it to backend/.env and restart the backend.";
+  }
+
+  if (normalized.includes("chroma") || normalized.includes("collection")) {
+    return "ChromaDB is not populated yet. Ingest documents before running RAG search.";
+  }
+
+  if (normalized.includes("json")) {
+    return "Invalid JSON. Check braces, quotes, commas, and field names before trying again.";
+  }
+
+  if (normalized.includes("dataset")) {
+    return "Dataset is missing or unavailable. Upload a CSV, select it, and load schema before continuing.";
+  }
+
+  if (normalized.includes("document")) {
+    return "Document action failed. Upload PDF or DOCX files and ingest them before searching.";
+  }
+
+  return text;
 }

@@ -6,7 +6,11 @@ import {
   uploadDocument,
 } from "../api/documents";
 import { getDatasetSchema, listDatasets, uploadDataset } from "../api/datasets";
-import { runBroadExploration } from "../api/exploration";
+import {
+  runBroadExploration,
+  runTargetedFeasibility,
+} from "../api/exploration";
+import { generateReport } from "../api/reports";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
@@ -20,6 +24,8 @@ import type {
   AssumptionReviewResponse,
   AnalysisStrategyResponse,
   BroadExplorationResponse,
+  TargetedFeasibilityResponse,
+  ReportGenerationResponse,
   BackendCausalRoleValidation,
   BackendCausalGraphValidation,
   CandidateCausalQuestion,
@@ -223,6 +229,26 @@ export function HomePage() {
     "possible_role_hint": "mobility proxy"
   }
 ]`);
+  const [targetedDataset, setTargetedDataset] = useState("");
+  const [targetedVariablesText, setTargetedVariablesText] = useState(
+    "pid\nlabel\ntime_stamp\ntime_of_day\nday_of_week\nacc_min_magnitude\nacc_max_magnitude\nacc_mean_magnitude\navg_latitude",
+  );
+  const [targetedExposure, setTargetedExposure] = useState("acc_mean_magnitude");
+  const [targetedOutcome, setTargetedOutcome] = useState("label");
+  const [targetedComparator, setTargetedComparator] = useState("");
+  const [targetedParticipantId, setTargetedParticipantId] = useState("pid");
+  const [targetedTimestamp, setTargetedTimestamp] = useState("time_stamp");
+  const [targetedTimeWindow, setTargetedTimeWindow] = useState(
+    "window t exposure and next observation window outcome",
+  );
+  const [targetedLagDefinition, setTargetedLagDefinition] = useState(
+    "exposure during window t, outcome during next observation window",
+  );
+  const [targetedFeasibility, setTargetedFeasibility] =
+    useState<TargetedFeasibilityResponse | null>(null);
+  const [targetedMessage, setTargetedMessage] = useState("");
+  const [targetedError, setTargetedError] = useState("");
+  const [targetedBusy, setTargetedBusy] = useState(false);
   const [roleRecommendations, setRoleRecommendations] = useState<
     CausalRoleRecommendation[]
   >([]);
@@ -487,9 +513,55 @@ export function HomePage() {
   const [assumptionsDataset, setAssumptionsDataset] = useState("");
   const [assumptionReview, setAssumptionReview] =
     useState<AssumptionReviewResponse | null>(null);
+  const [assumptionReviewJson, setAssumptionReviewJson] = useState(`{
+  "review_status": "needs_additional_user_review",
+  "assumptions": [
+    {
+      "assumption_name": "temporal_ordering",
+      "status": "uncertain",
+      "rationale": "Window timing requires user review.",
+      "evidence_summary": "Timing is a design requirement, not proven.",
+      "dataset_support": "time_stamp, time_of_day, and day_of_week are available.",
+      "risk_if_violated": "Exposure and outcome order may be invalid.",
+      "recommended_check": "Confirm window t and next observation label construction.",
+      "recommended_revision_if_needed": "Revise lag/window definitions.",
+      "severity": "high"
+    },
+    {
+      "assumption_name": "missingness_assumptions",
+      "status": "uncertain",
+      "rationale": "avg_latitude has high missingness.",
+      "evidence_summary": "High missingness requires sensitivity planning.",
+      "dataset_support": "avg_latitude is available but incomplete.",
+      "risk_if_violated": "Missing-data bias may affect interpretation.",
+      "recommended_check": "Compare plans with and without avg_latitude.",
+      "recommended_revision_if_needed": "Use a more complete variable or missing-data plan.",
+      "severity": "high"
+    }
+  ],
+  "sensitivity_checks": ["exclude avg_latitude", "alternative lag windows"],
+  "robustness_checks": ["compare repeated-measures model families"],
+  "causal_interpretation_limits": [
+    "The current design does not prove a causal effect.",
+    "Exploratory patterns do not establish causality."
+  ],
+  "recommended_next_action": "Review assumptions before report export.",
+  "plain_language_summary": "The design remains assumption-dependent.",
+  "confidence": "medium"
+}`);
   const [assumptionMessage, setAssumptionMessage] = useState("");
   const [assumptionError, setAssumptionError] = useState("");
   const [assumptionBusy, setAssumptionBusy] = useState(false);
+  const [reportDataset, setReportDataset] = useState("");
+  const [reportTitle, setReportTitle] = useState(
+    "AWARE-2023 Sleep, Activity, and Alcohol Use Causal Design",
+  );
+  const [reportUserNotes, setReportUserNotes] = useState("");
+  const [reportResult, setReportResult] =
+    useState<ReportGenerationResponse | null>(null);
+  const [reportMessage, setReportMessage] = useState("");
+  const [reportError, setReportError] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -530,6 +602,9 @@ export function HomePage() {
     if (!variableDataset && datasetList.datasets.length > 0) {
       setVariableDataset(datasetList.datasets[0].filename);
     }
+    if (!targetedDataset && datasetList.datasets.length > 0) {
+      setTargetedDataset(datasetList.datasets[0].filename);
+    }
     if (!roleDataset && datasetList.datasets.length > 0) {
       setRoleDataset(datasetList.datasets[0].filename);
     }
@@ -544,6 +619,9 @@ export function HomePage() {
     }
     if (!assumptionsDataset && datasetList.datasets.length > 0) {
       setAssumptionsDataset(datasetList.datasets[0].filename);
+    }
+    if (!reportDataset && datasetList.datasets.length > 0) {
+      setReportDataset(datasetList.datasets[0].filename);
     }
   }
 
@@ -745,6 +823,45 @@ export function HomePage() {
     }
   }
 
+  async function handleTargetedFeasibility() {
+    if (!targetedDataset) {
+      setTargetedError("Select a dataset first.");
+      return;
+    }
+
+    setTargetedBusy(true);
+    setTargetedError("");
+    setTargetedMessage("");
+
+    try {
+      const selectedVariables = targetedVariablesText
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+      const response = await runTargetedFeasibility({
+        datasetFilename: targetedDataset,
+        confirmedQuestion,
+        selectedVariables,
+        exposure: targetedExposure,
+        outcome: targetedOutcome,
+        comparator: targetedComparator,
+        participantIdColumn: targetedParticipantId,
+        timestampColumn: targetedTimestamp,
+        timeWindow: targetedTimeWindow,
+        lagDefinition: targetedLagDefinition,
+        topKEvidence: topK,
+      });
+      setTargetedFeasibility(response);
+      setTargetedMessage(
+        `Feasibility status: ${response.feasibility_status}. Score: ${response.feasibility_score}.`,
+      );
+    } catch (error) {
+      setTargetedError((error as Error).message);
+    } finally {
+      setTargetedBusy(false);
+    }
+  }
+
   async function handleRoleValidation() {
     if (!roleDataset) {
       setRoleError("Select a dataset first.");
@@ -933,6 +1050,7 @@ export function HomePage() {
         topKEvidence: topK,
       });
       setAssumptionReview(response);
+      setAssumptionReviewJson(JSON.stringify(response.review, null, 2));
       setAssumptionMessage(
         `Assumption review status: ${response.review.review_status}. ${response.evidence_chunks_used} evidence chunks used.`,
       );
@@ -940,6 +1058,55 @@ export function HomePage() {
       setAssumptionError((error as Error).message);
     } finally {
       setAssumptionBusy(false);
+    }
+  }
+
+  async function handleReportGeneration() {
+    if (!reportDataset) {
+      setReportError("Select a dataset first.");
+      return;
+    }
+
+    setReportBusy(true);
+    setReportError("");
+    setReportMessage("");
+
+    try {
+      const selectedVariables = JSON.parse(selectedVariablesJson);
+      const roleRecommendations = JSON.parse(roleRecommendationsJson);
+      const graph = JSON.parse(identificationGraphJson);
+      const identificationPayload = JSON.parse(identificationResultJson);
+      const analysisStrategyPayload = JSON.parse(strategyResultJson);
+      const assumptionsPayload = JSON.parse(assumptionReviewJson);
+      const response = await generateReport({
+        projectTitle: reportTitle,
+        researchObjective,
+        confirmedQuestion,
+        datasetFilename: reportDataset,
+        schemaSummary: datasetSchema ?? undefined,
+        broadExplorationSummary: broadExploration ?? undefined,
+        candidateQuestions,
+        candidateVariables: Object.values(variableGroups).flat(),
+        targetedFeasibilityResult: targetedFeasibility ?? undefined,
+        selectedVariables,
+        roleRecommendations,
+        roleValidationResult: roleValidation ?? undefined,
+        graph,
+        graphValidationResult: graphValidation ?? undefined,
+        identificationResult: identificationPayload,
+        analysisStrategy: analysisStrategyPayload,
+        assumptionsReview: assumptionsPayload,
+        evidenceSummary: ragResults,
+        userNotes: reportUserNotes,
+      });
+      setReportResult(response);
+      setReportMessage(
+        `${response.report_type} generated. ${response.pdf_export_message}`,
+      );
+    } catch (error) {
+      setReportError((error as Error).message);
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -1787,24 +1954,256 @@ export function HomePage() {
           <article className="panel feature-panel feature-panel--wide">
             <div className="panel-heading">
               <div>
-                <p className="section-label">Feasibility Placeholders</p>
+                <p className="section-label">Implementation Feasibility</p>
                 <h2>Selected Variable Feasibility</h2>
               </div>
             </div>
-            <div className="placeholder-grid">
-              <span>Selected variables review</span>
-              <span>Distribution of selected variables</span>
-              <span>Measurement frequency</span>
-              <span>Temporal ordering check</span>
-              <span>Lag feasibility</span>
-              <span>Exposure variation</span>
-              <span>Overlap and comparator feasibility</span>
-              <span>Analysis-ready sample size and person-time</span>
+
+            <label className="field-label" htmlFor="targeted-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="targeted-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setTargetedDataset(event.target.value)}
+                value={targetedDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={targetedBusy}
+                onClick={handleTargetedFeasibility}
+                type="button"
+              >
+                Run Feasibility Check
+              </button>
             </div>
+
+            <label className="field-label" htmlFor="targeted-variables">
+              Selected Variables
+            </label>
+            <textarea
+              className="code-textarea"
+              id="targeted-variables"
+              onChange={(event) => setTargetedVariablesText(event.target.value)}
+              rows={7}
+              value={targetedVariablesText}
+            />
+
+            <div className="placeholder-grid">
+              <input
+                onChange={(event) => setTargetedExposure(event.target.value)}
+                placeholder="Exposure"
+                value={targetedExposure}
+              />
+              <input
+                onChange={(event) => setTargetedOutcome(event.target.value)}
+                placeholder="Outcome"
+                value={targetedOutcome}
+              />
+              <input
+                onChange={(event) => setTargetedComparator(event.target.value)}
+                placeholder="Comparator, optional"
+                value={targetedComparator}
+              />
+              <input
+                onChange={(event) => setTargetedParticipantId(event.target.value)}
+                placeholder="Participant ID"
+                value={targetedParticipantId}
+              />
+              <input
+                onChange={(event) => setTargetedTimestamp(event.target.value)}
+                placeholder="Timestamp column"
+                value={targetedTimestamp}
+              />
+              <input
+                onChange={(event) => setTargetedTimeWindow(event.target.value)}
+                placeholder="Time window"
+                value={targetedTimeWindow}
+              />
+            </div>
+
+            <label className="field-label" htmlFor="targeted-lag">
+              Lag Definition
+            </label>
+            <input
+              id="targeted-lag"
+              onChange={(event) => setTargetedLagDefinition(event.target.value)}
+              value={targetedLagDefinition}
+            />
+
             <p className="stage-note">
               If this check is infeasible, return to Step 4 and revise the
               causal question, variable set, or timing window.
             </p>
+            <p className="stage-note">
+              Targeted exploration checks implementation feasibility. It does
+              not establish causality.
+            </p>
+
+            <StatusMessage error={targetedError} message={targetedMessage} />
+
+            {targetedFeasibility && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{targetedFeasibility.feasibility_status}</strong>
+                  <span>Feasibility</span>
+                </div>
+                <div>
+                  <strong>
+                    {targetedFeasibility.safe_to_continue_to_graph ? "Yes" : "No"}
+                  </strong>
+                  <span>Safe To Graph</span>
+                </div>
+                <p>{targetedFeasibility.exploration_warning}</p>
+              </section>
+            )}
+
+            {targetedFeasibility && (
+              <section className="schema-summary">
+                <div>
+                  <strong>{targetedFeasibility.feasibility_score}</strong>
+                  <span>Score</span>
+                </div>
+                <div>
+                  <strong>
+                    {targetedFeasibility.missing_selected_variables.length}
+                  </strong>
+                  <span>Missing Variables</span>
+                </div>
+                <div>
+                  <strong>
+                    {
+                      targetedFeasibility.analysis_ready_sample_summary
+                        .complete_case_rows_for_selected_variables
+                    }
+                  </strong>
+                  <span>Complete Cases</span>
+                </div>
+                <div>
+                  <strong>
+                    {String(
+                      targetedFeasibility.participant_level_availability
+                        .number_of_participants ?? "Unknown",
+                    )}
+                  </strong>
+                  <span>Participants</span>
+                </div>
+              </section>
+            )}
+
+            {targetedFeasibility && (
+              <section className="role-section">
+                <h3>Variable Summaries</h3>
+                <div className="candidate-list">
+                  {targetedFeasibility.variable_summaries.map((summary) => (
+                    <article className="variable-card" key={summary.variable_name}>
+                      <div className="candidate-header">
+                        <strong>{summary.variable_name}</strong>
+                        <span>
+                          {summary.exists_in_dataset ? "found" : "missing"}
+                        </span>
+                      </div>
+                      <dl>
+                        <dt>Type</dt>
+                        <dd>{summary.data_type ?? "n/a"}</dd>
+                        <dt>Missing</dt>
+                        <dd>
+                          {summary.missing_percentage ?? "n/a"}% (
+                          {summary.missing_count ?? "n/a"} rows)
+                        </dd>
+                        <dt>Unique</dt>
+                        <dd>{summary.unique_values ?? "n/a"}</dd>
+                        <dt>Samples</dt>
+                        <dd>{summary.sample_values.join(", ") || "None"}</dd>
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {targetedFeasibility && (
+              <section className="role-section">
+                <h3>Exposure, Outcome, Lag, and Overlap</h3>
+                <div className="graph-draft-grid">
+                  <article className="variable-card">
+                    <strong>Exposure</strong>
+                    <p>{targetedFeasibility.exposure_feasibility.status}</p>
+                    <span>
+                      Variation:{" "}
+                      {String(targetedFeasibility.exposure_feasibility.has_variation)}
+                    </span>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Outcome</strong>
+                    <p>{targetedFeasibility.outcome_feasibility.status}</p>
+                    <span>
+                      Variation:{" "}
+                      {String(targetedFeasibility.outcome_feasibility.has_variation)}
+                    </span>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Lag Feasibility</strong>
+                    <p>{String(targetedFeasibility.lag_feasibility.status)}</p>
+                    <span>
+                      {String(
+                        targetedFeasibility.lag_feasibility
+                          .detected_time_variables ?? "",
+                      )}
+                    </span>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Overlap / Comparator</strong>
+                    <p>{targetedFeasibility.overlap_or_comparator_summary.status}</p>
+                    <span>
+                      Comparator: {targetedComparator || "unclear"}
+                    </span>
+                  </article>
+                </div>
+              </section>
+            )}
+
+            {targetedFeasibility && (
+              <section className="role-section">
+                <h3>Warnings and Revision Actions</h3>
+                <div className="issue-list">
+                  {targetedFeasibility.data_quality_warnings.map((warning, index) => (
+                    <article
+                      className="issue-card"
+                      key={`${warning.warning_type}-${index}`}
+                    >
+                      <strong>
+                        {warning.variable ?? warning.warning_type} -{" "}
+                        {warning.severity}
+                      </strong>
+                      <p>{warning.message}</p>
+                    </article>
+                  ))}
+                </div>
+                <h3>Recommended Revisions</h3>
+                <ul className="warning-list">
+                  {targetedFeasibility.recommended_revision_actions.map((action) => (
+                    <li key={action}>{action}</li>
+                  ))}
+                </ul>
+                <h3>Redundancy / Correlation</h3>
+                <p className="stage-note">
+                  {targetedFeasibility.redundancy_or_correlation_summary.warning}
+                </p>
+              </section>
+            )}
           </article>
 
           <article className="workflow-stage-card feature-panel--wide">
@@ -2690,9 +3089,321 @@ export function HomePage() {
             <p className="section-label">Step 8</p>
             <h2>Review and Export</h2>
             <p>
-              Final causal design and analysis guidance report will be generated
-              here.
+              Generate the final Causal Design and Analysis Guidance Report.
+              This is not a causal-results report and does not prove a causal
+              effect.
             </p>
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">JSON Report Export</p>
+                <h2>Review & Export Report</h2>
+              </div>
+            </div>
+
+            <label className="field-label" htmlFor="report-title">
+              Project Title
+            </label>
+            <input
+              id="report-title"
+              onChange={(event) => setReportTitle(event.target.value)}
+              value={reportTitle}
+            />
+
+            <label className="field-label" htmlFor="report-objective">
+              Research Objective
+            </label>
+            <textarea
+              id="report-objective"
+              onChange={(event) => setResearchObjective(event.target.value)}
+              rows={3}
+              value={researchObjective}
+            />
+
+            <label className="field-label" htmlFor="report-question">
+              Confirmed Question
+            </label>
+            <textarea
+              id="report-question"
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              rows={3}
+              value={confirmedQuestion}
+            />
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setReportDataset(event.target.value)}
+                value={reportDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={reportBusy}
+                onClick={handleReportGeneration}
+                type="button"
+              >
+                Generate Report
+              </button>
+            </div>
+
+            <label className="field-label" htmlFor="report-selected-variables">
+              Selected Variables JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-selected-variables"
+              onChange={(event) => setSelectedVariablesJson(event.target.value)}
+              rows={6}
+              value={selectedVariablesJson}
+            />
+
+            <label className="field-label" htmlFor="report-roles-json">
+              Role Recommendations JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-roles-json"
+              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
+              rows={6}
+              value={roleRecommendationsJson}
+            />
+
+            <label className="field-label" htmlFor="report-graph-json">
+              Graph JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-graph-json"
+              onChange={(event) => setIdentificationGraphJson(event.target.value)}
+              rows={7}
+              value={identificationGraphJson}
+            />
+
+            <label className="field-label" htmlFor="report-identification-json">
+              Identification Result JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-identification-json"
+              onChange={(event) => setIdentificationResultJson(event.target.value)}
+              rows={7}
+              value={identificationResultJson}
+            />
+
+            <label className="field-label" htmlFor="report-strategy-json">
+              Analysis Strategy JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-strategy-json"
+              onChange={(event) => setStrategyResultJson(event.target.value)}
+              rows={7}
+              value={strategyResultJson}
+            />
+
+            <label className="field-label" htmlFor="report-assumptions-json">
+              Assumptions Review JSON
+            </label>
+            <textarea
+              className="code-textarea"
+              id="report-assumptions-json"
+              onChange={(event) => setAssumptionReviewJson(event.target.value)}
+              rows={7}
+              value={assumptionReviewJson}
+            />
+
+            <label className="field-label" htmlFor="report-notes">
+              User Notes
+            </label>
+            <textarea
+              id="report-notes"
+              onChange={(event) => setReportUserNotes(event.target.value)}
+              rows={3}
+              value={reportUserNotes}
+            />
+
+            <p className="stage-note">
+              PDF export will be added later. This version generates a
+              structured JSON report.
+            </p>
+
+            <StatusMessage error={reportError} message={reportMessage} />
+
+            {reportResult && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{reportResult.report_type}</strong>
+                  <span>Report Type</span>
+                </div>
+                <div>
+                  <strong>{reportResult.claim_audit.status}</strong>
+                  <span>Claim Audit</span>
+                </div>
+                <p>{reportResult.what_cannot_be_claimed}</p>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>{reportResult.report_title}</h3>
+                <div className="variable-card">
+                  <dl>
+                    <dt>Final Question</dt>
+                    <dd>{reportResult.final_research_question}</dd>
+                    <dt>Exposure</dt>
+                    <dd>{reportResult.exposure ?? "Not specified"}</dd>
+                    <dt>Outcome</dt>
+                    <dd>{reportResult.outcome ?? "Not specified"}</dd>
+                    <dt>Time Window</dt>
+                    <dd>{reportResult.time_window}</dd>
+                    <dt>Unit</dt>
+                    <dd>{reportResult.unit_of_analysis}</dd>
+                    <dt>Adjustment</dt>
+                    <dd>{reportResult.adjustment_set.join(", ") || "None"}</dd>
+                  </dl>
+                </div>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>Dataset and Feasibility</h3>
+                <div className="schema-summary">
+                  <div>
+                    <strong>
+                      {String(reportResult.dataset_summary.number_of_rows ?? "n/a")}
+                    </strong>
+                    <span>Rows</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {String(reportResult.dataset_summary.number_of_columns ?? "n/a")}
+                    </strong>
+                    <span>Columns</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {String(
+                        reportResult.data_feasibility_summary
+                          ?.feasibility_status ?? "not provided",
+                      )}
+                    </strong>
+                    <span>Feasibility</span>
+                  </div>
+                  <div>
+                    <strong>
+                      {String(
+                        reportResult.data_feasibility_summary
+                          ?.safe_to_continue_to_graph ?? "not provided",
+                      )}
+                    </strong>
+                    <span>Safe To Graph</span>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>Causal Role Table</h3>
+                <div className="candidate-list">
+                  {reportResult.causal_role_table.map((role, index) => (
+                    <article className="variable-card" key={`report-role-${index}`}>
+                      <strong>{String(role.variable_name ?? "Variable")}</strong>
+                      <p>{String(role.primary_role ?? "Role not specified")}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>Identification, Strategy, and Assumptions</h3>
+                <div className="graph-draft-grid">
+                  <article className="variable-card">
+                    <strong>Identification</strong>
+                    <p>
+                      {String(
+                        reportResult.identification_assessment
+                          .identification_status ?? "not specified",
+                      )}
+                    </p>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Graph</strong>
+                    <p>
+                      {String(
+                        reportResult.final_causal_graph_summary.validation_status ??
+                          "not provided",
+                      )}
+                    </p>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Sensitivity Plan</strong>
+                    <p>{reportResult.sensitivity_plan.join("; ")}</p>
+                  </article>
+                  <article className="variable-card">
+                    <strong>Robustness Plan</strong>
+                    <p>{reportResult.robustness_plan.join("; ")}</p>
+                  </article>
+                </div>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>Limitations</h3>
+                <ul className="warning-list">
+                  {reportResult.limitations.map((limitation) => (
+                    <li key={limitation}>{limitation}</li>
+                  ))}
+                </ul>
+
+                <h3>What Can Be Claimed</h3>
+                <p className="stage-note">{reportResult.what_can_be_claimed}</p>
+
+                <h3>What Cannot Be Claimed</h3>
+                <p className="stage-note">{reportResult.what_cannot_be_claimed}</p>
+              </section>
+            )}
+
+            {reportResult && (
+              <section className="role-section">
+                <h3>Claim Audit Warnings</h3>
+                <div className="issue-list">
+                  {reportResult.claim_audit.unsafe_claims_found.length === 0 ? (
+                    <p>No unsafe claim patterns found.</p>
+                  ) : (
+                    reportResult.claim_audit.unsafe_claims_found.map(
+                      (finding) => (
+                        <article
+                          className="issue-card"
+                          key={finding.unsafe_language}
+                        >
+                          <strong>{finding.unsafe_language}</strong>
+                          <p>{finding.suggested_safe_alternative}</p>
+                        </article>
+                      ),
+                    )
+                  )}
+                </div>
+
+                <h3>Recommended Next Steps</h3>
+                <ul className="warning-list">
+                  {reportResult.recommended_next_steps.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </article>
         </section>
       </main>

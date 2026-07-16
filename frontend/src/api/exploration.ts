@@ -1,5 +1,8 @@
 import { API_BASE_URL } from "./health";
-import type { BroadExplorationResponse } from "../types/api";
+import type {
+  BroadExplorationResponse,
+  TargetedFeasibilityResponse,
+} from "../types/api";
 
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const data = await response.json();
@@ -42,4 +45,52 @@ export async function runBroadExploration({
   });
 
   return parseJsonResponse<BroadExplorationResponse>(response);
+}
+
+export async function runTargetedFeasibility({
+  datasetFilename,
+  confirmedQuestion,
+  selectedVariables,
+  exposure,
+  outcome,
+  comparator,
+  participantIdColumn,
+  timestampColumn,
+  timeWindow,
+  lagDefinition,
+  topKEvidence = 5,
+}: {
+  datasetFilename: string;
+  confirmedQuestion: string;
+  selectedVariables: Array<string | Record<string, unknown>>;
+  exposure?: string;
+  outcome?: string;
+  comparator?: string;
+  participantIdColumn?: string;
+  timestampColumn?: string;
+  timeWindow?: string;
+  lagDefinition?: string;
+  topKEvidence?: number;
+}): Promise<TargetedFeasibilityResponse> {
+  const response = await fetch(`${API_BASE_URL}/exploration/targeted-feasibility`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      dataset_filename: datasetFilename,
+      confirmed_question: confirmedQuestion,
+      selected_variables: selectedVariables,
+      exposure: exposure || null,
+      outcome: outcome || null,
+      comparator: comparator || null,
+      participant_id_column: participantIdColumn || null,
+      timestamp_column: timestampColumn || null,
+      time_window: timeWindow || null,
+      lag_definition: lagDefinition || null,
+      top_k_evidence: topKEvidence,
+    }),
+  });
+
+  return parseJsonResponse<TargetedFeasibilityResponse>(response);
 }

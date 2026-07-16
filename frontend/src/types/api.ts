@@ -177,6 +177,92 @@ export type BroadExplorationResponse = {
   exploration_warning: string;
 };
 
+export type TargetedFeasibilityWarning = {
+  warning_type: string;
+  variable?: string;
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+};
+
+export type TargetedVariableSummary = {
+  variable_name: string;
+  exists_in_dataset: boolean;
+  data_type: string | null;
+  missing_count: number | null;
+  missing_percentage: number | null;
+  unique_values: number | null;
+  sample_values: Array<string | number | boolean | null>;
+  numeric_summary: {
+    min: number | null;
+    max: number | null;
+    mean: number | null;
+    median: number | null;
+    std: number | null;
+  } | null;
+  categorical_summary: {
+    most_common_values: Array<{ value: string; count: number }>;
+  } | null;
+  feasibility_notes: string[];
+  warnings: TargetedFeasibilityWarning[];
+};
+
+export type TargetedFeasibilitySection = {
+  variable?: string | null;
+  exists?: boolean;
+  has_variation?: boolean;
+  unique_values?: number;
+  non_missing_observations?: number;
+  status: string;
+  warnings: TargetedFeasibilityWarning[];
+};
+
+export type TargetedFeasibilityResponse = {
+  dataset_filename: string;
+  confirmed_question: string;
+  selected_variables_checked: string[];
+  missing_selected_variables: string[];
+  exposure: string | null;
+  outcome: string | null;
+  participant_id_column: string | null;
+  timestamp_column: string | null;
+  feasibility_status:
+    | "feasible_for_graph_design"
+    | "feasible_with_warnings"
+    | "needs_revision_before_graph"
+    | "not_feasible_with_current_data";
+  feasibility_score: number;
+  variable_summaries: TargetedVariableSummary[];
+  exposure_feasibility: TargetedFeasibilitySection;
+  outcome_feasibility: TargetedFeasibilitySection;
+  lag_feasibility: Record<string, unknown> & {
+    status: string;
+    warnings: TargetedFeasibilityWarning[];
+  };
+  temporal_ordering_summary: Record<string, string | null>;
+  missingness_and_coverage_summary: {
+    selected_variables_above_30_percent_missing: string[];
+    analysis_ready_complete_case_rows: number | null;
+  };
+  participant_level_availability: Record<string, unknown> & {
+    warnings: TargetedFeasibilityWarning[];
+  };
+  overlap_or_comparator_summary: Record<string, unknown> & {
+    status: string;
+    warnings: TargetedFeasibilityWarning[];
+  };
+  redundancy_or_correlation_summary: {
+    numeric_variables_checked: string[];
+    high_correlations: BroadCorrelationItem[];
+    warning: string;
+  };
+  derived_feature_feasibility: Record<string, string | boolean>;
+  analysis_ready_sample_summary: Record<string, number | null>;
+  data_quality_warnings: TargetedFeasibilityWarning[];
+  recommended_revision_actions: string[];
+  safe_to_continue_to_graph: boolean;
+  exploration_warning: string;
+};
+
 export type CandidateCausalQuestion = {
   candidate_id: string;
   question_text: string;
@@ -491,4 +577,54 @@ export type AssumptionReviewResponse = {
   review: AssumptionReview;
   deterministic_warnings: StrategyIssue[];
   evidence_chunks_used: number;
+};
+
+export type ClaimAuditFinding = {
+  unsafe_language: string;
+  severity: "info" | "warning" | "high" | "blocking";
+  suggested_safe_alternative: string;
+};
+
+export type ClaimAudit = {
+  status: "passed" | "passed_with_warnings";
+  unsafe_claims_found: ClaimAuditFinding[];
+  required_safe_statements: string[];
+};
+
+export type ReportGenerationResponse = {
+  report_title: string;
+  report_type: "Causal Design and Analysis Guidance Report";
+  generated_at: string;
+  project_summary: Record<string, unknown>;
+  research_objective: string | null;
+  final_research_question: string;
+  population: string;
+  data_sources: Record<string, unknown>;
+  dataset_summary: Record<string, unknown>;
+  broad_data_exploration_summary: Record<string, unknown> | null;
+  data_feasibility_summary: Record<string, unknown> | null;
+  unit_of_analysis: string;
+  exposure: string | null;
+  comparator: string;
+  outcome: string | null;
+  time_window: string;
+  selected_variables: string[];
+  causal_role_table: Array<Record<string, unknown>>;
+  final_causal_graph_summary: Record<string, unknown>;
+  graph_edges: Array<Record<string, unknown>>;
+  identification_assessment: Record<string, unknown>;
+  adjustment_set: string[];
+  analysis_strategy: Record<string, unknown>;
+  assumption_checklist: AssumptionItem[];
+  sensitivity_plan: string[];
+  robustness_plan: string[];
+  supporting_evidence: unknown[];
+  limitations: string[];
+  unsupported_or_uncertain_assumptions: AssumptionItem[];
+  what_can_be_claimed: string;
+  what_cannot_be_claimed: string;
+  claim_audit: ClaimAudit;
+  recommended_next_steps: string[];
+  pdf_export_status: "not_implemented";
+  pdf_export_message: string;
 };

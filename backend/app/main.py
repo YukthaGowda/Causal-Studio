@@ -12,6 +12,7 @@ from app.api.documents import router as documents_router
 from app.api.exploration import router as exploration_router
 from app.api.identification import router as identification_router
 from app.api.rag import router as rag_router
+from app.api.reports import router as reports_router
 
 
 app = FastAPI(
@@ -47,6 +48,7 @@ app.include_router(causal_graph_router)
 app.include_router(identification_router)
 app.include_router(analysis_strategy_router)
 app.include_router(assumptions_router)
+app.include_router(reports_router)
 
 
 @app.get("/")

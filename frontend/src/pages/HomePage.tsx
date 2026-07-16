@@ -34,28 +34,32 @@ import type {
 } from "../types/api";
 
 const navItems = [
-  "Home",
+  "Project Setup",
   "Data Foundation",
-  "Explore",
-  "Causal Studio",
-  "Temporal & Estimation",
+  "Broad Exploration",
+  "Question & Variables",
+  "Targeted Feasibility",
+  "Graph Validation",
+  "Strategy",
   "Review & Export",
-  "Clinician Reference",
 ];
 
 const progressStages = [
-  { label: "Data Foundation", state: "done" },
-  { label: "Explore", state: "active" },
-  { label: "Causal Studio", state: "warning" },
-  { label: "Temporal", state: "pending" },
-  { label: "Review", state: "pending" },
-  { label: "Clinician Ref.", state: "locked" },
+  { label: "Setup", state: "done" },
+  { label: "Foundation", state: "active" },
+  { label: "Broad Explore", state: "pending" },
+  { label: "Q/V Design", state: "warning" },
+  { label: "Feasibility", state: "pending" },
+  { label: "Graph", state: "pending" },
+  { label: "Strategy", state: "pending" },
+  { label: "Export", state: "locked" },
 ];
 
 const warnings = [
   "GPS missing for some participants",
   "phone_screen_time is a proxy and does not directly measure craving",
   "Aim type unconfirmed - causal language may be premature",
+  "Exploratory patterns do not establish causality",
 ];
 
 function formatBytes(bytes: number) {
@@ -947,8 +951,8 @@ export function HomePage() {
             <p>EMA + Passive Sensing · 124 participants · 30-day observation</p>
           </div>
           <div className="header-actions">
-            <span className="pill pill--warning">3 Warnings</span>
-            <span className="pill">Stage 2/6</span>
+            <span className="pill pill--warning">4 Warnings</span>
+            <span className="pill">Stage 2/8</span>
           </div>
         </header>
 
@@ -1024,7 +1028,7 @@ export function HomePage() {
         </section>
 
         <section className="warning-card">
-          <strong>3 Analysis Warnings</strong>
+          <strong>4 Analysis Warnings</strong>
           <ul>
             {warnings.map((warning) => (
               <li key={warning}>{warning}</li>
@@ -1033,6 +1037,30 @@ export function HomePage() {
         </section>
 
         <section className="feature-grid">
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 1</p>
+            <h2>Project Setup and Document Upload</h2>
+            <p>
+              Define the research objective and upload project documents before
+              moving into data foundation work.
+            </p>
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Project Setup</p>
+                <h2>Research Objective</h2>
+              </div>
+            </div>
+            <textarea
+              id="setup-research-objective"
+              onChange={(event) => setResearchObjective(event.target.value)}
+              rows={3}
+              value={researchObjective}
+            />
+          </article>
+
           <article className="panel feature-panel">
             <div className="panel-heading">
               <div>
@@ -1083,6 +1111,15 @@ export function HomePage() {
               </span>
             </div>
             <StatusMessage error={documentError} message={documentMessage} />
+          </article>
+
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 2</p>
+            <h2>Data Foundation and Understanding</h2>
+            <p>
+              Upload datasets, inspect schema, confirm observation units, ID
+              columns, timestamp columns, missingness, and data quality warnings.
+            </p>
           </article>
 
           <article className="panel feature-panel">
@@ -1184,6 +1221,37 @@ export function HomePage() {
             <StatusMessage error={datasetError} message={datasetMessage} />
           </article>
 
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 3</p>
+            <h2>Broad Data Exploration</h2>
+            <p>
+              Explore the whole dataset before narrowing to causal variables.
+              Exploratory patterns do not establish causality.
+            </p>
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Exploration Placeholders</p>
+                <h2>Broad Dataset Exploration</h2>
+              </div>
+            </div>
+            <div className="placeholder-grid">
+              <span>Broad dataset summary</span>
+              <span>Variable distributions</span>
+              <span>Missingness and coverage</span>
+              <span>Temporal patterns</span>
+              <span>Participant-level variation</span>
+              <span>Sensor adherence</span>
+              <span>Correlation and broad association review</span>
+            </div>
+            <p className="stage-note">
+              Exploratory patterns are descriptive signals for planning only;
+              they do not establish causality.
+            </p>
+          </article>
+
           <article className="panel feature-panel feature-panel--wide">
             <div className="panel-heading">
               <div>
@@ -1229,6 +1297,16 @@ export function HomePage() {
                 </article>
               ))}
             </div>
+          </article>
+
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 4</p>
+            <h2>Causal Question and Provisional Variable Design</h2>
+            <p>
+              Generate candidate questions, recommend variables, and draft
+              provisional role hints. Roles are not final until Step 6 graph and
+              role validation.
+            </p>
           </article>
 
           <article className="panel feature-panel feature-panel--wide">
@@ -1416,11 +1494,54 @@ export function HomePage() {
             )}
           </article>
 
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 5</p>
+            <h2>Targeted Variable Data Exploration and Feasibility Check</h2>
+            <p>
+              Inspect selected variables in detail before graph finalization. If
+              exposure, outcome, timing, overlap, or person-time are infeasible,
+              return to Step 4 and revise the question or variables.
+            </p>
+          </article>
+
           <article className="panel feature-panel feature-panel--wide">
             <div className="panel-heading">
               <div>
-                <p className="section-label">Deterministic Validation</p>
-                <h2>Causal Role Validation</h2>
+                <p className="section-label">Feasibility Placeholders</p>
+                <h2>Selected Variable Feasibility</h2>
+              </div>
+            </div>
+            <div className="placeholder-grid">
+              <span>Selected variables review</span>
+              <span>Distribution of selected variables</span>
+              <span>Measurement frequency</span>
+              <span>Temporal ordering check</span>
+              <span>Lag feasibility</span>
+              <span>Exposure variation</span>
+              <span>Overlap and comparator feasibility</span>
+              <span>Analysis-ready sample size and person-time</span>
+            </div>
+            <p className="stage-note">
+              If this check is infeasible, return to Step 4 and revise the
+              causal question, variable set, or timing window.
+            </p>
+          </article>
+
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 6</p>
+            <h2>Causal Graph and Final Role Validation</h2>
+            <p>
+              Use provisional roles to draft the graph, inspect chains, forks,
+              and colliders, and validate final roles before identification.
+              Graph types may include DAG, CPDAG, PAG, or MAG.
+            </p>
+          </article>
+
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">Final Role Review</p>
+                <h2>Final Causal Role Validation</h2>
               </div>
             </div>
 
@@ -1565,6 +1686,13 @@ export function HomePage() {
                 <p className="section-label">Graph Draft</p>
                 <h2>Causal Graph Draft</h2>
               </div>
+            </div>
+
+            <div className="placeholder-grid">
+              <span>Chain review</span>
+              <span>Fork review</span>
+              <span>Collider review</span>
+              <span>DAG / CPDAG / PAG / MAG explanation</span>
             </div>
 
             <label className="field-label" htmlFor="graph-question">
@@ -1758,6 +1886,16 @@ export function HomePage() {
                 </div>
               </section>
             )}
+          </article>
+
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 7</p>
+            <h2>Identification and Estimation Strategy</h2>
+            <p>
+              Review adjustment sets, identification status, repeated-measures
+              handling, missing-data strategy, positivity, overlap, and
+              sensitivity/robustness planning. No causal estimation is run here.
+            </p>
           </article>
 
           <article className="panel feature-panel feature-panel--wide">
@@ -2267,6 +2405,15 @@ export function HomePage() {
               </section>
             )}
           </article>
+
+          <article className="workflow-stage-card feature-panel--wide">
+            <p className="section-label">Step 8</p>
+            <h2>Review and Export</h2>
+            <p>
+              Final causal design and analysis guidance report will be generated
+              here.
+            </p>
+          </article>
         </section>
       </main>
 
@@ -2282,14 +2429,20 @@ export function HomePage() {
         </header>
 
         <div className="assistant-message">
-          Welcome to Causal Studio. Is your analytical aim descriptive,
-          predictive, or causal?
+          Causal Studio now follows eight steps: setup, data foundation, broad
+          exploration, question and variables, targeted feasibility, graph
+          validation, strategy, and export.
+        </div>
+
+        <div className="assistant-message">
+          Understand the data first, then formulate the causal question, inspect
+          selected variables, and only then build the graph.
         </div>
 
         <div className="chip-row">
-          <button type="button">Descriptive</button>
-          <button type="button">Predictive</button>
-          <button type="button">Causal</button>
+          <button type="button">Data First</button>
+          <button type="button">Provisional Roles</button>
+          <button type="button">Validated Graph</button>
         </div>
 
         <div className="assistant-spacer" />

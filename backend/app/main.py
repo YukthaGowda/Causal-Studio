@@ -15,7 +15,12 @@ from app.api.rag import router as rag_router
 
 app = FastAPI(
     title="Causal Studio API",
-    description="Backend API for the Causal Studio causal-design support platform.",
+    description=(
+        "Backend API for the Causal Studio causal-design support platform. "
+        "Supports the official 8-step workflow from project setup through "
+        "data foundation, broad exploration, question and variable design, "
+        "targeted feasibility, graph validation, strategy, and review/export."
+    ),
     version="0.1.0",
 )
 

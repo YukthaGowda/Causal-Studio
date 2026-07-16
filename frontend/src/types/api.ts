@@ -99,6 +99,84 @@ export type DatasetSchemaResponse = {
   }>;
 };
 
+export type MissingnessItem = {
+  column: string;
+  missing_percentage: number;
+  severity: "info" | "warning" | "high";
+};
+
+export type ParticipantSummary = {
+  participant_id_column: string;
+  number_of_unique_participants: number;
+  rows_per_participant: {
+    min: number;
+    max: number;
+    average: number | null;
+    median: number | null;
+    imbalance_ratio: number | null;
+  };
+  warnings: string[];
+};
+
+export type TemporalSummary = {
+  detected_timestamp_columns: string[];
+  common_time_fields: string[];
+  parsed_timestamp_summary: {
+    timestamp_column: string;
+    min_timestamp: string | null;
+    max_timestamp: string | null;
+    number_of_unique_days: number;
+    parse_success_rate: number | null;
+  } | null;
+  warnings: string[];
+};
+
+export type BroadCorrelationItem = {
+  column_a: string;
+  column_b: string;
+  correlation: number;
+};
+
+export type BroadExplorationWarning = {
+  warning_type: string;
+  column?: string;
+  message: string;
+  severity: "info" | "warning" | "high";
+};
+
+export type BroadExplorationResponse = {
+  dataset_filename: string;
+  number_of_rows: number;
+  number_of_columns: number;
+  possible_id_columns: string[];
+  possible_timestamp_columns: string[];
+  numeric_columns: string[];
+  categorical_columns: string[];
+  missingness_summary: {
+    highest_missingness_columns: MissingnessItem[];
+    high_missingness_columns: MissingnessItem[];
+  };
+  high_missingness_columns: MissingnessItem[];
+  low_variation_columns: Array<{
+    column: string;
+    unique_values: number;
+    unique_ratio: number;
+  }>;
+  possible_label_or_outcome_columns: string[];
+  target_column: string | null;
+  participant_summary: ParticipantSummary | null;
+  temporal_summary: TemporalSummary;
+  sensor_or_feature_groups: Record<string, string[]>;
+  broad_correlation_summary: {
+    numeric_columns_used: string[];
+    strongest_positive: BroadCorrelationItem[];
+    strongest_negative: BroadCorrelationItem[];
+    warning: string;
+  };
+  data_quality_warnings: BroadExplorationWarning[];
+  exploration_warning: string;
+};
+
 export type CandidateCausalQuestion = {
   candidate_id: string;
   question_text: string;

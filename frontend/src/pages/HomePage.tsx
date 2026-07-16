@@ -6,6 +6,7 @@ import {
   uploadDocument,
 } from "../api/documents";
 import { getDatasetSchema, listDatasets, uploadDataset } from "../api/datasets";
+import { runBroadExploration } from "../api/exploration";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
@@ -18,6 +19,7 @@ import { BackendStatus } from "../components/BackendStatus";
 import type {
   AssumptionReviewResponse,
   AnalysisStrategyResponse,
+  BroadExplorationResponse,
   BackendCausalRoleValidation,
   BackendCausalGraphValidation,
   CandidateCausalQuestion,
@@ -104,6 +106,15 @@ export function HomePage() {
   const [datasetMessage, setDatasetMessage] = useState("");
   const [datasetError, setDatasetError] = useState("");
   const [datasetBusy, setDatasetBusy] = useState(false);
+  const [broadDataset, setBroadDataset] = useState("");
+  const [broadTargetColumn, setBroadTargetColumn] = useState("");
+  const [broadParticipantColumn, setBroadParticipantColumn] = useState("");
+  const [broadTimestampColumn, setBroadTimestampColumn] = useState("");
+  const [broadExploration, setBroadExploration] =
+    useState<BroadExplorationResponse | null>(null);
+  const [broadMessage, setBroadMessage] = useState("");
+  const [broadError, setBroadError] = useState("");
+  const [broadBusy, setBroadBusy] = useState(false);
 
   const [ragQuery, setRagQuery] = useState(
     "What should the system validate deterministically?",
@@ -510,6 +521,9 @@ export function HomePage() {
     if (!selectedDataset && datasetList.datasets.length > 0) {
       setSelectedDataset(datasetList.datasets[0].filename);
     }
+    if (!broadDataset && datasetList.datasets.length > 0) {
+      setBroadDataset(datasetList.datasets[0].filename);
+    }
     if (!candidateDataset && datasetList.datasets.length > 0) {
       setCandidateDataset(datasetList.datasets[0].filename);
     }
@@ -623,6 +637,34 @@ export function HomePage() {
       setDatasetError((error as Error).message);
     } finally {
       setDatasetBusy(false);
+    }
+  }
+
+  async function handleBroadExploration() {
+    if (!broadDataset) {
+      setBroadError("Select a dataset first.");
+      return;
+    }
+
+    setBroadBusy(true);
+    setBroadError("");
+    setBroadMessage("");
+
+    try {
+      const response = await runBroadExploration({
+        datasetFilename: broadDataset,
+        targetColumn: broadTargetColumn,
+        participantIdColumn: broadParticipantColumn,
+        timestampColumn: broadTimestampColumn,
+      });
+      setBroadExploration(response);
+      setBroadMessage(
+        `Explored ${response.number_of_rows} rows and ${response.number_of_columns} columns. Exploratory patterns do not establish causality.`,
+      );
+    } catch (error) {
+      setBroadError((error as Error).message);
+    } finally {
+      setBroadBusy(false);
     }
   }
 
@@ -1233,23 +1275,261 @@ export function HomePage() {
           <article className="panel feature-panel feature-panel--wide">
             <div className="panel-heading">
               <div>
-                <p className="section-label">Exploration Placeholders</p>
+                <p className="section-label">Deterministic Dataset Exploration</p>
                 <h2>Broad Dataset Exploration</h2>
               </div>
             </div>
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setBroadDataset(event.target.value)}
+                value={broadDataset}
+              >
+                <option value="">Select dataset...</option>
+                {datasets.map((dataset) => (
+                  <option key={dataset.filename} value={dataset.filename}>
+                    {dataset.filename}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={broadBusy}
+                onClick={handleBroadExploration}
+                type="button"
+              >
+                Run Broad Exploration
+              </button>
+            </div>
+
             <div className="placeholder-grid">
-              <span>Broad dataset summary</span>
-              <span>Variable distributions</span>
-              <span>Missingness and coverage</span>
-              <span>Temporal patterns</span>
-              <span>Participant-level variation</span>
-              <span>Sensor adherence</span>
-              <span>Correlation and broad association review</span>
+              <input
+                onChange={(event) => setBroadTargetColumn(event.target.value)}
+                placeholder="Optional target/outcome column"
+                value={broadTargetColumn}
+              />
+              <input
+                onChange={(event) =>
+                  setBroadParticipantColumn(event.target.value)
+                }
+                placeholder="Optional participant ID column"
+                value={broadParticipantColumn}
+              />
+              <input
+                onChange={(event) => setBroadTimestampColumn(event.target.value)}
+                placeholder="Optional timestamp column"
+                value={broadTimestampColumn}
+              />
             </div>
             <p className="stage-note">
-              Exploratory patterns are descriptive signals for planning only;
-              they do not establish causality.
+              Exploratory patterns can support hypothesis generation, but they
+              do not establish causality.
             </p>
+
+            <StatusMessage error={broadError} message={broadMessage} />
+
+            {broadExploration && (
+              <section className="schema-summary">
+                <div>
+                  <strong>{broadExploration.number_of_rows}</strong>
+                  <span>Rows</span>
+                </div>
+                <div>
+                  <strong>{broadExploration.number_of_columns}</strong>
+                  <span>Columns</span>
+                </div>
+                <div>
+                  <strong>
+                    {broadExploration.participant_summary
+                      ?.number_of_unique_participants ?? "None"}
+                  </strong>
+                  <span>Participants</span>
+                </div>
+                <div>
+                  <strong>
+                    {broadExploration.temporal_summary.detected_timestamp_columns
+                      .length || "None"}
+                  </strong>
+                  <span>Time Fields</span>
+                </div>
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Missingness Summary</h3>
+                <div className="issue-list">
+                  {broadExploration.missingness_summary.highest_missingness_columns
+                    .slice(0, 6)
+                    .map((item) => (
+                      <article className="issue-card" key={item.column}>
+                        <strong>
+                          {item.column} - {item.missing_percentage}%
+                        </strong>
+                        <p>
+                          Severity: {item.severity}. Columns above 30% need
+                          missingness review before causal design decisions.
+                        </p>
+                      </article>
+                    ))}
+                </div>
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Participant Variation</h3>
+                {broadExploration.participant_summary ? (
+                  <div className="schema-summary">
+                    <div>
+                      <strong>
+                        {
+                          broadExploration.participant_summary
+                            .participant_id_column
+                        }
+                      </strong>
+                      <span>ID Column</span>
+                    </div>
+                    <div>
+                      <strong>
+                        {
+                          broadExploration.participant_summary
+                            .rows_per_participant.min
+                        }
+                      </strong>
+                      <span>Min Rows</span>
+                    </div>
+                    <div>
+                      <strong>
+                        {
+                          broadExploration.participant_summary
+                            .rows_per_participant.max
+                        }
+                      </strong>
+                      <span>Max Rows</span>
+                    </div>
+                    <div>
+                      <strong>
+                        {
+                          broadExploration.participant_summary
+                            .rows_per_participant.average
+                        }
+                      </strong>
+                      <span>Avg Rows</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p>No participant ID column detected.</p>
+                )}
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Temporal Summary</h3>
+                <div className="variable-card">
+                  <dl>
+                    <dt>Detected Fields</dt>
+                    <dd>
+                      {broadExploration.temporal_summary.detected_timestamp_columns.join(
+                        ", ",
+                      ) || "None"}
+                    </dd>
+                    <dt>Common Time Fields</dt>
+                    <dd>
+                      {broadExploration.temporal_summary.common_time_fields.join(
+                        ", ",
+                      ) || "None"}
+                    </dd>
+                    <dt>Parsed Range</dt>
+                    <dd>
+                      {broadExploration.temporal_summary.parsed_timestamp_summary
+                        ? `${broadExploration.temporal_summary.parsed_timestamp_summary.min_timestamp} to ${broadExploration.temporal_summary.parsed_timestamp_summary.max_timestamp}`
+                        : "No parseable timestamp range detected"}
+                    </dd>
+                  </dl>
+                </div>
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Feature Groups</h3>
+                <div className="placeholder-grid">
+                  {Object.entries(broadExploration.sensor_or_feature_groups).map(
+                    ([group, columns]) => (
+                      <span key={group}>
+                        <strong>{group.replaceAll("_", " ")}</strong>
+                        <br />
+                        {columns.slice(0, 6).join(", ")}
+                      </span>
+                    ),
+                  )}
+                </div>
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Broad Correlation / Association Summary</h3>
+                <p className="stage-note">
+                  {broadExploration.broad_correlation_summary.warning}
+                </p>
+                <div className="graph-draft-grid">
+                  <div className="issue-list">
+                    <h3>Strongest Positive</h3>
+                    {broadExploration.broad_correlation_summary.strongest_positive
+                      .slice(0, 5)
+                      .map((item) => (
+                        <article
+                          className="variable-card"
+                          key={`${item.column_a}-${item.column_b}-positive`}
+                        >
+                          <strong>
+                            {item.column_a} / {item.column_b}
+                          </strong>
+                          <p>{item.correlation}</p>
+                        </article>
+                      ))}
+                  </div>
+                  <div className="issue-list">
+                    <h3>Strongest Negative</h3>
+                    {broadExploration.broad_correlation_summary.strongest_negative
+                      .slice(0, 5)
+                      .map((item) => (
+                        <article
+                          className="variable-card"
+                          key={`${item.column_a}-${item.column_b}-negative`}
+                        >
+                          <strong>
+                            {item.column_a} / {item.column_b}
+                          </strong>
+                          <p>{item.correlation}</p>
+                        </article>
+                      ))}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {broadExploration && (
+              <section className="role-section">
+                <h3>Data Quality Warnings</h3>
+                <div className="issue-list">
+                  {broadExploration.data_quality_warnings.map((warning, index) => (
+                    <article
+                      className="issue-card"
+                      key={`${warning.warning_type}-${index}`}
+                    >
+                      <strong>
+                        {warning.column ?? warning.warning_type} -{" "}
+                        {warning.severity}
+                      </strong>
+                      <p>{warning.message}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
           </article>
 
           <article className="panel feature-panel feature-panel--wide">

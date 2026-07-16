@@ -22,6 +22,37 @@ class CausalQuestionGenerationError(RuntimeError):
     pass
 
 
+def format_openai_error(error: OpenAIError) -> str:
+    error_text = str(error)
+    lowered_error = error_text.lower()
+
+    if "insufficient permissions" in lowered_error or "401" in lowered_error:
+        return (
+            "OpenAI request failed because the configured API key or project "
+            "does not have access to the selected OPENAI_MODEL. Check "
+            "OPENAI_API_KEY, OPENAI_MODEL, and project permissions."
+        )
+
+    if "model" in lowered_error and (
+        "not found" in lowered_error or "does not exist" in lowered_error
+    ):
+        return (
+            "OpenAI request failed because OPENAI_MODEL is unavailable for this "
+            "API key. Choose a model available to the configured project."
+        )
+
+    if "api key" in lowered_error or "authentication" in lowered_error:
+        return (
+            "OpenAI request failed because OPENAI_API_KEY is missing, invalid, "
+            "or not authorized for this project."
+        )
+
+    return (
+        "OpenAI request failed. Check OPENAI_API_KEY, OPENAI_MODEL, network "
+        "access, and project permissions."
+    )
+
+
 def resolve_dataset_path(filename: str) -> Path:
     requested_path = Path(filename)
     if requested_path.name != filename:
@@ -221,9 +252,7 @@ def generate_candidate_questions(
     try:
         response = client.chat.completions.create(**request_kwargs)
     except OpenAIError as error:
-        raise CausalQuestionGenerationError(
-            f"OpenAI request failed: {error}"
-        ) from error
+        raise CausalQuestionGenerationError(format_openai_error(error)) from error
 
     content = response.choices[0].message.content or "{}"
     parsed = parse_llm_json(content)

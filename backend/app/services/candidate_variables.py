@@ -12,6 +12,7 @@ from app.services.causal_questions import (
     CausalQuestionGenerationError,
     DEFAULT_MODEL,
     MAX_EVIDENCE_CHUNKS,
+    format_openai_error,
     get_openai_client,
     resolve_dataset_path,
     summarize_evidence,
@@ -201,9 +202,7 @@ def recommend_candidate_variables(
     try:
         response = client.chat.completions.create(**request_kwargs)
     except OpenAIError as error:
-        raise CandidateVariableRecommendationError(
-            f"OpenAI request failed: {error}"
-        ) from error
+        raise CandidateVariableRecommendationError(format_openai_error(error)) from error
 
     content = response.choices[0].message.content or "{}"
     parsed = parse_variable_recommendation_json(content)

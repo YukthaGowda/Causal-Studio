@@ -28,7 +28,7 @@ def read_langsmith_status() -> dict[str, Any]:
 
 
 @router.post("/test-trace")
-def run_test_trace(request: TestTraceRequest) -> dict[str, Any]:
+def run_test_trace(request: TestTraceRequest = TestTraceRequest()) -> dict[str, Any]:
     status = get_langsmith_status()
     rag_status = "not_run"
     results_count = 0

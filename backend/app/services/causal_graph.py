@@ -12,6 +12,7 @@ from app.services.causal_questions import (
     CausalQuestionGenerationError,
     DEFAULT_MODEL,
     MAX_EVIDENCE_CHUNKS,
+    format_openai_error,
     get_openai_client,
     resolve_dataset_path,
     summarize_evidence,
@@ -222,9 +223,7 @@ def generate_and_validate_graph(
     try:
         response = client.chat.completions.create(**request_kwargs)
     except OpenAIError as error:
-        raise CausalGraphGenerationError(
-            f"OpenAI request failed: {error}"
-        ) from error
+        raise CausalGraphGenerationError(format_openai_error(error)) from error
 
     content = response.choices[0].message.content or "{}"
     graph_draft = parse_graph_json(content)

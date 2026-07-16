@@ -12,6 +12,7 @@ from app.services.causal_questions import (
     CausalQuestionGenerationError,
     DEFAULT_MODEL,
     MAX_EVIDENCE_CHUNKS,
+    format_openai_error,
     get_openai_client,
     resolve_dataset_path,
     summarize_evidence,
@@ -217,9 +218,7 @@ def recommend_and_validate_roles(
     try:
         response = client.chat.completions.create(**request_kwargs)
     except OpenAIError as error:
-        raise CausalRoleRecommendationError(
-            f"OpenAI request failed: {error}"
-        ) from error
+        raise CausalRoleRecommendationError(format_openai_error(error)) from error
 
     content = response.choices[0].message.content or "{}"
     role_recommendations = parse_role_recommendation_json(content)

@@ -246,3 +246,64 @@ def generate_and_validate_graph(
         "backend_validation": validation,
         "schema_summary": schema_summary,
     }
+
+
+def validate_edited_graph(
+    *,
+    confirmed_question: str,
+    dataset_filename: str,
+    graph_draft: dict[str, Any],
+    selected_variables: list[dict[str, Any]],
+    role_recommendations: list[dict[str, Any]],
+    estimand_type: str = "total_effect",
+) -> dict[str, Any]:
+    normalized_question = confirmed_question.strip()
+    if not normalized_question:
+        raise CausalGraphGenerationError("confirmed_question cannot be empty.")
+    if not graph_draft:
+        raise CausalGraphGenerationError("graph_draft cannot be empty.")
+    if not selected_variables:
+        raise CausalGraphGenerationError("selected_variables cannot be empty.")
+    if not role_recommendations:
+        raise CausalGraphGenerationError("role_recommendations cannot be empty.")
+
+    try:
+        dataset_path = resolve_dataset_path(dataset_filename)
+    except CausalQuestionGenerationError as error:
+        raise CausalGraphGenerationError(str(error)) from error
+
+    try:
+        schema = parse_dataset_schema(dataset_path)
+    except DatasetSchemaError as error:
+        raise CausalGraphGenerationError(str(error)) from error
+
+    normalized_graph = {
+        "graph_type": graph_draft.get("graph_type") or "DAG",
+        "nodes": graph_draft.get("nodes", []),
+        "edges": graph_draft.get("edges", []),
+        "uncertain_edges": graph_draft.get("uncertain_edges", []),
+        "omitted_variables": graph_draft.get("omitted_variables", []),
+        "latent_confounder_warnings": graph_draft.get("latent_confounder_warnings", []),
+        "graph_rationale": graph_draft.get("graph_rationale", ""),
+        "evidence_summary": graph_draft.get("evidence_summary", ""),
+        "limitations": graph_draft.get("limitations", []),
+    }
+    validation = validate_causal_graph(
+        graph_draft=normalized_graph,
+        selected_variables=selected_variables,
+        role_recommendations=role_recommendations,
+        schema=schema,
+        estimand_type=estimand_type,
+    )
+
+    return {
+        "status": "validated",
+        "confirmed_question": normalized_question,
+        "dataset_filename": dataset_filename,
+        "estimand_type": estimand_type,
+        "model": "user_edited_graph",
+        "evidence_chunks_used": 0,
+        "graph_draft": normalized_graph,
+        "backend_validation": validation,
+        "schema_summary": summarize_schema(schema),
+    }

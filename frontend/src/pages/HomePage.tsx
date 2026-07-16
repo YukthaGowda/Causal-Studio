@@ -21,11 +21,12 @@ import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
 import { recommendAndValidateRoles } from "../api/causalRoles";
-import { generateAndValidateGraph } from "../api/causalGraph";
+import { generateAndValidateGraph, validateEditedGraph } from "../api/causalGraph";
 import { runIdentificationCheck } from "../api/identification";
 import { generateAnalysisStrategy } from "../api/analysisStrategy";
 import { reviewAssumptions } from "../api/assumptions";
 import { BackendStatus } from "../components/BackendStatus";
+import { CausalGraphCanvas } from "../components/CausalGraphCanvas";
 import type {
   AssumptionReviewResponse,
   AnalysisStrategyResponse,
@@ -48,26 +49,47 @@ import type {
   UploadedDocument,
 } from "../types/api";
 
-const navItems = [
-  "Project Setup",
-  "Data Foundation",
-  "Broad Exploration",
-  "Question & Variables",
-  "Targeted Feasibility",
-  "Graph Validation",
-  "Strategy",
-  "Review & Export",
-];
-
-const progressStages = [
-  { label: "Setup", state: "done" },
-  { label: "Foundation", state: "active" },
-  { label: "Broad Explore", state: "pending" },
-  { label: "Q/V Design", state: "warning" },
-  { label: "Feasibility", state: "pending" },
-  { label: "Graph", state: "pending" },
-  { label: "Strategy", state: "pending" },
-  { label: "Export", state: "locked" },
+const workflowSteps = [
+  {
+    shortLabel: "Setup",
+    label: "Project Setup and Document Upload",
+    navLabel: "Project Setup",
+  },
+  {
+    shortLabel: "Foundation",
+    label: "Data Foundation and Understanding",
+    navLabel: "Data Foundation",
+  },
+  {
+    shortLabel: "Broad Explore",
+    label: "Broad Data Exploration",
+    navLabel: "Broad Exploration",
+  },
+  {
+    shortLabel: "Question Design",
+    label: "Causal Question and Provisional Variable Design",
+    navLabel: "Question & Variables",
+  },
+  {
+    shortLabel: "Feasibility",
+    label: "Targeted Variable Data Exploration and Feasibility Check",
+    navLabel: "Targeted Feasibility",
+  },
+  {
+    shortLabel: "Graph",
+    label: "Causal Graph and Final Role Validation",
+    navLabel: "Graph Validation",
+  },
+  {
+    shortLabel: "Strategy",
+    label: "Identification and Estimation Strategy",
+    navLabel: "Strategy",
+  },
+  {
+    shortLabel: "Export",
+    label: "Review and Export",
+    navLabel: "Review & Export",
+  },
 ];
 
 const warnings = [
@@ -103,6 +125,7 @@ function getStageSymbol(state: string) {
 }
 
 export function HomePage() {
+  const [activeStep, setActiveStep] = useState(1);
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentMessage, setDocumentMessage] = useState("");
@@ -358,6 +381,8 @@ export function HomePage() {
   }
 ]`);
   const [graphDraft, setGraphDraft] = useState<CausalGraphDraft | null>(null);
+  const [editedGraphDraft, setEditedGraphDraft] =
+    useState<CausalGraphDraft | null>(null);
   const [graphValidation, setGraphValidation] =
     useState<BackendCausalGraphValidation | null>(null);
   const [graphMessage, setGraphMessage] = useState("");
@@ -939,9 +964,59 @@ export function HomePage() {
         topKEvidence: topK,
       });
       setGraphDraft(response.graph_draft);
+      setEditedGraphDraft(response.graph_draft);
       setGraphValidation(response.backend_validation);
+      setIdentificationGraphJson(JSON.stringify(response.graph_draft, null, 2));
       setGraphMessage(
         `Generated ${response.graph_draft.nodes.length} nodes and ${response.graph_draft.edges.length} edges. Status: ${response.backend_validation.graph_validation_status}.`,
+      );
+    } catch (error) {
+      setGraphError((error as Error).message);
+    } finally {
+      setGraphBusy(false);
+    }
+  }
+
+  async function handleEditedGraphValidation() {
+    if (!graphDataset) {
+      setGraphError("Select a dataset first.");
+      return;
+    }
+    if (!editedGraphDraft) {
+      setGraphError("Generate or edit a graph draft first.");
+      return;
+    }
+
+    setGraphBusy(true);
+    setGraphError("");
+    setGraphMessage("");
+
+    try {
+      const selectedVariables = JSON.parse(selectedVariablesJson);
+      const parsedRoleRecommendations = JSON.parse(roleRecommendationsJson);
+      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
+        throw new Error("Selected variables must be a non-empty JSON array.");
+      }
+      if (
+        !Array.isArray(parsedRoleRecommendations) ||
+        parsedRoleRecommendations.length === 0
+      ) {
+        throw new Error("Role recommendations must be a non-empty JSON array.");
+      }
+
+      const response = await validateEditedGraph({
+        confirmedQuestion,
+        datasetFilename: graphDataset,
+        graphDraft: editedGraphDraft,
+        selectedVariables,
+        roleRecommendations: parsedRoleRecommendations,
+      });
+      setGraphDraft(response.graph_draft);
+      setEditedGraphDraft(response.graph_draft);
+      setGraphValidation(response.backend_validation);
+      setIdentificationGraphJson(JSON.stringify(response.graph_draft, null, 2));
+      setGraphMessage(
+        `Validated edited graph. Status: ${response.backend_validation.graph_validation_status}. Safe to identify: ${response.backend_validation.safe_to_continue_to_identification ? "yes" : "no"}.`,
       );
     } catch (error) {
       setGraphError((error as Error).message);
@@ -1143,10 +1218,13 @@ export function HomePage() {
     } catch {
       roleRecommendationsPayload = [];
     }
-    try {
-      graphPayload = JSON.parse(identificationGraphJson);
-    } catch {
-      graphPayload = null;
+    graphPayload = editedGraphDraft as unknown as Record<string, unknown> | null;
+    if (!graphPayload) {
+      try {
+        graphPayload = JSON.parse(identificationGraphJson);
+      } catch {
+        graphPayload = null;
+      }
     }
     try {
       identificationPayload = JSON.parse(identificationResultJson);
@@ -1277,6 +1355,106 @@ export function HomePage() {
     }
   }
 
+  const selectedVariablesCount = targetedVariablesText
+    .split(/\r?\n|,/)
+    .map((variable) => variable.trim())
+    .filter(Boolean).length;
+  const graphStatus =
+    graphValidation?.graph_validation_status ?? "not reviewed";
+  const identificationStatus =
+    identificationResult?.identification_status ?? "not checked";
+  const reportStatus = reportResult ? "generated" : "not generated";
+  const activeWorkflowStep = workflowState?.current_step ?? activeStep;
+  const progressStages = workflowSteps.map((step, index) => {
+    const stepNumber = index + 1;
+    const completedByWorkflow =
+      workflowState?.completed_steps.includes(stepNumber) ?? false;
+    const state =
+      stepNumber === activeStep
+        ? "active"
+        : completedByWorkflow || stepNumber < activeWorkflowStep
+          ? "done"
+          : stepNumber > activeWorkflowStep + 1
+            ? "locked"
+            : "pending";
+    return { ...step, state };
+  });
+
+  const stepGuidance = [
+    {
+      purpose: "Define the project and prepare the document knowledge base.",
+      action: "Enter the research objective, upload PDF/DOCX documents, and ingest them when ready.",
+      caution: "RAG evidence supports design decisions, but it does not prove causal claims.",
+      requirement: "Proceed after the objective is clear and documents are uploaded or intentionally skipped.",
+    },
+    {
+      purpose: "Understand the uploaded CSV before causal design begins.",
+      action: "Upload/select a dataset and inspect rows, columns, IDs, timestamps, missingness, and types.",
+      caution: "Dataset schema describes available variables only; it is not analysis evidence.",
+      requirement: "Proceed after a dataset is selected and schema is reviewed.",
+    },
+    {
+      purpose: "Explore broad data quality and structure before narrowing variables.",
+      action: "Run broad exploration and review missingness, temporal structure, and possible outcomes.",
+      caution: "Exploratory patterns do not establish causality.",
+      requirement: "Proceed after broad warnings are reviewed.",
+    },
+    {
+      purpose: "Draft candidate causal questions and provisional variables.",
+      action: "Generate questions, confirm one question, then recommend candidate variables.",
+      caution: "Variable roles are provisional until graph and final validation.",
+      requirement: "Proceed after a question and selected variables are available.",
+    },
+    {
+      purpose: "Check whether the selected variables can support graph design.",
+      action: "Run targeted feasibility for exposure, outcome, timing, coverage, and missingness.",
+      caution: "Feasibility checks implementation readiness, not causal effects.",
+      requirement: "Proceed when safe_to_continue_to_graph is true, or continue with an explicit warning.",
+    },
+    {
+      purpose: "Validate final roles and draft a causal graph.",
+      action: "Run role validation, generate the draft graph, and inspect graph warnings.",
+      caution: "The graph is a user-reviewed design object, not proven causal structure.",
+      requirement: "Proceed after graph validation returns a usable result.",
+    },
+    {
+      purpose: "Check identification and plan estimation guidance.",
+      action: "Run identification, generate strategy guidance, and review assumptions/sensitivity.",
+      caution: "No causal estimation is run here.",
+      requirement: "Proceed after assumptions and sensitivity planning are reviewed.",
+    },
+    {
+      purpose: "Generate the final causal design and analysis guidance report.",
+      action: "Review carried-forward state and generate the structured JSON report.",
+      caution: "The report is not a causal results report and must not claim proven effects.",
+      requirement: "Report generation should include assumptions review or show missing-section warnings.",
+    },
+  ][activeStep - 1];
+
+  const stepProceedStatus = [
+    Boolean(researchObjective.trim()),
+    Boolean(selectedDataset && datasetSchema),
+    Boolean(broadExploration),
+    Boolean(confirmedQuestion.trim() && selectedVariablesCount > 0),
+    Boolean(targetedFeasibility?.safe_to_continue_to_graph),
+    Boolean(graphValidation),
+    Boolean(identificationResult && strategyResult && assumptionReview),
+    Boolean(assumptionReview),
+  ];
+  const canContinue = stepProceedStatus[activeStep - 1];
+
+  function goToStep(step: number) {
+    setActiveStep(Math.min(Math.max(step, 1), workflowSteps.length));
+  }
+
+  function goToPreviousStep() {
+    goToStep(activeStep - 1);
+  }
+
+  function goToNextStep() {
+    goToStep(activeStep + 1);
+  }
+
   return (
     <div className="dashboard-shell">
       <aside className="sidebar">
@@ -1289,16 +1467,19 @@ export function HomePage() {
         </div>
 
         <nav className="nav-list" aria-label="Primary navigation">
-          {navItems.map((item, index) => (
+          {workflowSteps.map((step, index) => (
             <button
-              className={`nav-item ${index === 0 ? "nav-item--active" : ""}`}
-              key={item}
+              className={`nav-item ${
+                activeStep === index + 1 ? "nav-item--active" : ""
+              }`}
+              key={step.label}
+              onClick={() => goToStep(index + 1)}
               type="button"
             >
               <span className="nav-icon" aria-hidden="true">
                 {index + 1}
               </span>
-              {item}
+              {step.navLabel}
             </button>
           ))}
         </nav>
@@ -1328,20 +1509,25 @@ export function HomePage() {
           </div>
           <div className="header-actions">
             <span className="pill pill--warning">4 Warnings</span>
-            <span className="pill">Stage 2/8</span>
+            <span className="pill">Stage {activeStep}/8</span>
           </div>
         </header>
 
         <section className="progress-card panel">
           <p className="section-label">Analysis Progress</p>
           <div className="progress-steps">
-            {progressStages.map((stage) => (
-              <div className="progress-step" key={stage.label}>
+            {progressStages.map((stage, index) => (
+              <button
+                className="progress-step"
+                key={stage.label}
+                onClick={() => goToStep(index + 1)}
+                type="button"
+              >
                 <span className={`step-node step-node--${stage.state}`}>
-                  {getStageSymbol(stage.state)}
+                  {getStageSymbol(stage.state) || index + 1}
                 </span>
-                <span>{stage.label}</span>
-              </div>
+                <span>{stage.shortLabel}</span>
+              </button>
             ))}
           </div>
         </section>
@@ -1412,7 +1598,89 @@ export function HomePage() {
           </ul>
         </section>
 
-        <section className="feature-grid">
+        <section className="panel workflow-overview">
+          <div className="panel-heading">
+            <div>
+              <p className="section-label">Guided Workflow</p>
+              <h2>
+                Step {activeStep}: {workflowSteps[activeStep - 1].label}
+              </h2>
+            </div>
+            <div className="step-controls">
+              <button
+                disabled={activeStep === 1}
+                onClick={goToPreviousStep}
+                type="button"
+              >
+                Return to Previous Step
+              </button>
+              <button
+                disabled={activeStep === workflowSteps.length || !canContinue}
+                onClick={goToNextStep}
+                type="button"
+              >
+                Continue to Next Step
+              </button>
+            </div>
+          </div>
+
+          <div className="overview-grid">
+            <article>
+              <strong>Current Design State</strong>
+              <dl>
+                <dt>Dataset</dt>
+                <dd>{selectedDataset || candidateDataset || targetedDataset || "Not selected"}</dd>
+                <dt>Confirmed Question</dt>
+                <dd>{confirmedQuestion ? "Available" : "Not confirmed"}</dd>
+                <dt>Selected Variables</dt>
+                <dd>{selectedVariablesCount}</dd>
+                <dt>Graph Status</dt>
+                <dd>{graphStatus}</dd>
+                <dt>Identification</dt>
+                <dd>{identificationStatus}</dd>
+                <dt>Report</dt>
+                <dd>{reportStatus}</dd>
+              </dl>
+            </article>
+            <article>
+              <strong>Proceed Condition</strong>
+              <p>{stepGuidance.requirement}</p>
+              {!canContinue && (
+                <p className="inline-warning">
+                  This step can still be explored, but the next-step button is
+                  disabled until the required state is available.
+                </p>
+              )}
+            </article>
+            {workflowState && (
+              <article>
+                <strong>LangGraph State</strong>
+                <dl>
+                  <dt>Workflow ID</dt>
+                  <dd>{workflowState.workflow_id.slice(0, 8)}</dd>
+                  <dt>Current Step</dt>
+                  <dd>
+                    {workflowState.current_step}: {workflowState.current_step_name}
+                  </dd>
+                  <dt>Completed</dt>
+                  <dd>
+                    {workflowState.completed_steps.length > 0
+                      ? workflowState.completed_steps.join(", ")
+                      : "None yet"}
+                  </dd>
+                </dl>
+              </article>
+            )}
+          </div>
+
+          <div className="safety-banner">
+            <span>Not diagnostic or treatment-decision support.</span>
+            <span>The LLM recommends and explains; backend validation checks.</span>
+            <span>Do not present causal conclusions as proven.</span>
+          </div>
+        </section>
+
+        <section className={`feature-grid feature-grid--step-${activeStep}`}>
           <article className="panel feature-panel feature-panel--wide">
             <div className="panel-heading">
               <div>
@@ -1450,9 +1718,9 @@ export function HomePage() {
                 onChange={(event) => setWorkflowReviseStep(Number(event.target.value))}
                 value={workflowReviseStep}
               >
-                {progressStages.map((stage, index) => (
+                {workflowSteps.map((stage, index) => (
                   <option key={stage.label} value={index + 1}>
-                    Step {index + 1}: {stage.label}
+                    Step {index + 1}: {stage.shortLabel}
                   </option>
                 ))}
               </select>
@@ -2702,6 +2970,58 @@ export function HomePage() {
 
             <StatusMessage error={graphError} message={graphMessage} />
 
+            <section className="warning-card graph-safety-card">
+              <strong>Graph Safety Notes</strong>
+              <ul>
+                <li>This graph is a draft causal structure and requires user review.</li>
+                <li>Edges are assumptions, not proven causal relationships.</li>
+                <li>
+                  Backend validation checks graph structure, timing, and role
+                  conflicts.
+                </li>
+              </ul>
+            </section>
+
+            <section className="graph-education-grid">
+              <article>
+                <strong>Chain</strong>
+                <span>{"A -> B -> C"}</span>
+              </article>
+              <article>
+                <strong>Fork</strong>
+                <span>{"A <- B -> C"}</span>
+              </article>
+              <article>
+                <strong>Collider</strong>
+                <span>{"A -> B <- C"}</span>
+              </article>
+              <article>
+                <strong>DAG</strong>
+                <span>Directed acyclic graph</span>
+              </article>
+            </section>
+
+            <CausalGraphCanvas
+              graphDraft={graphDraft}
+              onGraphChange={setEditedGraphDraft}
+              validation={graphValidation}
+            />
+
+            <div className="action-row">
+              <button
+                disabled={graphBusy || !editedGraphDraft}
+                onClick={handleEditedGraphValidation}
+                type="button"
+              >
+                Validate Edited Graph
+              </button>
+              <span className="status-line">
+                {editedGraphDraft
+                  ? `${editedGraphDraft.nodes.length} nodes / ${editedGraphDraft.edges.length} edges ready for validation`
+                  : "No edited graph yet"}
+              </span>
+            </div>
+
             {graphValidation && (
               <section className="validation-summary">
                 <div>
@@ -3693,20 +4013,23 @@ export function HomePage() {
         </header>
 
         <div className="assistant-message">
-          Causal Studio now follows eight steps: setup, data foundation, broad
-          exploration, question and variables, targeted feasibility, graph
-          validation, strategy, and export.
+          <strong>Step {activeStep}: {workflowSteps[activeStep - 1].shortLabel}</strong>
+          <p>{stepGuidance.purpose}</p>
         </div>
 
         <div className="assistant-message">
-          Understand the data first, then formulate the causal question, inspect
-          selected variables, and only then build the graph.
+          <strong>What to do</strong>
+          <p>{stepGuidance.action}</p>
+          <strong>Key caution</strong>
+          <p>{stepGuidance.caution}</p>
+          <strong>Required to proceed</strong>
+          <p>{stepGuidance.requirement}</p>
         </div>
 
         <div className="chip-row">
           <button type="button">Data First</button>
-          <button type="button">Provisional Roles</button>
-          <button type="button">Validated Graph</button>
+          <button type="button">Human Review</button>
+          <button type="button">No Proven Effects</button>
         </div>
 
         <div className="assistant-spacer" />

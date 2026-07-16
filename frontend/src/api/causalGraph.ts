@@ -1,5 +1,6 @@
 import { API_BASE_URL } from "./health";
 import type {
+  CausalGraphDraft,
   CausalGraphValidationResponse,
   CausalRoleRecommendation,
   SelectedCausalVariable,
@@ -50,6 +51,39 @@ export async function generateAndValidateGraph({
       }),
     },
   );
+
+  return parseJsonResponse<CausalGraphValidationResponse>(response);
+}
+
+export async function validateEditedGraph({
+  confirmedQuestion,
+  datasetFilename,
+  graphDraft,
+  selectedVariables,
+  roleRecommendations,
+  estimandType = "total_effect",
+}: {
+  confirmedQuestion: string;
+  datasetFilename: string;
+  graphDraft: CausalGraphDraft;
+  selectedVariables: SelectedCausalVariable[];
+  roleRecommendations: CausalRoleRecommendation[];
+  estimandType?: string;
+}): Promise<CausalGraphValidationResponse> {
+  const response = await fetch(`${API_BASE_URL}/causal-graph/validate-edited`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      confirmed_question: confirmedQuestion,
+      dataset_filename: datasetFilename,
+      graph_draft: graphDraft,
+      selected_variables: selectedVariables,
+      role_recommendations: roleRecommendations,
+      estimand_type: estimandType,
+    }),
+  });
 
   return parseJsonResponse<CausalGraphValidationResponse>(response);
 }

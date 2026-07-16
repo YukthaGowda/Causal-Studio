@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.services.causal_graph import (
     CausalGraphGenerationError,
     generate_and_validate_graph,
+    validate_edited_graph,
 )
 
 
@@ -50,6 +51,23 @@ class GenerateAndValidateGraphRequest(BaseModel):
         return stripped_value
 
 
+class ValidateEditedGraphRequest(BaseModel):
+    confirmed_question: str = Field(..., min_length=1)
+    dataset_filename: str = Field(..., min_length=1)
+    graph_draft: dict[str, Any] = Field(..., min_length=1)
+    selected_variables: list[SelectedGraphVariable] = Field(..., min_length=1)
+    role_recommendations: list[GraphRoleRecommendation] = Field(..., min_length=1)
+    estimand_type: str = Field(default="total_effect", min_length=1)
+
+    @field_validator("confirmed_question", "dataset_filename", "estimand_type")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        stripped_value = value.strip()
+        if not stripped_value:
+            raise ValueError("Value cannot be empty.")
+        return stripped_value
+
+
 @router.post("/generate-and-validate")
 def generate_graph(
     request: GenerateAndValidateGraphRequest,
@@ -68,6 +86,32 @@ def generate_graph(
             ],
             estimand_type=request.estimand_type,
             top_k_evidence=request.top_k_evidence,
+        )
+    except CausalGraphGenerationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+
+
+@router.post("/validate-edited")
+def validate_edited_graph_route(
+    request: ValidateEditedGraphRequest,
+) -> dict[str, Any]:
+    try:
+        return validate_edited_graph(
+            confirmed_question=request.confirmed_question,
+            dataset_filename=request.dataset_filename,
+            graph_draft=request.graph_draft,
+            selected_variables=[
+                variable.model_dump(exclude_none=True)
+                for variable in request.selected_variables
+            ],
+            role_recommendations=[
+                role.model_dump(exclude_none=True)
+                for role in request.role_recommendations
+            ],
+            estimand_type=request.estimand_type,
         )
     except CausalGraphGenerationError as error:
         raise HTTPException(

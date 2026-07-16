@@ -9,3 +9,4 @@ pandas
 openai
 python-dotenv
 networkx
+langgraph

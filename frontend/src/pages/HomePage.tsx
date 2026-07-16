@@ -11,6 +11,12 @@ import {
   runTargetedFeasibility,
 } from "../api/exploration";
 import { generateReport } from "../api/reports";
+import {
+  advanceWorkflow,
+  confirmWorkflow,
+  reviseWorkflow,
+  startWorkflow,
+} from "../api/workflow";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
@@ -26,6 +32,7 @@ import type {
   BroadExplorationResponse,
   TargetedFeasibilityResponse,
   ReportGenerationResponse,
+  WorkflowState,
   BackendCausalRoleValidation,
   BackendCausalGraphValidation,
   CandidateCausalQuestion,
@@ -562,6 +569,11 @@ export function HomePage() {
   const [reportMessage, setReportMessage] = useState("");
   const [reportError, setReportError] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
+  const [workflowState, setWorkflowState] = useState<WorkflowState | null>(null);
+  const [workflowMessage, setWorkflowMessage] = useState("");
+  const [workflowError, setWorkflowError] = useState("");
+  const [workflowBusy, setWorkflowBusy] = useState(false);
+  const [workflowReviseStep, setWorkflowReviseStep] = useState(4);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -1110,6 +1122,161 @@ export function HomePage() {
     }
   }
 
+  function collectWorkflowInputs() {
+    let selectedVariables: unknown[] = [];
+    let roleRecommendationsPayload: Array<Record<string, unknown>> = [];
+    let graphPayload: Record<string, unknown> | null = null;
+    let identificationPayload: Record<string, unknown> | null = null;
+    let strategyPayload: Record<string, unknown> | null = null;
+    let assumptionsPayload: Record<string, unknown> | null = null;
+
+    try {
+      selectedVariables = JSON.parse(selectedVariablesJson);
+    } catch {
+      selectedVariables = targetedVariablesText
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    try {
+      roleRecommendationsPayload = JSON.parse(roleRecommendationsJson);
+    } catch {
+      roleRecommendationsPayload = [];
+    }
+    try {
+      graphPayload = JSON.parse(identificationGraphJson);
+    } catch {
+      graphPayload = null;
+    }
+    try {
+      identificationPayload = JSON.parse(identificationResultJson);
+    } catch {
+      identificationPayload = null;
+    }
+    try {
+      strategyPayload = JSON.parse(strategyResultJson);
+    } catch {
+      strategyPayload = null;
+    }
+    try {
+      assumptionsPayload = JSON.parse(assumptionReviewJson);
+    } catch {
+      assumptionsPayload = null;
+    }
+
+    return {
+      project_title: reportTitle,
+      research_objective: researchObjective,
+      dataset_filename: reportDataset || selectedDataset || targetedDataset,
+      schema_summary: datasetSchema,
+      broad_exploration_summary: broadExploration,
+      candidate_questions: candidateQuestions,
+      selected_candidate_question: confirmedQuestion,
+      candidate_variables: Object.values(variableGroups).flat(),
+      selected_variables: selectedVariables,
+      targeted_feasibility_result: targetedFeasibility,
+      role_recommendations: roleRecommendationsPayload,
+      role_validation_result: roleValidation,
+      graph: graphPayload,
+      graph_validation_result: graphValidation,
+      identification_result: identificationPayload,
+      analysis_strategy: strategyPayload,
+      assumptions_review: assumptionsPayload,
+      report: reportResult,
+      exposure: targetedExposure,
+      outcome: targetedOutcome,
+      participant_id_column: targetedParticipantId,
+      timestamp_column: targetedTimestamp,
+      lag_definition: targetedLagDefinition,
+    };
+  }
+
+  async function handleWorkflowStart() {
+    setWorkflowBusy(true);
+    setWorkflowError("");
+    setWorkflowMessage("");
+    try {
+      const state = await startWorkflow({
+        projectTitle: reportTitle,
+        researchObjective,
+        datasetFilename: reportDataset || selectedDataset || targetedDataset,
+      });
+      setWorkflowState(state);
+      setWorkflowMessage("Workflow started. State is stored in memory.");
+    } catch (error) {
+      setWorkflowError((error as Error).message);
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
+  async function handleWorkflowAdvance() {
+    if (!workflowState) {
+      setWorkflowError("Start a workflow first.");
+      return;
+    }
+    setWorkflowBusy(true);
+    setWorkflowError("");
+    setWorkflowMessage("");
+    try {
+      const state = await advanceWorkflow(
+        workflowState.workflow_id,
+        collectWorkflowInputs(),
+      );
+      setWorkflowState(state);
+      setWorkflowMessage(`Workflow advanced/checkpointed at Step ${state.current_step}.`);
+    } catch (error) {
+      setWorkflowError((error as Error).message);
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
+  async function handleWorkflowConfirm() {
+    if (!workflowState) {
+      setWorkflowError("Start a workflow first.");
+      return;
+    }
+    setWorkflowBusy(true);
+    setWorkflowError("");
+    setWorkflowMessage("");
+    try {
+      const state = await confirmWorkflow(
+        workflowState.workflow_id,
+        collectWorkflowInputs(),
+      );
+      setWorkflowState(state);
+      setWorkflowMessage(`Confirmed Step ${state.current_step}.`);
+    } catch (error) {
+      setWorkflowError((error as Error).message);
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
+  async function handleWorkflowRevise() {
+    if (!workflowState) {
+      setWorkflowError("Start a workflow first.");
+      return;
+    }
+    setWorkflowBusy(true);
+    setWorkflowError("");
+    setWorkflowMessage("");
+    try {
+      const state = await reviseWorkflow(
+        workflowState.workflow_id,
+        workflowReviseStep,
+        "User requested revision from workflow control.",
+      );
+      setWorkflowState(state);
+      setWorkflowMessage(`Workflow moved back to Step ${state.current_step}.`);
+    } catch (error) {
+      setWorkflowError((error as Error).message);
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
   return (
     <div className="dashboard-shell">
       <aside className="sidebar">
@@ -1246,6 +1413,112 @@ export function HomePage() {
         </section>
 
         <section className="feature-grid">
+          <article className="panel feature-panel feature-panel--wide">
+            <div className="panel-heading">
+              <div>
+                <p className="section-label">LangGraph Orchestration</p>
+                <h2>Workflow Control</h2>
+              </div>
+            </div>
+
+            <div className="control-row">
+              <button
+                disabled={workflowBusy}
+                onClick={handleWorkflowStart}
+                type="button"
+              >
+                Start Workflow
+              </button>
+              <button
+                disabled={workflowBusy || !workflowState}
+                onClick={handleWorkflowAdvance}
+                type="button"
+              >
+                Advance
+              </button>
+              <button
+                disabled={workflowBusy || !workflowState}
+                onClick={handleWorkflowConfirm}
+                type="button"
+              >
+                Confirm Current Step
+              </button>
+            </div>
+
+            <div className="control-row">
+              <select
+                onChange={(event) => setWorkflowReviseStep(Number(event.target.value))}
+                value={workflowReviseStep}
+              >
+                {progressStages.map((stage, index) => (
+                  <option key={stage.label} value={index + 1}>
+                    Step {index + 1}: {stage.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={workflowBusy || !workflowState}
+                onClick={handleWorkflowRevise}
+                type="button"
+              >
+                Revise To Step
+              </button>
+            </div>
+
+            <StatusMessage error={workflowError} message={workflowMessage} />
+
+            {workflowState && (
+              <section className="validation-summary">
+                <div>
+                  <strong>{workflowState.workflow_id.slice(0, 8)}</strong>
+                  <span>Workflow ID</span>
+                </div>
+                <div>
+                  <strong>
+                    Step {workflowState.current_step}:{" "}
+                    {workflowState.current_step_name}
+                  </strong>
+                  <span>Current Step</span>
+                </div>
+                <p>{workflowState.next_required_user_action}</p>
+              </section>
+            )}
+
+            {workflowState && (
+              <section className="role-section">
+                <h3>Completed Steps</h3>
+                <p>
+                  {workflowState.completed_steps.length > 0
+                    ? workflowState.completed_steps.join(", ")
+                    : "No completed steps yet."}
+                </p>
+
+                <h3>Workflow Warnings / Errors</h3>
+                <div className="issue-list">
+                  {[...workflowState.warnings, ...workflowState.errors].length === 0 ? (
+                    <p>No workflow warnings or errors.</p>
+                  ) : (
+                    [...workflowState.warnings, ...workflowState.errors].map(
+                      (message, index) => (
+                        <article
+                          className={
+                            message.severity === "blocking"
+                              ? "issue-card issue-card--error"
+                              : "issue-card"
+                          }
+                          key={`${message.message}-${index}`}
+                        >
+                          <strong>{message.severity}</strong>
+                          <p>{message.message}</p>
+                        </article>
+                      ),
+                    )
+                  )}
+                </div>
+              </section>
+            )}
+          </article>
+
           <article className="workflow-stage-card feature-panel--wide">
             <p className="section-label">Step 1</p>
             <h2>Project Setup and Document Upload</h2>

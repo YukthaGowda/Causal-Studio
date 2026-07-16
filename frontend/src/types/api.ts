@@ -628,3 +628,35 @@ export type ReportGenerationResponse = {
   pdf_export_status: "not_implemented";
   pdf_export_message: string;
 };
+
+export type WorkflowMessage = {
+  message: string;
+  severity: "info" | "warning" | "high" | "blocking";
+};
+
+export type WorkflowState = {
+  workflow_id: string;
+  current_step: number;
+  current_step_name: string;
+  completed_steps: number[];
+  project_title?: string | null;
+  research_objective?: string | null;
+  dataset_filename?: string | null;
+  schema_summary?: Record<string, unknown> | null;
+  broad_exploration_summary?: Record<string, unknown> | null;
+  selected_candidate_question?: unknown;
+  selected_variables?: unknown[];
+  targeted_feasibility_result?: Record<string, unknown> | null;
+  role_recommendations?: Array<Record<string, unknown>>;
+  role_validation_result?: Record<string, unknown> | null;
+  graph?: Record<string, unknown> | null;
+  graph_validation_result?: Record<string, unknown> | null;
+  identification_result?: Record<string, unknown> | null;
+  analysis_strategy?: Record<string, unknown> | null;
+  assumptions_review?: Record<string, unknown> | null;
+  report?: Record<string, unknown> | null;
+  warnings: WorkflowMessage[];
+  errors: WorkflowMessage[];
+  next_required_user_action: string;
+  updated_at: string;
+};

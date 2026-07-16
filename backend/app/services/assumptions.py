@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.analysis_strategy import make_issue
 from app.services.causal_questions import (
@@ -634,18 +635,18 @@ def review_assumptions(
     )
 
     evidence_chunks = []
+    evidence_search: dict[str, Any] = {"results": []}
     try:
         evidence_query = (
             f"{normalized_question} assumptions sensitivity robustness missingness "
             f"measurement validity repeated measures wearable passive sensing EMA "
             f"causal inference {resolved_exposure} {resolved_outcome}"
         )
-        evidence_chunks = summarize_evidence(
-            search_rag_chunks(
-                query=evidence_query,
-                top_k=min(top_k_evidence, MAX_EVIDENCE_CHUNKS),
-            )
+        evidence_search = search_rag_chunks(
+            query=evidence_query,
+            top_k=min(top_k_evidence, MAX_EVIDENCE_CHUNKS),
         )
+        evidence_chunks = summarize_evidence(evidence_search)
     except RagSearchError:
         deterministic_warnings.append(
             make_issue(
@@ -707,6 +708,23 @@ def review_assumptions(
 
     review = ensure_required_assumptions(review)
     review["review_status"] = review_status
+
+    record_trace_event(
+        "assumptions_and_sensitivity_review",
+        {
+            "workflow_step": 7,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "exposure": resolved_exposure,
+            "outcome": resolved_outcome,
+            "adjustment_set_count": len(resolved_adjustment_set),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "review_status": review_status,
+            "warning_count": len(deterministic_warnings),
+            "error_count": 0,
+        },
+    )
 
     return {
         "status": "completed",

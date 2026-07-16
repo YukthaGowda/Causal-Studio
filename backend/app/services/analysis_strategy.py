@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.causal_questions import (
     CausalQuestionGenerationError,
@@ -347,17 +348,17 @@ def generate_analysis_strategy(
         status = "ready_for_review"
 
     evidence_chunks = []
+    evidence_search: dict[str, Any] = {"results": []}
     try:
         evidence_query = (
             f"{normalized_question} analysis strategy estimator repeated measures "
             f"missing data adjustment {resolved_exposure} {resolved_outcome}"
         )
-        evidence_chunks = summarize_evidence(
-            search_rag_chunks(
-                query=evidence_query,
-                top_k=min(top_k_evidence, MAX_EVIDENCE_CHUNKS),
-            )
+        evidence_search = search_rag_chunks(
+            query=evidence_query,
+            top_k=min(top_k_evidence, MAX_EVIDENCE_CHUNKS),
         )
+        evidence_chunks = summarize_evidence(evidence_search)
     except RagSearchError:
         deterministic_warnings.append(
             make_issue(
@@ -427,6 +428,24 @@ def generate_analysis_strategy(
             )
 
     strategy_plan["strategy_status"] = status
+
+    record_trace_event(
+        "analysis_strategy_generation",
+        {
+            "workflow_step": 7,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "exposure": resolved_exposure,
+            "outcome": resolved_outcome,
+            "adjustment_set_count": len(resolved_adjustment_set),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "deterministic_validation_passed": not deterministic_errors,
+            "strategy_status": status,
+            "warning_count": len(deterministic_warnings),
+            "error_count": len(deterministic_errors),
+        },
+    )
 
     return {
         "status": "completed",

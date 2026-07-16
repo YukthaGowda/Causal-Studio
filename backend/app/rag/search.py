@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.ingestion import (
     CHROMA_DB_DIR,
     COLLECTION_NAME,
@@ -54,6 +55,17 @@ def search_rag_chunks(query: str, top_k: int = 5) -> dict[str, str | int | list[
     collection = get_existing_chroma_collection()
     stored_chunks = collection.count()
     if stored_chunks == 0:
+        record_trace_event(
+            "rag_search",
+            {
+                "workflow_step": "rag_search",
+                "query_length": len(normalized_query),
+                "top_k": top_k,
+                "stored_chunks": stored_chunks,
+                "number_of_results": 0,
+                "source_filenames": [],
+            },
+        )
         return {
             "query": normalized_query,
             "number_of_results": 0,
@@ -89,6 +101,18 @@ def search_rag_chunks(query: str, top_k: int = 5) -> dict[str, str | int | list[
             result["page_number"] = metadata["page_number"]
 
         results.append(result)
+
+    record_trace_event(
+        "rag_search",
+        {
+            "workflow_step": "rag_search",
+            "query_length": len(normalized_query),
+            "top_k": top_k,
+            "stored_chunks": stored_chunks,
+            "number_of_results": len(results),
+            "source_filenames": summarize_sources(results),
+        },
+    )
 
     return {
         "query": normalized_query,

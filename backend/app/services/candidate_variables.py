@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.causal_questions import (
     CausalQuestionGenerationError,
@@ -206,6 +207,21 @@ def recommend_candidate_variables(
 
     content = response.choices[0].message.content or "{}"
     parsed = parse_variable_recommendation_json(content)
+    variable_count = sum(len(items) for items in parsed["variable_groups"].values())
+
+    record_trace_event(
+        "candidate_variable_recommendation",
+        {
+            "workflow_step": 4,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "candidate_variable_count": variable_count,
+            "derived_feature_count": len(parsed["derived_features"]),
+            "model": model,
+        },
+    )
 
     return {
         "status": "completed",

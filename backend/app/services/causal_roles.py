@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.causal_questions import (
     CausalQuestionGenerationError,
@@ -227,6 +228,22 @@ def recommend_and_validate_roles(
         role_recommendations=role_recommendations,
         schema=schema,
         estimand_type=estimand_type,
+    )
+
+    record_trace_event(
+        "causal_role_recommendation_and_validation",
+        {
+            "workflow_step": 6,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "selected_variable_count": len(selected_variables),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "deterministic_validation_status": validation.get("validation_status"),
+            "warning_count": len(validation.get("warnings", [])),
+            "error_count": len(validation.get("errors", [])),
+            "model": model,
+        },
     )
 
     return {

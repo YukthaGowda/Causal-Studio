@@ -660,3 +660,17 @@ export type WorkflowState = {
   next_required_user_action: string;
   updated_at: string;
 };
+
+export type LangSmithStatusResponse = {
+  tracing_enabled: boolean;
+  langchain_project: string | null;
+  api_key_present: boolean;
+  warning: string | null;
+};
+
+export type LangSmithTestTraceResponse = LangSmithStatusResponse & {
+  trace_completed: boolean;
+  rag_status: string;
+  results_count: number;
+  source_filenames: string[];
+};

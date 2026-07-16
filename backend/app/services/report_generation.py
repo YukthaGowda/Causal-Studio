@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.langsmith_tracing import record_trace_event
 from app.services.causal_questions import CausalQuestionGenerationError, resolve_dataset_path
 from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
 
@@ -271,4 +272,21 @@ def generate_report(
         "pdf_export_message": "PDF export will be added later. This endpoint returns a structured JSON report.",
     }
     report["claim_audit"] = audit_claims(report)
+    record_trace_event(
+        "review_export_report_generation",
+        {
+            "workflow_step": 8,
+            "dataset_filename": dataset_path.name,
+            "research_objective_present": bool(research_objective),
+            "confirmed_question_length": len(confirmed_question),
+            "selected_variable_count": len(selected_variables),
+            "graph_node_count": len(graph.get("nodes", [])),
+            "graph_edge_count": len(graph.get("edges", [])),
+            "identification_status": identification_result.get("identification_status"),
+            "strategy_status": strategy_plan.get("strategy_status"),
+            "assumption_review_status": assumptions.get("review_status"),
+            "claim_audit_status": report["claim_audit"].get("status"),
+            "unsafe_claim_count": len(report["claim_audit"].get("unsafe_claims_found", [])),
+        },
+    )
     return report

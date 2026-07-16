@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.causal_questions import (
     CausalQuestionGenerationError,
@@ -235,6 +236,24 @@ def generate_and_validate_graph(
         estimand_type=estimand_type,
     )
 
+    record_trace_event(
+        "causal_graph_generation_and_validation",
+        {
+            "workflow_step": 6,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "selected_variable_count": len(selected_variables),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "node_count": len(graph_draft.get("nodes", [])),
+            "edge_count": len(graph_draft.get("edges", [])),
+            "deterministic_validation_status": validation.get("graph_validation_status"),
+            "warning_count": len(validation.get("warnings", [])),
+            "error_count": len(validation.get("errors", [])),
+            "model": model,
+        },
+    )
+
     return {
         "status": "completed",
         "confirmed_question": normalized_question,
@@ -294,6 +313,21 @@ def validate_edited_graph(
         role_recommendations=role_recommendations,
         schema=schema,
         estimand_type=estimand_type,
+    )
+
+    record_trace_event(
+        "edited_causal_graph_validation",
+        {
+            "workflow_step": 6,
+            "dataset_filename": dataset_filename,
+            "confirmed_question_length": len(normalized_question),
+            "selected_variable_count": len(selected_variables),
+            "node_count": len(normalized_graph.get("nodes", [])),
+            "edge_count": len(normalized_graph.get("edges", [])),
+            "deterministic_validation_status": validation.get("graph_validation_status"),
+            "warning_count": len(validation.get("warnings", [])),
+            "error_count": len(validation.get("errors", [])),
+        },
     )
 
     return {

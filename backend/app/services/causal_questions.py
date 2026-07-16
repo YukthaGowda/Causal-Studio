@@ -8,6 +8,7 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 
+from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.search import RagSearchError, search_rag_chunks
 from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
 
@@ -226,6 +227,20 @@ def generate_candidate_questions(
 
     content = response.choices[0].message.content or "{}"
     parsed = parse_llm_json(content)
+    candidates = parsed["candidates"][:5]
+
+    record_trace_event(
+        "candidate_causal_question_generation",
+        {
+            "workflow_step": 4,
+            "dataset_filename": dataset_filename,
+            "research_objective_length": len(normalized_objective),
+            "number_of_retrieved_evidence_chunks": len(evidence_chunks),
+            "source_filenames_used": summarize_sources(evidence_search.get("results", [])),
+            "candidate_count": len(candidates),
+            "model": model,
+        },
+    )
 
     return {
         "status": "completed",
@@ -234,5 +249,5 @@ def generate_candidate_questions(
         "model": model,
         "evidence_chunks_used": len(evidence_chunks),
         "schema_summary": schema_summary,
-        "candidates": parsed["candidates"][:5],
+        "candidates": candidates,
     }

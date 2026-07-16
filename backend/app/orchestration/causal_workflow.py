@@ -4,6 +4,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from app.core.langsmith_tracing import record_trace_event
 from app.services.broad_exploration import BroadExplorationError, explore_broad_dataset
 from app.services.causal_questions import CausalQuestionGenerationError, resolve_dataset_path
 from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
@@ -80,7 +81,18 @@ def start_workflow(initial_values: dict[str, Any] | None = None) -> WorkflowStat
         "Confirm project title/objective and document upload or ingestion status. "
         "Workflow state is stored in memory and resets when the backend restarts."
     )
-    return save_state(state)
+    saved_state = save_state(state)
+    record_trace_event(
+        "langgraph_workflow_start",
+        {
+            "workflow_step": saved_state.get("current_step"),
+            "workflow_id": saved_state.get("workflow_id"),
+            "dataset_filename": saved_state.get("dataset_filename"),
+            "research_objective_present": bool(saved_state.get("research_objective")),
+            "project_title_present": bool(saved_state.get("project_title")),
+        },
+    )
+    return saved_state
 
 
 def block(state: WorkflowState, message: str, revise_to_step: int | None = None) -> WorkflowState:
@@ -254,7 +266,21 @@ def advance_workflow(workflow_id: str, inputs: dict[str, Any] | None = None) -> 
     handler = ADVANCE_HANDLERS.get(step)
     if handler is None:
         return block(state, f"Unknown workflow step: {step}")
-    return handler(state)
+    advanced_state = handler(state)
+    record_trace_event(
+        "langgraph_workflow_advance",
+        {
+            "workflow_step": step,
+            "workflow_id": workflow_id,
+            "next_step": advanced_state.get("current_step"),
+            "completed_steps": advanced_state.get("completed_steps", []),
+            "dataset_filename": advanced_state.get("dataset_filename"),
+            "warning_count": len(advanced_state.get("warnings", [])),
+            "error_count": len(advanced_state.get("errors", [])),
+            "next_required_user_action": advanced_state.get("next_required_user_action"),
+        },
+    )
+    return advanced_state
 
 
 def confirm_workflow(workflow_id: str, confirmation: dict[str, Any]) -> WorkflowState:
@@ -262,7 +288,17 @@ def confirm_workflow(workflow_id: str, confirmation: dict[str, Any]) -> Workflow
     step = int(state.get("current_step", 1))
     mark_completed(state, step)
     state["next_required_user_action"] = f"Confirmed Step {step}. Use advance to continue."
-    return save_state(state)
+    saved_state = save_state(state)
+    record_trace_event(
+        "langgraph_workflow_confirm",
+        {
+            "workflow_step": step,
+            "workflow_id": workflow_id,
+            "completed_steps": saved_state.get("completed_steps", []),
+            "dataset_filename": saved_state.get("dataset_filename"),
+        },
+    )
+    return saved_state
 
 
 def revise_workflow(workflow_id: str, target_step: int, reason: str | None = None) -> WorkflowState:
@@ -275,4 +311,14 @@ def revise_workflow(workflow_id: str, target_step: int, reason: str | None = Non
         workflow_message(reason or f"User revised workflow back to Step {target_step}.", "warning")
     )
     state["next_required_user_action"] = f"Revise inputs for Step {target_step}: {step_name(target_step)}."
-    return save_state(state)
+    saved_state = save_state(state)
+    record_trace_event(
+        "langgraph_workflow_revise",
+        {
+            "workflow_step": target_step,
+            "workflow_id": workflow_id,
+            "dataset_filename": saved_state.get("dataset_filename"),
+            "reason_present": bool(reason),
+        },
+    )
+    return saved_state

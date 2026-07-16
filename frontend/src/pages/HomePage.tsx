@@ -11,6 +11,7 @@ import {
   runTargetedFeasibility,
 } from "../api/exploration";
 import { generateReport } from "../api/reports";
+import { getLangSmithStatus, runLangSmithTestTrace } from "../api/debug";
 import {
   advanceWorkflow,
   confirmWorkflow,
@@ -47,6 +48,7 @@ import type {
   RagSearchResult,
   UploadedDataset,
   UploadedDocument,
+  LangSmithStatusResponse,
 } from "../types/api";
 
 const workflowSteps = [
@@ -599,6 +601,11 @@ export function HomePage() {
   const [workflowError, setWorkflowError] = useState("");
   const [workflowBusy, setWorkflowBusy] = useState(false);
   const [workflowReviseStep, setWorkflowReviseStep] = useState(4);
+  const [langSmithStatus, setLangSmithStatus] =
+    useState<LangSmithStatusResponse | null>(null);
+  const [langSmithMessage, setLangSmithMessage] = useState("");
+  const [langSmithError, setLangSmithError] = useState("");
+  const [langSmithBusy, setLangSmithBusy] = useState(false);
 
   const schemaRows = useMemo(() => {
     if (!datasetSchema) {
@@ -669,7 +676,15 @@ export function HomePage() {
     refreshDatasets().catch((error: Error) => {
       setDatasetError(error.message);
     });
+    refreshLangSmithStatus().catch((error: Error) => {
+      setLangSmithError(error.message);
+    });
   }, []);
+
+  async function refreshLangSmithStatus() {
+    const status = await getLangSmithStatus();
+    setLangSmithStatus(status);
+  }
 
   async function handleDocumentUpload() {
     if (!documentFile) {
@@ -1352,6 +1367,28 @@ export function HomePage() {
       setWorkflowError((error as Error).message);
     } finally {
       setWorkflowBusy(false);
+    }
+  }
+
+  async function handleLangSmithTestTrace() {
+    setLangSmithBusy(true);
+    setLangSmithError("");
+    setLangSmithMessage("");
+    try {
+      const result = await runLangSmithTestTrace();
+      setLangSmithStatus({
+        tracing_enabled: result.tracing_enabled,
+        langchain_project: result.langchain_project,
+        api_key_present: result.api_key_present,
+        warning: result.warning,
+      });
+      setLangSmithMessage(
+        `Test trace ${result.trace_completed ? "completed" : "did not complete"}; RAG ${result.rag_status}; ${result.results_count} results.`,
+      );
+    } catch (error) {
+      setLangSmithError((error as Error).message);
+    } finally {
+      setLangSmithBusy(false);
     }
   }
 
@@ -4030,6 +4067,27 @@ export function HomePage() {
           <button type="button">Data First</button>
           <button type="button">Human Review</button>
           <button type="button">No Proven Effects</button>
+        </div>
+
+        <div className="assistant-message debug-panel">
+          <strong>Developer Trace Status</strong>
+          <dl>
+            <dt>LangSmith</dt>
+            <dd>{langSmithStatus?.tracing_enabled ? "Enabled" : "Disabled"}</dd>
+            <dt>Project</dt>
+            <dd>{langSmithStatus?.langchain_project ?? "Not configured"}</dd>
+            <dt>API Key Present</dt>
+            <dd>{String(langSmithStatus?.api_key_present ?? false)}</dd>
+          </dl>
+          {langSmithStatus?.warning && <p>{langSmithStatus.warning}</p>}
+          <button
+            disabled={langSmithBusy}
+            onClick={handleLangSmithTestTrace}
+            type="button"
+          >
+            Test Trace
+          </button>
+          <StatusMessage error={langSmithError} message={langSmithMessage} />
         </div>
 
         <div className="assistant-spacer" />

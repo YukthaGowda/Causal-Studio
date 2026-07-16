@@ -8,6 +8,7 @@ from app.api.causal_graph import router as causal_graph_router
 from app.api.causal_roles import router as causal_roles_router
 from app.api.causal_questions import router as causal_questions_router
 from app.api.datasets import router as datasets_router
+from app.api.debug import router as debug_router
 from app.api.documents import router as documents_router
 from app.api.exploration import router as exploration_router
 from app.api.identification import router as identification_router
@@ -51,6 +52,7 @@ app.include_router(analysis_strategy_router)
 app.include_router(assumptions_router)
 app.include_router(reports_router)
 app.include_router(workflow_router)
+app.include_router(debug_router)
 
 
 @app.get("/")

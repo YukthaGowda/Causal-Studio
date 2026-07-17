@@ -10,7 +10,7 @@ from typing import Any
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
 CHROMA_DB_DIR = Path(__file__).resolve().parents[2] / "chroma_db"
 COLLECTION_NAME = "causal_studio_documents"
-ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
@@ -80,12 +80,19 @@ def read_docx_text(file_path: Path) -> list[TextUnit]:
     return [TextUnit(text="\n".join(paragraphs))] if paragraphs else []
 
 
+def read_txt_text(file_path: Path) -> list[TextUnit]:
+    text = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+    return [TextUnit(text=text)] if text else []
+
+
 def read_document_text(file_path: Path) -> list[TextUnit]:
     extension = file_path.suffix.lower()
     if extension == ".pdf":
         return read_pdf_text(file_path)
     if extension == ".docx":
         return read_docx_text(file_path)
+    if extension == ".txt":
+        return read_txt_text(file_path)
     return []
 
 

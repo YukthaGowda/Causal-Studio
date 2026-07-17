@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   getIngestionStatus,
   ingestDocuments,
@@ -6,18 +6,8 @@ import {
   uploadDocument,
 } from "../api/documents";
 import { getDatasetSchema, listDatasets, uploadDataset } from "../api/datasets";
-import {
-  runBroadExploration,
-  runTargetedFeasibility,
-} from "../api/exploration";
-import { generateReport } from "../api/reports";
-import { getLangSmithStatus, runLangSmithTestTrace } from "../api/debug";
-import {
-  advanceWorkflow,
-  confirmWorkflow,
-  reviseWorkflow,
-  startWorkflow,
-} from "../api/workflow";
+import { runBroadExploration, runTargetedFeasibility } from "../api/exploration";
+import { chatWithAssistant } from "../api/assistant";
 import { searchRag } from "../api/rag";
 import { generateCausalQuestions } from "../api/causalQuestions";
 import { recommendCandidateVariables } from "../api/candidateVariables";
@@ -26,73 +16,52 @@ import { generateAndValidateGraph, validateEditedGraph } from "../api/causalGrap
 import { runIdentificationCheck } from "../api/identification";
 import { generateAnalysisStrategy } from "../api/analysisStrategy";
 import { reviewAssumptions } from "../api/assumptions";
-import { BackendStatus } from "../components/BackendStatus";
+import { generateReport } from "../api/reports";
 import { CausalGraphCanvas } from "../components/CausalGraphCanvas";
 import type {
-  AssumptionReviewResponse,
   AnalysisStrategyResponse,
-  BroadExplorationResponse,
-  TargetedFeasibilityResponse,
-  ReportGenerationResponse,
-  WorkflowState,
-  BackendCausalRoleValidation,
+  AssumptionReviewResponse,
   BackendCausalGraphValidation,
+  BackendCausalRoleValidation,
+  BroadExplorationResponse,
   CandidateCausalQuestion,
   CandidateVariableRecommendation,
   CausalGraphDraft,
   CausalRoleRecommendation,
   DatasetSchemaResponse,
-  DerivedFeatureRecommendation,
   IdentificationCheckResponse,
   IngestionStatusResponse,
-  RagSearchResult,
+  MissingnessItem,
+  ReportGenerationResponse,
+  SelectedCausalVariable,
+  TargetedFeasibilityResponse,
   UploadedDataset,
   UploadedDocument,
-  LangSmithStatusResponse,
 } from "../types/api";
 
-const workflowSteps = [
-  {
-    shortLabel: "Setup",
-    label: "Project Setup and Document Upload",
-    navLabel: "Project Setup",
-  },
-  {
-    shortLabel: "Foundation",
-    label: "Data Foundation and Understanding",
-    navLabel: "Data Foundation",
-  },
-  {
-    shortLabel: "Broad Explore",
-    label: "Broad Data Exploration",
-    navLabel: "Broad Exploration",
-  },
-  {
-    shortLabel: "Q/V Design",
-    label: "Causal Question and Provisional Variable Design",
-    navLabel: "Question & Variables",
-  },
-  {
-    shortLabel: "Feasibility",
-    label: "Targeted Variable Data Exploration and Feasibility Check",
-    navLabel: "Targeted Feasibility",
-  },
-  {
-    shortLabel: "Graph",
-    label: "Causal Graph and Final Role Validation",
-    navLabel: "Graph Validation",
-  },
-  {
-    shortLabel: "Strategy",
-    label: "Identification and Estimation Strategy",
-    navLabel: "Strategy",
-  },
-  {
-    shortLabel: "Export",
-    label: "Review and Export",
-    navLabel: "Review & Export",
-  },
-];
+type PageId =
+  | "home"
+  | "data"
+  | "explore"
+  | "causal"
+  | "temporal"
+  | "review"
+  | "clinician";
+
+type AssistantMessage = {
+  role: "assistant" | "user";
+  text: string;
+  sources?: string[];
+};
+
+type UploadStatus =
+  | "Not uploaded"
+  | "Uploading / reviewing"
+  | "Uploaded & validated"
+  | "Needs clarification"
+  | "Incorrect file type";
+
+type DocumentCategory = "data_dictionary" | "protocol" | "research_paper";
 
 const demoObjective =
   "I want to study temporal relationships between sleep, stress, and next-day alcohol use.";
@@ -100,4185 +69,2818 @@ const demoObjective =
 const demoQuestion =
   "Among adults in the uploaded EMA/passive sensing dataset, what is the effect of sleep-related features during window t on alcohol-use-related label during the next observation window?";
 
-const warnings = [
-  "Causal Studio supports causal-design planning. It does not diagnose, recommend treatment, or prove causal effects.",
-  "Exploratory patterns do not establish causality",
-  "Variable roles are provisional until graph and final role validation",
-  "Graph edges are assumptions, not proven causal relationships",
+const demoVariables = [
+  "pid",
+  "label",
+  "time_stamp",
+  "time_of_day",
+  "day_of_week",
+  "acc_min_magnitude",
+  "acc_max_magnitude",
+  "acc_mean_magnitude",
+  "avg_latitude",
 ];
 
+const navItems: Array<{
+  id: PageId;
+  label: string;
+  icon: string;
+  disabled?: boolean;
+}> = [
+  { id: "home", label: "Home", icon: "⌂" },
+  { id: "data", label: "Data Foundation", icon: "▤" },
+  { id: "explore", label: "Explore", icon: "Ⅱ" },
+  { id: "causal", label: "Causal Studio", icon: "⌁" },
+  { id: "temporal", label: "Estimator", icon: "◷" },
+  { id: "review", label: "Review & Report", icon: "▣" },
+  { id: "clinician", label: "Clinician Reference", icon: "□", disabled: true },
+];
+
+const pageCopy: Record<PageId, { title: string; subtitle: string; assistant: string }> = {
+  home: {
+    title: "Project Setup",
+    subtitle:
+      "Upload your study documents below — each one has its own purpose, so they’re reviewed separately.",
+    assistant:
+      "Welcome to your Causal Design workspace. You’re on the Home page. Here’s a quick guide to what you’re looking at. The top timeline shows the workflow: Project Setup → Data Foundation → Explore → Causal Studio → Estimator → Review & Report. The left panel is navigation. The center panel is your active workspace. I’ll help check whether your study materials are complete enough to continue. Let’s start with your Study Dataset — upload the raw CSV, JSON, or TSV file from your study.",
+  },
+  data: {
+    title: "Data Foundation",
+    subtitle: "Upload datasets, define variables, and establish linking keys",
+    assistant:
+      "I see your dataset schema has been loaded. I’m checking ID fields, timestamps, variable types, missingness, and possible proxy variables before you move to broad exploration. Variable labels here are provisional. They help organize the dataset, but causal roles are not final until Causal Studio graph validation.",
+  },
+  explore: {
+    title: "Explore",
+    subtitle: "Broad data exploration before causal question finalization",
+    assistant:
+      "Explore mode helps you inspect broad patterns, missingness, coverage, temporal structure, and participant-level variation before finalizing a causal question. Select a dataset and run broad exploration. I will summarize data quality issues and possible patterns, but I will not treat them as causal evidence.",
+  },
+  causal: {
+    title: "Causal Studio",
+    subtitle: "Build your causal model — DAG construction, variable roles, assumption checking",
+    assistant:
+      "Build the causal model by refining the research question, selecting variables, validating roles, and generating a draft DAG.",
+  },
+  temporal: {
+    title: "Temporal & Estimation Planner",
+    subtitle: "Define time windows, verify temporal ordering, plan estimation strategy",
+    assistant:
+      "Temporal ordering is central. Confirm exposure timing, lag, outcome window, identification, and strategy guidance.",
+  },
+  review: {
+    title: "Review & Export",
+    subtitle: "Audit claims, verify evidence, and prepare for review",
+    assistant:
+      "Review the analysis story and claim auditor. Unsafe causal or predictive claims should be rewritten before export.",
+  },
+  clinician: {
+    title: "Clinician Reference",
+    subtitle: "Locked reference workspace for future guideline review",
+    assistant: "This reference workspace is locked for now.",
+  },
+};
+
 function formatBytes(bytes: number) {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function getStageSymbol(state: string) {
-  if (state === "done") {
-    return "✓";
-  }
-  if (state === "warning") {
-    return "!";
-  }
-  if (state === "locked") {
-    return "□";
-  }
-  return "";
+function getDatasetBaseName(filename: string) {
+  return filename.replace(/_\w{24,}(?=\.csv$)/, "");
+}
+
+function getIssueText(error: unknown) {
+  return error instanceof Error ? error.message : "Request failed.";
+}
+
+function pickColumns(schema: DatasetSchemaResponse | null) {
+  if (!schema) return demoVariables;
+  const preferred = demoVariables.filter((column) =>
+    schema.column_names.includes(column),
+  );
+  return preferred.length > 0 ? preferred : schema.column_names.slice(0, 9);
+}
+
+function buildSelectedVariables(schema: DatasetSchemaResponse | null): SelectedCausalVariable[] {
+  return pickColumns(schema).map((variable) => ({
+    variable_name: variable,
+    source_field: variable,
+    data_category: variable.includes("time")
+      ? "temporal_context"
+      : variable === "pid"
+        ? "participant_identifier"
+        : variable.includes("acc")
+          ? "passive_sensing"
+          : "dataset_column",
+    measurement_timing: variable.includes("time") ? "time/context field" : "observed",
+  }));
+}
+
+function inferVariableRows(schema: DatasetSchemaResponse | null) {
+  const demoMeanings: Record<string, { source: string; meaning: string; tag: string }> = {
+    pid: {
+      source: "All Datasets",
+      meaning: "Unique participant ID",
+      tag: "Linking Key",
+    },
+    time_stamp: {
+      source: "All Datasets",
+      meaning: "Observation timestamp",
+      tag: "Linking Key / Timestamp",
+    },
+    time_of_day: {
+      source: "Temporal",
+      meaning: "Time of day indicator",
+      tag: "Temporal",
+    },
+    day_of_week: {
+      source: "Temporal",
+      meaning: "Day of week indicator",
+      tag: "Temporal",
+    },
+    label: {
+      source: "Outcome-like field",
+      meaning: "Label / candidate outcome",
+      tag: "Outcome Candidate",
+    },
+    acc_min_magnitude: {
+      source: "Passive Sensing / Actigraphy",
+      meaning: "Minimum accelerometer magnitude",
+      tag: "Sensor Feature",
+    },
+    acc_max_magnitude: {
+      source: "Passive Sensing / Actigraphy",
+      meaning: "Maximum accelerometer magnitude",
+      tag: "Sensor Feature",
+    },
+    acc_mean_magnitude: {
+      source: "Passive Sensing / Actigraphy",
+      meaning: "Mean accelerometer magnitude",
+      tag: "Sensor Feature",
+    },
+    avg_latitude: {
+      source: "GPS / Mobility",
+      meaning: "Average latitude",
+      tag: "Proxy / Missingness Warning",
+    },
+  };
+  const columns = schema
+    ? [
+        ...Object.keys(demoMeanings).filter((column) =>
+          schema.column_names.includes(column),
+        ),
+        ...schema.column_names.filter((column) => !demoMeanings[column]).slice(0, 12),
+      ]
+    : Object.keys(demoMeanings);
+
+  return columns.slice(0, 18).map((column) => {
+    if (demoMeanings[column]) {
+      return { variable: column, ...demoMeanings[column] };
+    }
+    const lower = column.toLowerCase();
+    const tag = lower.includes("time") || lower.includes("day")
+      ? "Temporal"
+      : lower.includes("id") || lower === "pid"
+        ? "Linking Key"
+        : lower.includes("lat") || lower.includes("long") || lower.includes("gps")
+          ? "Proxy"
+          : lower.includes("acc") || lower.includes("magnitude")
+            ? "Sensor Feature"
+            : "Needs Review";
+    return {
+      variable: column,
+      source: tag === "Needs Review" ? "Inferred" : "Dataset schema",
+      meaning: schema?.pandas_data_types[column]
+        ? `Inferred from column name and dtype ${schema.pandas_data_types[column]}`
+        : "Inferred from column name",
+      tag,
+    };
+  });
 }
 
 export function HomePage() {
-  const [activeStep, setActiveStep] = useState(1);
+  const [activePage, setActivePage] = useState<PageId>("home");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
-  const [documentFile, setDocumentFile] = useState<File | null>(null);
-  const [documentMessage, setDocumentMessage] = useState("");
-  const [documentError, setDocumentError] = useState("");
-  const [ingestionStatus, setIngestionStatus] =
-    useState<IngestionStatusResponse | null>(null);
-  const [documentBusy, setDocumentBusy] = useState(false);
-
   const [datasets, setDatasets] = useState<UploadedDataset[]>([]);
-  const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [selectedDataset, setSelectedDataset] = useState("");
-  const [datasetSchema, setDatasetSchema] =
-    useState<DatasetSchemaResponse | null>(null);
-  const [datasetMessage, setDatasetMessage] = useState("");
-  const [datasetError, setDatasetError] = useState("");
-  const [datasetBusy, setDatasetBusy] = useState(false);
-  const [broadDataset, setBroadDataset] = useState("");
-  const [broadTargetColumn, setBroadTargetColumn] = useState("");
-  const [broadParticipantColumn, setBroadParticipantColumn] = useState("");
-  const [broadTimestampColumn, setBroadTimestampColumn] = useState("");
+  const [datasetFile, setDatasetFile] = useState<File | null>(null);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [dictionaryFile, setDictionaryFile] = useState<File | null>(null);
+  const [protocolFile, setProtocolFile] = useState<File | null>(null);
+  const [paperFiles, setPaperFiles] = useState<File[]>([]);
+  const [datasetStatus, setDatasetStatus] = useState<UploadStatus>("Not uploaded");
+  const [dictionaryStatus, setDictionaryStatus] =
+    useState<UploadStatus>("Not uploaded");
+  const [protocolStatus, setProtocolStatus] = useState<UploadStatus>("Not uploaded");
+  const [papersStatus, setPapersStatus] = useState<UploadStatus>("Not uploaded");
+  const [datasetSummary, setDatasetSummary] = useState("");
+  const [dictionarySummary, setDictionarySummary] = useState("");
+  const [protocolSummary, setProtocolSummary] = useState("");
+  const [papersSummary, setPapersSummary] = useState("");
+  const [dataFoundationRagSummary, setDataFoundationRagSummary] = useState("");
+  const [documentCategories, setDocumentCategories] = useState<
+    Record<string, DocumentCategory>
+  >({});
+  const [schema, setSchema] = useState<DatasetSchemaResponse | null>(null);
+  const [ingestionStatus, setIngestionStatus] = useState<IngestionStatusResponse | null>(null);
   const [broadExploration, setBroadExploration] =
     useState<BroadExplorationResponse | null>(null);
-  const [broadMessage, setBroadMessage] = useState("");
-  const [broadError, setBroadError] = useState("");
-  const [broadBusy, setBroadBusy] = useState(false);
-
-  const [ragQuery, setRagQuery] = useState(
-    "What should the system validate deterministically?",
-  );
-  const [topK, setTopK] = useState(5);
-  const [ragResults, setRagResults] = useState<RagSearchResult[]>([]);
-  const [ragMessage, setRagMessage] = useState("");
-  const [ragError, setRagError] = useState("");
-  const [ragBusy, setRagBusy] = useState(false);
-  const [researchObjective, setResearchObjective] = useState(
-    demoObjective,
-  );
-  const [candidateDataset, setCandidateDataset] = useState("");
-  const [candidateQuestions, setCandidateQuestions] = useState<
-    CandidateCausalQuestion[]
-  >([]);
-  const [candidateMessage, setCandidateMessage] = useState("");
-  const [candidateError, setCandidateError] = useState("");
-  const [candidateBusy, setCandidateBusy] = useState(false);
-  const [confirmedQuestion, setConfirmedQuestion] = useState(
-    demoQuestion,
-  );
-  const [variableDataset, setVariableDataset] = useState("");
-  const [variableGroups, setVariableGroups] = useState<
-    Record<string, CandidateVariableRecommendation[]>
-  >({});
-  const [derivedFeatures, setDerivedFeatures] = useState<
-    DerivedFeatureRecommendation[]
-  >([]);
-  const [variableMessage, setVariableMessage] = useState("");
-  const [variableError, setVariableError] = useState("");
-  const [variableBusy, setVariableBusy] = useState(false);
-  const [roleDataset, setRoleDataset] = useState("");
-  const [selectedVariablesJson, setSelectedVariablesJson] = useState(`[
-  {
-    "variable_name": "pid",
-    "source_field": "pid",
-    "data_category": "baseline_demographic",
-    "direct_or_derived": "direct",
-    "measurement_timing": "id/grouping variable",
-    "possible_role_hint": "id_or_grouping_variable"
-  },
-  {
-    "variable_name": "label",
-    "source_field": "label",
-    "data_category": "ema_self_report",
-    "direct_or_derived": "direct",
-    "measurement_timing": "next observation window",
-    "possible_role_hint": "candidate outcome"
-  },
-  {
-    "variable_name": "time_stamp",
-    "source_field": "time_stamp",
-    "data_category": "temporal_contextual",
-    "direct_or_derived": "direct",
-    "measurement_timing": "time index",
-    "possible_role_hint": "temporal context"
-  },
-  {
-    "variable_name": "time_of_day",
-    "source_field": "time_of_day",
-    "data_category": "temporal_contextual",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t context",
-    "possible_role_hint": "temporal context"
-  },
-  {
-    "variable_name": "day_of_week",
-    "source_field": "day_of_week",
-    "data_category": "temporal_contextual",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t context",
-    "possible_role_hint": "temporal context"
-  },
-  {
-    "variable_name": "acc_min_magnitude",
-    "source_field": "acc_min_magnitude",
-    "data_category": "smartphone_sensing",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t",
-    "possible_role_hint": "activity proxy"
-  },
-  {
-    "variable_name": "acc_max_magnitude",
-    "source_field": "acc_max_magnitude",
-    "data_category": "smartphone_sensing",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t",
-    "possible_role_hint": "activity proxy"
-  },
-  {
-    "variable_name": "acc_mean_magnitude",
-    "source_field": "acc_mean_magnitude",
-    "data_category": "smartphone_sensing",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t",
-    "possible_role_hint": "activity proxy"
-  },
-  {
-    "variable_name": "avg_latitude",
-    "source_field": "avg_latitude",
-    "data_category": "smartphone_sensing",
-    "direct_or_derived": "direct",
-    "measurement_timing": "window t",
-    "missingness_warning": "known high missingness",
-    "possible_role_hint": "mobility proxy"
-  }
-]`);
-  const [targetedDataset, setTargetedDataset] = useState("");
-  const [targetedVariablesText, setTargetedVariablesText] = useState(
-    "pid\nlabel\ntime_stamp\ntime_of_day\nday_of_week\nacc_min_magnitude\nacc_max_magnitude\nacc_mean_magnitude\navg_latitude",
-  );
-  const [targetedExposure, setTargetedExposure] = useState("acc_mean_magnitude");
-  const [targetedOutcome, setTargetedOutcome] = useState("label");
-  const [targetedComparator, setTargetedComparator] = useState("");
-  const [targetedParticipantId, setTargetedParticipantId] = useState("pid");
-  const [targetedTimestamp, setTargetedTimestamp] = useState("time_stamp");
-  const [targetedTimeWindow, setTargetedTimeWindow] = useState(
-    "window t exposure and next observation window outcome",
-  );
-  const [targetedLagDefinition, setTargetedLagDefinition] = useState(
-    "exposure during window t, outcome during next observation window",
-  );
+  const [promotedPatterns, setPromotedPatterns] = useState<string[]>([]);
+  const [exploreRagSummary, setExploreRagSummary] = useState("");
   const [targetedFeasibility, setTargetedFeasibility] =
     useState<TargetedFeasibilityResponse | null>(null);
-  const [targetedMessage, setTargetedMessage] = useState("");
-  const [targetedError, setTargetedError] = useState("");
-  const [targetedBusy, setTargetedBusy] = useState(false);
+  const [causalEvidenceSummary, setCausalEvidenceSummary] = useState("");
+  const [temporalRagSummary, setTemporalRagSummary] = useState("");
+  const [researchObjective, setResearchObjective] = useState(demoObjective);
+  const [confirmedQuestion, setConfirmedQuestion] = useState(demoQuestion);
+  const [candidateQuestions, setCandidateQuestions] = useState<CandidateCausalQuestion[]>([]);
+  const [candidateVariables, setCandidateVariables] = useState<
+    CandidateVariableRecommendation[]
+  >([]);
   const [roleRecommendations, setRoleRecommendations] = useState<
     CausalRoleRecommendation[]
   >([]);
   const [roleValidation, setRoleValidation] =
     useState<BackendCausalRoleValidation | null>(null);
-  const [roleMessage, setRoleMessage] = useState("");
-  const [roleError, setRoleError] = useState("");
-  const [roleBusy, setRoleBusy] = useState(false);
-  const [graphDataset, setGraphDataset] = useState("");
-  const [roleRecommendationsJson, setRoleRecommendationsJson] = useState(`[
-  {
-    "variable_name": "pid",
-    "recommended_roles": ["id_or_grouping_variable"],
-    "primary_role": "id_or_grouping_variable",
-    "temporal_role": "not applicable",
-    "measurement_role": "id/grouping",
-    "adjustment_recommendation": "do_not_adjust",
-    "confidence": "high",
-    "rationale": "Participant identifier only."
-  },
-  {
-    "variable_name": "label",
-    "recommended_roles": ["outcome"],
-    "primary_role": "outcome",
-    "temporal_role": "outcome-window",
-    "measurement_role": "observed outcome label",
-    "adjustment_recommendation": "do_not_adjust",
-    "confidence": "medium",
-    "rationale": "Alcohol-use-related label is the likely outcome candidate."
-  },
-  {
-    "variable_name": "time_stamp",
-    "recommended_roles": ["temporal_context_variable"],
-    "primary_role": "temporal_context_variable",
-    "temporal_role": "time index",
-    "measurement_role": "time structure",
-    "adjustment_recommendation": "review_required",
-    "confidence": "high",
-    "rationale": "Used to define ordering and windows."
-  },
-  {
-    "variable_name": "time_of_day",
-    "recommended_roles": ["temporal_context_variable"],
-    "primary_role": "temporal_context_variable",
-    "temporal_role": "window t context",
-    "measurement_role": "time context",
-    "adjustment_recommendation": "review_required",
-    "confidence": "medium",
-    "rationale": "Contextual timing variable."
-  },
-  {
-    "variable_name": "day_of_week",
-    "recommended_roles": ["temporal_context_variable"],
-    "primary_role": "temporal_context_variable",
-    "temporal_role": "window t context",
-    "measurement_role": "time context",
-    "adjustment_recommendation": "review_required",
-    "confidence": "medium",
-    "rationale": "Contextual timing variable."
-  },
-  {
-    "variable_name": "acc_min_magnitude",
-    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
-    "primary_role": "time_varying_covariate",
-    "temporal_role": "window t",
-    "measurement_role": "proxy measure",
-    "adjustment_recommendation": "review_required",
-    "confidence": "medium",
-    "rationale": "Sensing/activity proxy."
-  },
-  {
-    "variable_name": "acc_max_magnitude",
-    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
-    "primary_role": "time_varying_covariate",
-    "temporal_role": "window t",
-    "measurement_role": "proxy measure",
-    "adjustment_recommendation": "review_required",
-    "confidence": "medium",
-    "rationale": "Sensing/activity proxy."
-  },
-  {
-    "variable_name": "acc_mean_magnitude",
-    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
-    "primary_role": "time_varying_covariate",
-    "temporal_role": "window t",
-    "measurement_role": "proxy measure",
-    "adjustment_recommendation": "review_required",
-    "confidence": "medium",
-    "rationale": "Sensing/activity proxy."
-  },
-  {
-    "variable_name": "avg_latitude",
-    "recommended_roles": ["proxy_variable", "time_varying_covariate"],
-    "primary_role": "time_varying_covariate",
-    "temporal_role": "window t",
-    "measurement_role": "proxy measure",
-    "adjustment_recommendation": "review_required",
-    "confidence": "low",
-    "rationale": "Mobility/location proxy with known missingness."
-  }
-]`);
   const [graphDraft, setGraphDraft] = useState<CausalGraphDraft | null>(null);
-  const [editedGraphDraft, setEditedGraphDraft] =
-    useState<CausalGraphDraft | null>(null);
   const [graphValidation, setGraphValidation] =
     useState<BackendCausalGraphValidation | null>(null);
-  const [graphMessage, setGraphMessage] = useState("");
-  const [graphError, setGraphError] = useState("");
-  const [graphBusy, setGraphBusy] = useState(false);
-  const [identificationDataset, setIdentificationDataset] = useState("");
-  const [identificationGraphJson, setIdentificationGraphJson] = useState(`{
-  "graph_type": "DAG",
-  "nodes": [
-    {
-      "node_id": "acc_mean_magnitude",
-      "variable_name": "acc_mean_magnitude",
-      "role": "exposure",
-      "temporal_role": "window t",
-      "data_category": "smartphone_sensing",
-      "is_observed": true
-    },
-    {
-      "node_id": "label",
-      "variable_name": "label",
-      "role": "outcome",
-      "temporal_role": "next observation window",
-      "data_category": "ema_self_report",
-      "is_observed": true
-    },
-    {
-      "node_id": "time_of_day",
-      "variable_name": "time_of_day",
-      "role": "temporal_context_variable",
-      "temporal_role": "window t",
-      "data_category": "temporal_contextual",
-      "is_observed": true
-    },
-    {
-      "node_id": "day_of_week",
-      "variable_name": "day_of_week",
-      "role": "temporal_context_variable",
-      "temporal_role": "window t",
-      "data_category": "temporal_contextual",
-      "is_observed": true
-    },
-    {
-      "node_id": "avg_latitude",
-      "variable_name": "avg_latitude",
-      "role": "time_varying_covariate",
-      "temporal_role": "window t",
-      "data_category": "smartphone_sensing",
-      "is_observed": true
-    }
-  ],
-  "edges": [
-    {
-      "source": "acc_mean_magnitude",
-      "target": "label",
-      "edge_type": "directed",
-      "confidence": "medium",
-      "temporal_assumption": "window t precedes next observation label"
-    },
-    {
-      "source": "time_of_day",
-      "target": "acc_mean_magnitude",
-      "edge_type": "directed",
-      "confidence": "medium",
-      "temporal_assumption": "same window context"
-    },
-    {
-      "source": "day_of_week",
-      "target": "acc_mean_magnitude",
-      "edge_type": "directed",
-      "confidence": "medium",
-      "temporal_assumption": "same window context"
-    },
-    {
-      "source": "day_of_week",
-      "target": "label",
-      "edge_type": "directed",
-      "confidence": "low",
-      "temporal_assumption": "calendar context may precede outcome"
-    },
-    {
-      "source": "avg_latitude",
-      "target": "acc_mean_magnitude",
-      "edge_type": "directed",
-      "confidence": "low",
-      "temporal_assumption": "same window mobility context"
-    },
-    {
-      "source": "avg_latitude",
-      "target": "label",
-      "edge_type": "directed",
-      "confidence": "low",
-      "temporal_assumption": "window t precedes next observation label"
-    }
-  ]
-}`);
-  const [adjustmentSetText, setAdjustmentSetText] = useState(
-    "time_of_day, day_of_week, avg_latitude",
-  );
-  const [identificationResult, setIdentificationResult] =
+  const [identification, setIdentification] =
     useState<IdentificationCheckResponse | null>(null);
-  const [identificationMessage, setIdentificationMessage] = useState("");
-  const [identificationError, setIdentificationError] = useState("");
-  const [identificationBusy, setIdentificationBusy] = useState(false);
-  const [strategyDataset, setStrategyDataset] = useState("");
-  const [identificationResultJson, setIdentificationResultJson] = useState(`{
-  "identification_status": "identifiable_only_under_additional_assumptions",
-  "exposure": "acc_mean_magnitude",
-  "outcome": "label",
-  "proposed_adjustment_set": ["time_of_day", "day_of_week", "avg_latitude"],
-  "adjustment_set_status": "needs_review",
-  "open_issues": [],
-  "warnings": [
+  const [strategy, setStrategy] = useState<AnalysisStrategyResponse | null>(null);
+  const [assumptions, setAssumptions] = useState<AssumptionReviewResponse | null>(null);
+  const [report, setReport] = useState<ReportGenerationResponse | null>(null);
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [assistantQuery, setAssistantQuery] = useState("");
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([
+    { role: "assistant", text: pageCopy.home.assistant },
     {
-      "issue_type": "high_missingness_adjustment_variable",
-      "variable_name": "avg_latitude",
-      "message": "avg_latitude has 40.69% missingness in the uploaded dataset.",
-      "severity": "warning",
-      "suggested_fix": "Review missing-data handling before using this adjustment variable."
-    }
-  ],
-  "errors": [],
-  "assumptions_required": [
-    "The graph draft is accepted by the user as a planning graph, not as proven causal truth.",
-    "Weak or uncertain edges are reviewed before analysis strategy planning."
-  ],
-  "missing_variables": [],
-  "recommended_next_action": "Review high-priority issues and document assumptions before analysis strategy planning.",
-  "safe_to_continue_to_analysis_strategy": true,
-  "plain_language_summary": "No causal effect has been estimated or proven.",
-  "evidence_chunks_used": 5
-}`);
-  const [strategyResult, setStrategyResult] =
-    useState<AnalysisStrategyResponse | null>(null);
-  const [strategyResultJson, setStrategyResultJson] = useState(`{
-  "strategy_status": "ready_only_under_additional_assumptions",
-  "target_estimand": "total effect guidance only; no effect estimated",
-  "exposure_definition": "acc_mean_magnitude during window t",
-  "comparator_definition": "higher versus lower acc_mean_magnitude after user review",
-  "outcome_definition": "label during the next observation window",
-  "time_window": "window t exposure preceding next observation window outcome",
-  "unit_of_analysis": "participant-window",
-  "adjustment_set": ["time_of_day", "day_of_week", "avg_latitude"],
-  "repeated_measures_handling": "Use participant-level clustering, GEE, or mixed effects because pid exists.",
-  "missing_data_strategy": "Review or impute high-missingness variables such as avg_latitude; include sensitivity checks.",
-  "recommended_estimator_family": ["GEE", "mixed effects", "regression adjustment"],
-  "estimator_rationale": "Guidance only; no estimation performed.",
-  "data_requirements": ["confirmed timing", "reviewed adjustment set", "missing-data plan"],
-  "sensitivity_checks": ["exclude avg_latitude", "alternative lag windows"],
-  "robustness_checks": ["compare repeated-measures model families"],
-  "limitations": ["Assumptions are not proven."],
-  "assumptions_needed": ["No unmeasured confounding", "correct temporal ordering"],
-  "what_can_be_claimed": "A planned analysis may estimate contrasts only under reviewed assumptions.",
-  "what_cannot_be_claimed": "Do not claim proven causal effects or treatment decisions.",
-  "recommended_next_action": "Review assumptions and sensitivity checks before estimation.",
-  "confidence": "medium"
-}`);
-  const [strategyMessage, setStrategyMessage] = useState("");
-  const [strategyError, setStrategyError] = useState("");
-  const [strategyBusy, setStrategyBusy] = useState(false);
-  const [assumptionsDataset, setAssumptionsDataset] = useState("");
-  const [assumptionReview, setAssumptionReview] =
-    useState<AssumptionReviewResponse | null>(null);
-  const [assumptionReviewJson, setAssumptionReviewJson] = useState(`{
-  "review_status": "needs_additional_user_review",
-  "assumptions": [
-    {
-      "assumption_name": "temporal_ordering",
-      "status": "uncertain",
-      "rationale": "Window timing requires user review.",
-      "evidence_summary": "Timing is a design requirement, not proven.",
-      "dataset_support": "time_stamp, time_of_day, and day_of_week are available.",
-      "risk_if_violated": "Exposure and outcome order may be invalid.",
-      "recommended_check": "Confirm window t and next observation label construction.",
-      "recommended_revision_if_needed": "Revise lag/window definitions.",
-      "severity": "high"
+      role: "user",
+      text: "What if I don’t have a formal data dictionary — can I just write it out in an email or a note?",
     },
     {
-      "assumption_name": "missingness_assumptions",
-      "status": "uncertain",
-      "rationale": "avg_latitude has high missingness.",
-      "evidence_summary": "High missingness requires sensitivity planning.",
-      "dataset_support": "avg_latitude is available but incomplete.",
-      "risk_if_violated": "Missing-data bias may affect interpretation.",
-      "recommended_check": "Compare plans with and without avg_latitude.",
-      "recommended_revision_if_needed": "Use a more complete variable or missing-data plan.",
-      "severity": "high"
-    }
-  ],
-  "sensitivity_checks": ["exclude avg_latitude", "alternative lag windows"],
-  "robustness_checks": ["compare repeated-measures model families"],
-  "causal_interpretation_limits": [
-    "The current design does not prove a causal effect.",
-    "Exploratory patterns do not establish causality."
-  ],
-  "recommended_next_action": "Review assumptions before report export.",
-  "plain_language_summary": "The design remains assumption-dependent.",
-  "confidence": "medium"
-}`);
-  const [assumptionMessage, setAssumptionMessage] = useState("");
-  const [assumptionError, setAssumptionError] = useState("");
-  const [assumptionBusy, setAssumptionBusy] = useState(false);
-  const [reportDataset, setReportDataset] = useState("");
-  const [reportTitle, setReportTitle] = useState(
-    "AWARE-2023 Sleep, Activity, and Alcohol Use Causal Design",
+      role: "assistant",
+      text: "Yes, that’s fine. A plain text file, Word document, or note is acceptable as long as it explains each column. At minimum, include variable name, meaning, data type, units or range, collection method, and measurement timing.",
+    },
+  ]);
+
+  const selectedVariables = useMemo(() => buildSelectedVariables(schema), [schema]);
+  const adjustmentSet = ["time_of_day", "day_of_week", "avg_latitude"].filter((item) =>
+    selectedVariables.some((variable) => variable.variable_name === item),
   );
-  const [reportUserNotes, setReportUserNotes] = useState("");
-  const [reportResult, setReportResult] =
-    useState<ReportGenerationResponse | null>(null);
-  const [reportMessage, setReportMessage] = useState("");
-  const [reportError, setReportError] = useState("");
-  const [reportBusy, setReportBusy] = useState(false);
-  const [workflowState, setWorkflowState] = useState<WorkflowState | null>(null);
-  const [workflowMessage, setWorkflowMessage] = useState("");
-  const [workflowError, setWorkflowError] = useState("");
-  const [workflowBusy, setWorkflowBusy] = useState(false);
-  const [workflowReviseStep, setWorkflowReviseStep] = useState(4);
-  const [langSmithStatus, setLangSmithStatus] =
-    useState<LangSmithStatusResponse | null>(null);
-  const [langSmithMessage, setLangSmithMessage] = useState("");
-  const [langSmithError, setLangSmithError] = useState("");
-  const [langSmithBusy, setLangSmithBusy] = useState(false);
-
-  const schemaRows = useMemo(() => {
-    if (!datasetSchema) {
-      return [];
-    }
-
-    return datasetSchema.column_names.slice(0, 8).map((column) => ({
-      column,
-      dtype: datasetSchema.pandas_data_types[column],
-      missing:
-        datasetSchema.missing_value_percentage_per_column[column]?.toFixed(2) ??
-        "0.00",
-      unique: datasetSchema.unique_values_per_column[column],
-    }));
-  }, [datasetSchema]);
-
-  async function refreshDocuments() {
-    const [documentList, status] = await Promise.all([
-      listDocuments(),
-      getIngestionStatus(),
-    ]);
-    setDocuments(documentList.documents);
-    setIngestionStatus(status);
-  }
-
-  async function refreshDatasets() {
-    const datasetList = await listDatasets();
-    setDatasets(datasetList.datasets);
-    if (!selectedDataset && datasetList.datasets.length > 0) {
-      setSelectedDataset(datasetList.datasets[0].filename);
-    }
-    if (!broadDataset && datasetList.datasets.length > 0) {
-      setBroadDataset(datasetList.datasets[0].filename);
-    }
-    if (!candidateDataset && datasetList.datasets.length > 0) {
-      setCandidateDataset(datasetList.datasets[0].filename);
-    }
-    if (!variableDataset && datasetList.datasets.length > 0) {
-      setVariableDataset(datasetList.datasets[0].filename);
-    }
-    if (!targetedDataset && datasetList.datasets.length > 0) {
-      setTargetedDataset(datasetList.datasets[0].filename);
-    }
-    if (!roleDataset && datasetList.datasets.length > 0) {
-      setRoleDataset(datasetList.datasets[0].filename);
-    }
-    if (!graphDataset && datasetList.datasets.length > 0) {
-      setGraphDataset(datasetList.datasets[0].filename);
-    }
-    if (!identificationDataset && datasetList.datasets.length > 0) {
-      setIdentificationDataset(datasetList.datasets[0].filename);
-    }
-    if (!strategyDataset && datasetList.datasets.length > 0) {
-      setStrategyDataset(datasetList.datasets[0].filename);
-    }
-    if (!assumptionsDataset && datasetList.datasets.length > 0) {
-      setAssumptionsDataset(datasetList.datasets[0].filename);
-    }
-    if (!reportDataset && datasetList.datasets.length > 0) {
-      setReportDataset(datasetList.datasets[0].filename);
-    }
-  }
 
   useEffect(() => {
-    refreshDocuments().catch((error: Error) => {
-      setDocumentError(error.message);
-    });
-    refreshDatasets().catch((error: Error) => {
-      setDatasetError(error.message);
-    });
-    refreshLangSmithStatus().catch((error: Error) => {
-      setLangSmithError(error.message);
-    });
+    void refreshProjectState();
   }, []);
 
-  async function refreshLangSmithStatus() {
-    const status = await getLangSmithStatus();
-    setLangSmithStatus(status);
-  }
-
-  async function handleDocumentUpload() {
-    if (!documentFile) {
-      setDocumentError("Choose a PDF or DOCX file first.");
-      return;
-    }
-
-    setDocumentBusy(true);
-    setDocumentError("");
-    setDocumentMessage("");
-
+  async function refreshProjectState() {
     try {
-      const result = await uploadDocument(documentFile);
-      setDocumentMessage(`Stored ${result.saved_filename}`);
-      setDocumentFile(null);
-      await refreshDocuments();
-    } catch (error) {
-      setDocumentError((error as Error).message);
-    } finally {
-      setDocumentBusy(false);
+      const [documentResponse, datasetResponse, ingestResponse] = await Promise.all([
+        listDocuments(),
+        listDatasets(),
+        getIngestionStatus(),
+      ]);
+      setDocuments(documentResponse.documents);
+      setDatasets(datasetResponse.datasets);
+      setIngestionStatus(ingestResponse);
+      if (!selectedDataset && datasetResponse.datasets.length > 0) {
+        setSelectedDataset(datasetResponse.datasets[0].filename);
+      }
+    } catch {
+      // The dashboard still renders if the backend is not running.
     }
   }
 
-  async function handleDocumentIngestion() {
-    setDocumentBusy(true);
-    setDocumentError("");
-    setDocumentMessage("");
+  function switchPage(pageId: PageId) {
+    setActivePage(pageId);
+    setAssistantMessages((messages) => [
+      ...messages,
+      { role: "assistant", text: pageCopy[pageId].assistant },
+    ]);
+  }
 
+  async function runAction(label: string, action: () => Promise<void>) {
+    setBusy(label);
+    setNotice("");
+    setError("");
     try {
-      const result = await ingestDocuments();
-      setDocumentMessage(
-        `Ingested ${result.files_processed} files into ${result.chunks_created} chunks.`,
-      );
-      await refreshDocuments();
-    } catch (error) {
-      setDocumentError((error as Error).message);
+      await action();
+    } catch (caughtError) {
+      setError(getIssueText(caughtError));
     } finally {
-      setDocumentBusy(false);
+      setBusy("");
     }
+  }
+
+  function addAssistantMessage(message: AssistantMessage) {
+    setAssistantMessages((messages) => [...messages, message]);
+  }
+
+  function summarizeSchemaForHome(parsedSchema: DatasetSchemaResponse) {
+    const warnings = parsedSchema.warnings
+      .slice(0, 3)
+      .map((warning) =>
+        warning.column
+          ? `${warning.column} has ${warning.missing_percentage}% missingness`
+          : warning.warning,
+      )
+      .join("; ");
+    const idColumns = parsedSchema.possible_id_columns.join(", ") || "none detected";
+    const timestampColumns =
+      parsedSchema.possible_timestamp_date_columns.join(", ") || "none detected";
+
+    return `Rows: ${parsedSchema.number_of_rows.toLocaleString()} | Columns: ${parsedSchema.number_of_columns} | Possible IDs: ${idColumns} | Timing fields: ${timestampColumns}${warnings ? ` | Missingness: ${warnings}` : ""}`;
+  }
+
+  function addSchemaAssistantSummary(parsedSchema: DatasetSchemaResponse) {
+    const highMissingness = parsedSchema.warnings
+      .slice(0, 4)
+      .map((warning) =>
+        warning.column
+          ? `${warning.column} (${warning.missing_percentage}%)`
+          : warning.warning,
+      )
+      .join(", ");
+    const sensorColumns = parsedSchema.column_names
+      .filter((column) => column.startsWith("acc_") || column.includes("latitude") || column.includes("longitude"))
+      .slice(0, 6)
+      .join(", ");
+    addAssistantMessage({
+      role: "assistant",
+      text: `Schema summary: ${parsedSchema.number_of_rows.toLocaleString()} rows and ${parsedSchema.number_of_columns} columns. Possible ID columns: ${parsedSchema.possible_id_columns.join(", ") || "none detected"}. Possible timestamp fields: ${parsedSchema.possible_timestamp_date_columns.join(", ") || "none detected"}. High missingness warnings: ${highMissingness || "none detected"}. Possible proxy/sensor variables: ${sensorColumns || "none detected"}. Variable labels here are provisional; causal roles are confirmed later during graph validation.`,
+    });
   }
 
   async function handleDatasetUpload() {
     if (!datasetFile) {
-      setDatasetError("Choose a CSV file first.");
+      setError("Choose a CSV dataset first.");
+      setDatasetStatus("Needs clarification");
       return;
     }
-
-    setDatasetBusy(true);
-    setDatasetError("");
-    setDatasetMessage("");
-
-    try {
-      const result = await uploadDataset(datasetFile);
-      setDatasetMessage(`Stored ${result.saved_filename}`);
-      setSelectedDataset(result.saved_filename);
+    if (datasetFile.name.split(".").pop()?.toLowerCase() !== "csv") {
+      setDatasetStatus("Incorrect file type");
+      setError("Dataset upload currently supports CSV. JSON and TSV are planned formats.");
+      return;
+    }
+    setDatasetStatus("Uploading / reviewing");
+    addAssistantMessage({
+      role: "assistant",
+      text: "Checking this now — confirming it is a valid dataset file, scanning columns and row structure…",
+    });
+    await runAction("Uploading dataset", async () => {
+      const uploaded = await uploadDataset(datasetFile);
+      setSelectedDataset(uploaded.saved_filename);
+      const parsed = await getDatasetSchema(uploaded.saved_filename);
+      setSchema(parsed);
+      setDatasetStatus("Uploaded & validated");
+      setDatasetSummary(summarizeSchemaForHome(parsed));
+      addSchemaAssistantSummary(parsed);
+      const warnings =
+        parsed.warnings
+          .slice(0, 3)
+          .map((warning) =>
+            warning.column
+              ? `${warning.column} has ${warning.missing_percentage}% missingness`
+              : warning.warning,
+          )
+          .join("; ") || "none";
+      addAssistantMessage({
+        role: "assistant",
+        text: `Uploaded and validated. This appears to be a valid dataset: ${parsed.number_of_rows.toLocaleString()} rows and ${parsed.number_of_columns} columns. I detected ${parsed.possible_id_columns.join(", ") || "no obvious ID columns"} as possible participant ID fields and ${parsed.possible_timestamp_date_columns.join(", ") || "no obvious timing fields"} as timing fields. Missingness warnings: ${warnings}.`,
+      });
+      setNotice(`Dataset uploaded and parsed: ${parsed.number_of_rows} rows, ${parsed.number_of_columns} columns.`);
       setDatasetFile(null);
-      await refreshDatasets();
-    } catch (error) {
-      setDatasetError((error as Error).message);
-    } finally {
-      setDatasetBusy(false);
-    }
+      await refreshProjectState();
+    });
   }
 
-  async function handleSchemaLoad() {
+  async function handleSchemaParse() {
     if (!selectedDataset) {
-      setDatasetError("Select a dataset first.");
+      setError("Select a dataset first.");
       return;
     }
-
-    setDatasetBusy(true);
-    setDatasetError("");
-    setDatasetMessage("");
-
-    try {
-      const schema = await getDatasetSchema(selectedDataset);
-      setDatasetSchema(schema);
-      setDatasetMessage(`Parsed ${schema.number_of_columns} columns.`);
-    } catch (error) {
-      setDatasetError((error as Error).message);
-    } finally {
-      setDatasetBusy(false);
-    }
+    await runAction("Parsing schema", async () => {
+      const parsed = await getDatasetSchema(selectedDataset);
+      setSchema(parsed);
+      addSchemaAssistantSummary(parsed);
+      setNotice(`Schema parsed: ${parsed.number_of_rows} rows and ${parsed.number_of_columns} columns.`);
+    });
   }
 
-  async function handleBroadExploration() {
-    if (!broadDataset) {
-      setBroadError("Select a dataset first.");
-      return;
-    }
-
-    setBroadBusy(true);
-    setBroadError("");
-    setBroadMessage("");
-
-    try {
-      const response = await runBroadExploration({
-        datasetFilename: broadDataset,
-        targetColumn: broadTargetColumn,
-        participantIdColumn: broadParticipantColumn,
-        timestampColumn: broadTimestampColumn,
+  async function handleDataFoundationRagCheck() {
+    await runAction("Checking dictionary evidence", async () => {
+      const response = await searchRag(
+        "data dictionary variable names units measurement timing participant ID timestamp data type possible values",
+        5,
+      );
+      if (response.results.length === 0) {
+        setDataFoundationRagSummary(
+          "I could not find supporting schema details in the uploaded documents.",
+        );
+        addAssistantMessage({
+          role: "assistant",
+          text: "I could not find supporting schema details in the uploaded documents. Schema parsing and deterministic checks are still available.",
+        });
+        return;
+      }
+      const sources = response.results
+        .map((result) => result.source_filename)
+        .filter((value): value is string => Boolean(value));
+      setDataFoundationRagSummary(
+        `Found ${response.number_of_results} supporting RAG chunk(s): ${Array.from(new Set(sources)).slice(0, 3).join(", ") || "uploaded documents"}.`,
+      );
+      addAssistantMessage({
+        role: "assistant",
+        text: `RAG schema check found ${response.number_of_results} supporting evidence chunk(s). I will show retrieved sources, but I will not invent meanings if evidence is incomplete. LLM explanation is unavailable if the API key is not configured, but schema parsing and deterministic checks are still available.`,
+        sources,
       });
-      setBroadExploration(response);
-      setBroadMessage(
-        `Explored ${response.number_of_rows} rows and ${response.number_of_columns} columns. Exploratory patterns do not establish causality.`,
-      );
-    } catch (error) {
-      setBroadError((error as Error).message);
-    } finally {
-      setBroadBusy(false);
+    });
+  }
+
+  function handleDataFoundationPrompt(prompt: string) {
+    if (!schema) {
+      addAssistantMessage({
+        role: "assistant",
+        text: "Parse a dataset schema first, then I can summarize IDs, timestamps, missingness, and fields needing clarification.",
+      });
+      return;
+    }
+    if (prompt === "Suggest variable tags") {
+      addAssistantMessage({
+        role: "assistant",
+        text: `Suggested provisional tags: ${inferVariableRows(schema).slice(0, 8).map((row) => `${row.variable}: ${row.tag}`).join("; ")}. These are for organization only, not final causal roles.`,
+      });
+    } else if (prompt === "Explain missingness") {
+      addAssistantMessage({
+        role: "assistant",
+        text: `High-missingness fields need review before broad exploration: ${schema.warnings.slice(0, 5).map((warning) => warning.column ? `${warning.column} (${warning.missing_percentage}%)` : warning.warning).join(", ") || "none detected"}.`,
+      });
+    } else if (prompt === "What is a linking key?") {
+      addAssistantMessage({
+        role: "assistant",
+        text: `A linking key connects records across files or time. In this schema, possible ID keys are ${schema.possible_id_columns.join(", ") || "not detected"}, and timing fields are ${schema.possible_timestamp_date_columns.join(", ") || "not detected"}.`,
+      });
+    } else {
+      addAssistantMessage({
+        role: "assistant",
+        text: `Fields needing clarification include high-missingness columns, inferred proxy fields, and any variable without dictionary evidence. Start with: ${schema.warnings.slice(0, 4).map((warning) => warning.column || warning.warning).join(", ") || "no obvious warnings from schema parsing"}.`,
+      });
     }
   }
 
-  async function handleRagSearch() {
-    setRagBusy(true);
-    setRagError("");
-    setRagMessage("");
-
-    try {
-      const response = await searchRag(ragQuery, topK);
-      setRagResults(response.results);
-      setRagMessage(
-        response.message ?? `Found ${response.number_of_results} matching chunks.`,
-      );
-    } catch (error) {
-      setRagError((error as Error).message);
-    } finally {
-      setRagBusy(false);
+  async function handleDocumentUpload() {
+    if (!documentFile) {
+      setError("Choose a PDF, DOCX, or TXT document first.");
+      return;
     }
+    await runAction("Uploading document", async () => {
+      await uploadDocument(documentFile);
+      setDocumentFile(null);
+      await refreshProjectState();
+      setNotice("Document uploaded. Run ingestion to add it to the RAG knowledge base.");
+    });
   }
 
-  async function handleCandidateGeneration() {
-    if (!candidateDataset) {
-      setCandidateError("Select a dataset first.");
+  async function handleHomeDocumentUpload(
+    file: File | null,
+    category: DocumentCategory,
+    setStatus: (status: UploadStatus) => void,
+    setSummary: (summary: string) => void,
+  ) {
+    if (!file) {
+      setStatus("Needs clarification");
+      setError("Choose a document first.");
       return;
     }
 
-    setCandidateBusy(true);
-    setCandidateError("");
-    setCandidateMessage("");
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    const allowed =
+      category === "research_paper"
+        ? extension === "pdf"
+        : extension === "pdf" || extension === "docx" || extension === "txt";
+    if (!allowed) {
+      setStatus("Incorrect file type");
+      setError(
+        category === "research_paper"
+          ? "Related research papers currently accept PDF files."
+          : "Project documents accept PDF, DOCX, or TXT files.",
+      );
+      return;
+    }
 
-    try {
-      const response = await generateCausalQuestions({
+    setStatus("Uploading / reviewing");
+    await runAction("Uploading document", async () => {
+      const uploaded = await uploadDocument(file);
+      setDocumentCategories((categories) => ({
+        ...categories,
+        [uploaded.saved_filename]: category,
+      }));
+      const ingestion = await ingestDocuments();
+      const ingestStatus = await getIngestionStatus();
+      setIngestionStatus(ingestStatus);
+      await refreshProjectState();
+
+      if (category === "data_dictionary") {
+        const ragCheck = await searchRag(
+          "variable names data types units possible values ranges collection method measurement timing participant ID timestamp",
+          5,
+        );
+        if (ragCheck.results.length > 0) {
+          setStatus("Uploaded & validated");
+          setSummary(
+            `Uploaded, ingested, and checked with RAG. Found ${ragCheck.number_of_results} relevant evidence chunks. ChromaDB now stores ${ingestStatus.stored_chunks ?? ingestion.chunks_created} chunks.`,
+          );
+          addAssistantMessage({
+            role: "assistant",
+            text: "Uploaded and validated. I found supporting schema details in the ingested documents. Review the retrieved evidence before moving forward; I will not invent document details.",
+            sources: ragCheck.results
+              .map((result) => result.source_filename)
+              .filter((value): value is string => Boolean(value)),
+          });
+        } else {
+          setStatus("Needs clarification");
+          setSummary("Uploaded and ingested, but the RAG check found no supporting schema details.");
+          addAssistantMessage({
+            role: "assistant",
+            text: "I could not find supporting details in the uploaded documents. Please clarify variable names, data types, units/ranges, collection method, measurement timing, participant ID, and timestamp fields.",
+          });
+        }
+      } else {
+        setStatus("Uploaded & validated");
+        setSummary(
+          `Uploaded and ingested for later RAG use. ChromaDB stores ${ingestStatus.stored_chunks ?? ingestion.chunks_created} chunks.`,
+        );
+        addAssistantMessage({
+          role: "assistant",
+          text:
+            category === "protocol"
+              ? "Protocol uploaded and ingested. I’ll use it later for research goal, population, design context, assumptions, and report citations."
+              : "Related paper uploaded and ingested. I’ll use it later as RAG evidence for candidate variables, graph rationale, assumptions, and report citations.",
+        });
+      }
+    });
+  }
+
+  async function handleIngestDocuments() {
+    await runAction("Ingesting documents", async () => {
+      const result = await ingestDocuments();
+      await refreshProjectState();
+      setNotice(`Ingested ${result.files_processed} files into ${result.chunks_created} chunks.`);
+    });
+  }
+
+  async function handleHomePapersUpload() {
+    if (paperFiles.length === 0) {
+      setPapersStatus("Needs clarification");
+      setError("Choose at least one PDF research paper.");
+      return;
+    }
+    setPapersStatus("Uploading / reviewing");
+    for (const paper of paperFiles) {
+      await handleHomeDocumentUpload(
+        paper,
+        "research_paper",
+        setPapersStatus,
+        setPapersSummary,
+      );
+    }
+    setPaperFiles([]);
+  }
+
+  function handleSubmitProjectDetails() {
+    const missing = [];
+    if (datasetStatus !== "Uploaded & validated") {
+      missing.push("Study Dataset");
+      setDatasetStatus("Needs clarification");
+    }
+    if (dictionaryStatus !== "Uploaded & validated") {
+      missing.push("Data Dictionary / Schema");
+      setDictionaryStatus("Needs clarification");
+    }
+    if (missing.length > 0) {
+      const message = `Missing required setup item${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}.`;
+      setError(message);
+      addAssistantMessage({
+        role: "assistant",
+        text: `${message} Upload these before moving to Data Foundation.`,
+      });
+      return;
+    }
+    if (!ingestionStatus?.chroma_exists || !ingestionStatus.stored_chunks) {
+      const message = "Required files are uploaded, but documents need to be ingested before Data Foundation.";
+      setError(message);
+      addAssistantMessage({ role: "assistant", text: message });
+      return;
+    }
+    setError("");
+    setNotice("Project setup is ready for Data Foundation.");
+    addAssistantMessage({
+      role: "assistant",
+      text: "Project setup is ready for Data Foundation. This setup stage checked file completeness and study context only; causal validity is checked later by deterministic backend validation.",
+    });
+  }
+
+  async function handleBroadExplore() {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
+      return;
+    }
+    await runAction("Running broad exploration", async () => {
+      const result = await runBroadExploration({
+        datasetFilename: selectedDataset,
+        targetColumn: schema?.column_names.includes("label") ? "label" : undefined,
+        participantIdColumn: schema?.possible_id_columns[0],
+        timestampColumn: schema?.possible_timestamp_date_columns[0],
+      });
+      setBroadExploration(result);
+      setNotice("Broad exploration complete. Treat findings as observational.");
+      const missingness = result.high_missingness_columns
+        .slice(0, 3)
+        .map((item) => `${item.column} (${item.missing_percentage}%)`)
+        .join(", ");
+      addAssistantMessage({
+        role: "assistant",
+        text: `I found ${result.number_of_rows.toLocaleString()} rows and ${result.number_of_columns} columns. ${result.possible_id_columns.join(", ") || "No clear participant ID"} appears to identify participants, and ${result.possible_timestamp_columns.join(", ") || "no clear timestamp fields"} describe timing. ${missingness ? `${missingness} has substantial missingness, so related exploratory patterns need caution. ` : ""}These patterns are exploratory and do not establish causality.`,
+      });
+    });
+  }
+
+  function handlePromotePattern(pattern: string) {
+    setPromotedPatterns((current) =>
+      current.includes(pattern) ? current : [...current, pattern],
+    );
+    setNotice("Promoted to Causal Studio as a hypothesis candidate, not as causal evidence.");
+    addAssistantMessage({
+      role: "assistant",
+      text: "Promoted to Causal Studio as a hypothesis candidate, not as causal evidence. This still needs later causal question design, role review, graph validation, and assumption checking.",
+    });
+  }
+
+  function handleExplorePrompt(prompt: string) {
+    if (!broadExploration) {
+      addAssistantMessage({
+        role: "assistant",
+        text: "Run broad exploration first. I can then summarize missingness, detected timing fields, participant-level structure, and safe-to-promote descriptive patterns.",
+      });
+      return;
+    }
+
+    if (prompt === "Explain missingness") {
+      const missing = broadExploration.high_missingness_columns
+        .slice(0, 5)
+        .map((item) => `${item.column}: ${item.missing_percentage}%`)
+        .join("; ");
+      addAssistantMessage({
+        role: "assistant",
+        text: missing
+          ? `High missingness means those variables may have incomplete coverage. In this dataset: ${missing}. Review whether missingness is systematic before using those variables in later causal design.`
+          : "I do not see major high-missingness fields in the broad exploration result, but this still does not establish causality.",
+      });
+    } else if (prompt === "What patterns are safe to promote?") {
+      addAssistantMessage({
+        role: "assistant",
+        text: "Safe patterns to promote are descriptive hypotheses, such as repeated missingness, time-of-day structure, participant-level variation, or associations worth reviewing. Do not promote them as causal evidence.",
+      });
+    } else if (prompt === "Why is this not causal?") {
+      addAssistantMessage({
+        role: "assistant",
+        text: "This page summarizes observational patterns only. Without a finalized causal question, temporal ordering, graph assumptions, adjustment strategy, and deterministic validation, these patterns cannot prove an effect.",
+      });
+    } else {
+      const groups = Object.entries(broadExploration.sensor_or_feature_groups)
+        .filter(([, columns]) => columns.length > 0)
+        .slice(0, 4)
+        .map(([group, columns]) => `${group}: ${columns.slice(0, 3).join(", ")}`)
+        .join("; ");
+      addAssistantMessage({
+        role: "assistant",
+        text: groups
+          ? `Useful domains to inspect next include ${groups}. Treat these as broad data domains, not final causal roles.`
+          : "Start by inspecting ID fields, timestamps, outcome-like labels, missingness-heavy fields, and sensor feature groups.",
+      });
+    }
+  }
+
+  async function handleExploreRagCaution() {
+    await runAction("Searching RAG evidence", async () => {
+      const response = await searchRag(
+        "exploratory data analysis observational patterns do not establish causality missingness wearable EMA passive sensing",
+        5,
+      );
+      if (response.results.length === 0) {
+        setExploreRagSummary("I could not find supporting details in uploaded documents.");
+        addAssistantMessage({
+          role: "assistant",
+          text: "I could not find supporting details in uploaded documents. Explore remains descriptive only, and schema/broad exploration checks are still available.",
+        });
+        return;
+      }
+      const sources = response.results
+        .map((result) => result.source_filename)
+        .filter((value): value is string => Boolean(value));
+      setExploreRagSummary(
+        `Found ${response.number_of_results} RAG chunk(s) about exploration caution from ${Array.from(new Set(sources)).slice(0, 3).join(", ") || "uploaded documents"}.`,
+      );
+      addAssistantMessage({
+        role: "assistant",
+        text: `RAG found ${response.number_of_results} supporting chunk(s) about exploratory caution. I will use these as evidence snippets only and will not invent causal claims from them.`,
+        sources,
+      });
+    });
+  }
+
+  async function handleGenerateQuestions() {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
+      return;
+    }
+    await runAction("Generating questions", async () => {
+      const result = await generateCausalQuestions({
         researchObjective,
-        datasetFilename: candidateDataset,
-        topKEvidence: topK,
+        datasetFilename: selectedDataset,
+        topKEvidence: 5,
       });
-      setCandidateQuestions(response.candidates);
-      setCandidateMessage(
-        `Generated ${response.candidates.length} design candidates using ${response.evidence_chunks_used} evidence chunks.`,
-      );
-    } catch (error) {
-      setCandidateError((error as Error).message);
-    } finally {
-      setCandidateBusy(false);
-    }
+      setCandidateQuestions(result.candidates);
+      setConfirmedQuestion(result.candidates[0]?.question_text ?? confirmedQuestion);
+      setNotice(`Generated ${result.candidates.length} candidate questions.`);
+    });
   }
 
-  async function handleVariableRecommendation() {
-    if (!variableDataset) {
-      setVariableError("Select a dataset first.");
+  async function handleRecommendVariables() {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
       return;
     }
-
-    setVariableBusy(true);
-    setVariableError("");
-    setVariableMessage("");
-
-    try {
-      const response = await recommendCandidateVariables({
+    await runAction("Recommending variables", async () => {
+      const result = await recommendCandidateVariables({
         confirmedQuestion,
-        datasetFilename: variableDataset,
-        topKEvidence: topK,
+        datasetFilename: selectedDataset,
+        topKEvidence: 5,
       });
-      setVariableGroups(response.variable_groups);
-      setDerivedFeatures(response.derived_features);
-      const variableCount = Object.values(response.variable_groups).reduce(
-        (total, recommendations) => total + recommendations.length,
-        0,
-      );
-      setVariableMessage(
-        `Recommended ${variableCount} candidate variables and ${response.derived_features.length} derived features using ${response.evidence_chunks_used} evidence chunks.`,
-      );
-    } catch (error) {
-      setVariableError((error as Error).message);
-    } finally {
-      setVariableBusy(false);
-    }
+      const variables = Object.values(result.variable_groups).flat();
+      setCandidateVariables(variables);
+      setNotice(`Recommended ${variables.length} candidate variables.`);
+    });
   }
 
-  async function handleTargetedFeasibility() {
-    if (!targetedDataset) {
-      setTargetedError("Select a dataset first.");
+  async function handleTargetedFeasibility({
+    exposure,
+    outcome,
+    timeWindow,
+  }: {
+    exposure?: string;
+    outcome?: string;
+    timeWindow?: string;
+  }) {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
       return;
     }
-
-    setTargetedBusy(true);
-    setTargetedError("");
-    setTargetedMessage("");
-
-    try {
-      const selectedVariables = targetedVariablesText
-        .split(/\r?\n|,/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-      const response = await runTargetedFeasibility({
-        datasetFilename: targetedDataset,
+    await runAction("Checking targeted feasibility", async () => {
+      const result = await runTargetedFeasibility({
+        datasetFilename: selectedDataset,
         confirmedQuestion,
         selectedVariables,
-        exposure: targetedExposure,
-        outcome: targetedOutcome,
-        comparator: targetedComparator,
-        participantIdColumn: targetedParticipantId,
-        timestampColumn: targetedTimestamp,
-        timeWindow: targetedTimeWindow,
-        lagDefinition: targetedLagDefinition,
-        topKEvidence: topK,
+        exposure,
+        outcome,
+        participantIdColumn: schema?.possible_id_columns[0],
+        timestampColumn: schema?.possible_timestamp_date_columns[0],
+        timeWindow,
+        lagDefinition: timeWindow,
+        topKEvidence: 5,
       });
-      setTargetedFeasibility(response);
-      setTargetedMessage(
-        `Feasibility status: ${response.feasibility_status}. Score: ${response.feasibility_score}.`,
-      );
-    } catch (error) {
-      setTargetedError((error as Error).message);
-    } finally {
-      setTargetedBusy(false);
-    }
+      setTargetedFeasibility(result);
+      setNotice(`Feasibility check complete: ${result.feasibility_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Targeted feasibility status: ${result.feasibility_status}. Selected variables are checked for missingness, participant structure, timing, and overlap. This is design guidance only, not an effect estimate.`,
+      });
+    });
   }
 
-  async function handleRoleValidation() {
-    if (!roleDataset) {
-      setRoleError("Select a dataset first.");
+  async function handleValidateRoles() {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
       return;
     }
-
-    setRoleBusy(true);
-    setRoleError("");
-    setRoleMessage("");
-
-    try {
-      const selectedVariables = JSON.parse(selectedVariablesJson);
-      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
-        throw new Error("Selected variables must be a non-empty JSON array.");
-      }
-
-      const response = await recommendAndValidateRoles({
+    await runAction("Validating roles", async () => {
+      const roleResult = await recommendAndValidateRoles({
         confirmedQuestion,
-        datasetFilename: roleDataset,
+        datasetFilename: selectedDataset,
         selectedVariables,
-        topKEvidence: topK,
+        topKEvidence: 5,
       });
-      setRoleRecommendations(response.role_recommendations);
-      setRoleValidation(response.backend_validation);
-      setRoleMessage(
-        `Validated ${response.role_recommendations.length} role recommendations. Status: ${response.backend_validation.validation_status}.`,
-      );
-    } catch (error) {
-      setRoleError((error as Error).message);
-    } finally {
-      setRoleBusy(false);
-    }
+      setRoleRecommendations(roleResult.role_recommendations);
+      setRoleValidation(roleResult.backend_validation);
+      setNotice(`Role validation: ${roleResult.backend_validation.validation_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Role validation finished with status ${roleResult.backend_validation.validation_status}. Variables such as participant IDs should support grouping, not be treated as causal exposures or outcomes.`,
+      });
+    });
   }
 
-  async function handleGraphGeneration() {
-    if (!graphDataset) {
-      setGraphError("Select a dataset first.");
+  async function handleValidateRolesAndGraph() {
+    if (!selectedDataset) {
+      setError("Select a dataset first.");
       return;
     }
-
-    setGraphBusy(true);
-    setGraphError("");
-    setGraphMessage("");
-
-    try {
-      const selectedVariables = JSON.parse(selectedVariablesJson);
-      const parsedRoleRecommendations = JSON.parse(roleRecommendationsJson);
-      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
-        throw new Error("Selected variables must be a non-empty JSON array.");
-      }
-      if (
-        !Array.isArray(parsedRoleRecommendations) ||
-        parsedRoleRecommendations.length === 0
-      ) {
-        throw new Error("Role recommendations must be a non-empty JSON array.");
-      }
-
-      const response = await generateAndValidateGraph({
+    await runAction("Validating roles and graph", async () => {
+      const roleResult = await recommendAndValidateRoles({
         confirmedQuestion,
-        datasetFilename: graphDataset,
+        datasetFilename: selectedDataset,
         selectedVariables,
-        roleRecommendations: parsedRoleRecommendations,
-        topKEvidence: topK,
+        topKEvidence: 5,
       });
-      setGraphDraft(response.graph_draft);
-      setEditedGraphDraft(response.graph_draft);
-      setGraphValidation(response.backend_validation);
-      setIdentificationGraphJson(JSON.stringify(response.graph_draft, null, 2));
-      setGraphMessage(
-        `Generated ${response.graph_draft.nodes.length} nodes and ${response.graph_draft.edges.length} edges. Status: ${response.backend_validation.graph_validation_status}.`,
-      );
-    } catch (error) {
-      setGraphError((error as Error).message);
-    } finally {
-      setGraphBusy(false);
-    }
+      setRoleRecommendations(roleResult.role_recommendations);
+      setRoleValidation(roleResult.backend_validation);
+
+      const graphResult = await generateAndValidateGraph({
+        confirmedQuestion,
+        datasetFilename: selectedDataset,
+        selectedVariables,
+        roleRecommendations: roleResult.role_recommendations,
+        topKEvidence: 5,
+      });
+      setGraphDraft(graphResult.graph_draft);
+      setGraphValidation(graphResult.backend_validation);
+      setNotice("Draft graph generated. Review edges as assumptions, not proven effects.");
+    });
   }
 
-  async function handleEditedGraphValidation() {
-    if (!graphDataset) {
-      setGraphError("Select a dataset first.");
+  async function handleValidateEditedGraph() {
+    if (!selectedDataset || !graphDraft) {
+      setError("Generate a graph first.");
       return;
     }
-    if (!editedGraphDraft) {
-      setGraphError("Generate or edit a graph draft first.");
-      return;
-    }
-
-    setGraphBusy(true);
-    setGraphError("");
-    setGraphMessage("");
-
-    try {
-      const selectedVariables = JSON.parse(selectedVariablesJson);
-      const parsedRoleRecommendations = JSON.parse(roleRecommendationsJson);
-      if (!Array.isArray(selectedVariables) || selectedVariables.length === 0) {
-        throw new Error("Selected variables must be a non-empty JSON array.");
-      }
-      if (
-        !Array.isArray(parsedRoleRecommendations) ||
-        parsedRoleRecommendations.length === 0
-      ) {
-        throw new Error("Role recommendations must be a non-empty JSON array.");
-      }
-
-      const response = await validateEditedGraph({
+    await runAction("Validating edited graph", async () => {
+      const graphResult = await validateEditedGraph({
         confirmedQuestion,
-        datasetFilename: graphDataset,
-        graphDraft: editedGraphDraft,
+        datasetFilename: selectedDataset,
+        graphDraft,
         selectedVariables,
-        roleRecommendations: parsedRoleRecommendations,
+        roleRecommendations,
       });
-      setGraphDraft(response.graph_draft);
-      setEditedGraphDraft(response.graph_draft);
-      setGraphValidation(response.backend_validation);
-      setIdentificationGraphJson(JSON.stringify(response.graph_draft, null, 2));
-      setGraphMessage(
-        `Validated edited graph. Status: ${response.backend_validation.graph_validation_status}. Safe to identify: ${response.backend_validation.safe_to_continue_to_identification ? "yes" : "no"}.`,
+      setGraphDraft(graphResult.graph_draft);
+      setGraphValidation(graphResult.backend_validation);
+      setNotice(`Graph validation: ${graphResult.backend_validation.graph_validation_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Edited graph validation returned ${graphResult.backend_validation.graph_validation_status}. Edges remain assumptions and must be reviewed before identification or analysis planning.`,
+      });
+    });
+  }
+
+  async function handleCausalRagEvidence({
+    exposure,
+    outcome,
+  }: {
+    exposure?: string;
+    outcome?: string;
+  }) {
+    await runAction("Retrieving causal design evidence", async () => {
+      const query = [
+        confirmedQuestion,
+        exposure,
+        outcome,
+        selectedVariables.map((variable) => variable.variable_name).join(" "),
+        "causal graph variable role exposure outcome mediator confounder proxy temporal ordering",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const response = await searchRag(query, 5);
+      if (response.results.length === 0) {
+        setCausalEvidenceSummary("I could not find supporting evidence in the uploaded documents.");
+        addAssistantMessage({
+          role: "assistant",
+          text: "I could not find supporting evidence in the uploaded documents. Do not infer evidence for candidate roles or edges.",
+        });
+        return;
+      }
+      const sources = response.results
+        .map((result) => result.source_filename)
+        .filter((value): value is string => Boolean(value));
+      setCausalEvidenceSummary(
+        `Retrieved ${response.number_of_results} evidence chunk(s) from ${Array.from(new Set(sources)).slice(0, 3).join(", ") || "uploaded documents"}. Evidence can support design discussion, not causal proof.`,
       );
-    } catch (error) {
-      setGraphError((error as Error).message);
-    } finally {
-      setGraphBusy(false);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Retrieved ${response.number_of_results} RAG chunk(s). Use them as references for candidate variables or assumptions only; they do not prove graph edges are causal.`,
+        sources,
+      });
+    });
+  }
+
+  function handleCausalPrompt(prompt: string) {
+    const responses: Record<string, string> = {
+      "What is the exposure?":
+        "The exposure is the variable or construct whose effect you want to study. On this page it is provisional until role validation checks timing, measurement, and whether it is not an ID or pure context field.",
+      "What could be a confounder?":
+        "A confounder is a prior variable that may influence both exposure and outcome. It should usually occur before the exposure and should not be caused by the exposure.",
+      "Is this a mediator or collider?":
+        "A mediator lies on a possible pathway from exposure to outcome. A collider is caused by two variables and should usually not be adjusted for without careful justification.",
+      "Why does graph validation matter?":
+        "Graph validation checks for design problems such as ID variables used as causal nodes, timing conflicts, cycles, missing outcomes, and unsafe claims. It does not prove the graph is true.",
+    };
+    addAssistantMessage({
+      role: "assistant",
+      text: responses[prompt] ?? "This page designs a causal model. It does not estimate effects or prove causal relationships.",
+    });
+  }
+
+  async function handleStrategy() {
+    if (!selectedDataset || !graphDraft || roleRecommendations.length === 0) {
+      setError("Generate the graph and role recommendations first.");
+      return;
     }
+    await runAction("Checking strategy", async () => {
+      const idResult = await runIdentificationCheck({
+        confirmedQuestion,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
+        roleRecommendations,
+        userAdjustmentSet: adjustmentSet,
+      });
+      setIdentification(idResult);
+      const strategyResult = await generateAnalysisStrategy({
+        confirmedQuestion,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
+        roleRecommendations,
+        identificationResult: idResult,
+        exposure: "acc_mean_magnitude",
+        outcome: "label",
+        adjustmentSet,
+      });
+      setStrategy(strategyResult);
+      const assumptionResult = await reviewAssumptions({
+        confirmedQuestion,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
+        roleRecommendations,
+        identificationResult: idResult,
+        analysisStrategy: strategyResult.strategy_plan,
+        exposure: "acc_mean_magnitude",
+        outcome: "label",
+        adjustmentSet,
+      });
+      setAssumptions(assumptionResult);
+      setNotice("Identification, strategy, and assumptions guidance generated.");
+    });
   }
 
   async function handleIdentificationCheck() {
-    if (!identificationDataset) {
-      setIdentificationError("Select a dataset first.");
+    if (!selectedDataset || !graphDraft || roleRecommendations.length === 0) {
+      setError("Generate and validate a graph with role recommendations before identification.");
       return;
     }
-
-    setIdentificationBusy(true);
-    setIdentificationError("");
-    setIdentificationMessage("");
-
-    try {
-      const graph = JSON.parse(identificationGraphJson);
-      const roleRecommendations = JSON.parse(roleRecommendationsJson);
-      const userAdjustmentSet = adjustmentSetText
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-
-      const response = await runIdentificationCheck({
+    await runAction("Checking identification", async () => {
+      const idResult = await runIdentificationCheck({
         confirmedQuestion,
-        datasetFilename: identificationDataset,
-        graph,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
         roleRecommendations,
-        userAdjustmentSet,
-        topKEvidence: topK,
+        userAdjustmentSet: adjustmentSet,
       });
-      setIdentificationResult(response);
-      setIdentificationResultJson(JSON.stringify(response, null, 2));
-      setIdentificationMessage(
-        `Identification status: ${response.identification_status}. Adjustment set: ${response.adjustment_set_status}.`,
-      );
-    } catch (error) {
-      setIdentificationError((error as Error).message);
-    } finally {
-      setIdentificationBusy(false);
-    }
+      setIdentification(idResult);
+      setNotice(`Identification status: ${idResult.identification_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Identification check returned ${idResult.identification_status}. This reviews adjustment and assumptions; it does not estimate a causal effect.`,
+      });
+    });
   }
 
-  async function handleAnalysisStrategy() {
-    if (!strategyDataset) {
-      setStrategyError("Select a dataset first.");
+  async function handleAnalysisStrategy({
+    exposure,
+    outcome,
+    estimandType,
+  }: {
+    exposure?: string;
+    outcome?: string;
+    estimandType?: string;
+  }) {
+    if (!selectedDataset || !graphDraft || roleRecommendations.length === 0) {
+      setError("Generate the graph and role recommendations first.");
       return;
     }
-
-    setStrategyBusy(true);
-    setStrategyError("");
-    setStrategyMessage("");
-
-    try {
-      const graph = JSON.parse(identificationGraphJson);
-      const roleRecommendations = JSON.parse(roleRecommendationsJson);
-      const identificationPayload = JSON.parse(identificationResultJson);
-      const adjustmentSet = adjustmentSetText
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      const response = await generateAnalysisStrategy({
+    await runAction("Generating analysis strategy", async () => {
+      const idResult =
+        identification ??
+        (await runIdentificationCheck({
+          confirmedQuestion,
+          datasetFilename: selectedDataset,
+          graph: graphDraft,
+          roleRecommendations,
+          userAdjustmentSet: adjustmentSet,
+          estimandType,
+        }));
+      setIdentification(idResult);
+      const strategyResult = await generateAnalysisStrategy({
         confirmedQuestion,
-        datasetFilename: strategyDataset,
-        graph,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
         roleRecommendations,
-        identificationResult: identificationPayload,
-        exposure: identificationPayload.exposure,
-        outcome: identificationPayload.outcome,
+        identificationResult: idResult,
+        exposure,
+        outcome,
         adjustmentSet,
-        topKEvidence: topK,
+        estimandType,
       });
-      setStrategyResult(response);
-      setStrategyResultJson(JSON.stringify(response.strategy_plan, null, 2));
-      setStrategyMessage(
-        `Strategy status: ${response.strategy_plan.strategy_status}. Estimator family guidance ready for review.`,
-      );
-    } catch (error) {
-      setStrategyError((error as Error).message);
-    } finally {
-      setStrategyBusy(false);
-    }
+      setStrategy(strategyResult);
+      setNotice(`Analysis strategy guidance: ${strategyResult.strategy_plan.strategy_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Analysis strategy guidance generated for ${strategyResult.strategy_plan.target_estimand}. No effect is estimated here; the guidance is conditional on the graph, identification result, and assumptions.`,
+      });
+    });
   }
 
-  async function handleAssumptionReview() {
-    if (!assumptionsDataset) {
-      setAssumptionError("Select a dataset first.");
+  async function handleAssumptionsReview({
+    exposure,
+    outcome,
+  }: {
+    exposure?: string;
+    outcome?: string;
+  }) {
+    if (!selectedDataset || !graphDraft || !identification || !strategy) {
+      setError("Run identification and analysis strategy before reviewing assumptions.");
       return;
     }
-
-    setAssumptionBusy(true);
-    setAssumptionError("");
-    setAssumptionMessage("");
-
-    try {
-      const graph = JSON.parse(identificationGraphJson);
-      const roleRecommendations = JSON.parse(roleRecommendationsJson);
-      const identificationPayload = JSON.parse(identificationResultJson);
-      const analysisStrategyPayload = JSON.parse(strategyResultJson);
-      const adjustmentSet = adjustmentSetText
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-
-      const response = await reviewAssumptions({
+    await runAction("Reviewing assumptions", async () => {
+      const assumptionResult = await reviewAssumptions({
         confirmedQuestion,
-        datasetFilename: assumptionsDataset,
-        graph,
+        datasetFilename: selectedDataset,
+        graph: graphDraft,
         roleRecommendations,
-        identificationResult: identificationPayload,
-        analysisStrategy: analysisStrategyPayload,
-        exposure: identificationPayload.exposure,
-        outcome: identificationPayload.outcome,
+        identificationResult: identification,
+        analysisStrategy: strategy.strategy_plan,
+        exposure,
+        outcome,
         adjustmentSet,
-        topKEvidence: topK,
       });
-      setAssumptionReview(response);
-      setAssumptionReviewJson(JSON.stringify(response.review, null, 2));
-      setAssumptionMessage(
-        `Assumption review status: ${response.review.review_status}. ${response.evidence_chunks_used} evidence chunks used.`,
-      );
-    } catch (error) {
-      setAssumptionError((error as Error).message);
-    } finally {
-      setAssumptionBusy(false);
-    }
+      setAssumptions(assumptionResult);
+      setNotice(`Assumptions review: ${assumptionResult.review.review_status}.`);
+      addAssistantMessage({
+        role: "assistant",
+        text: `Assumptions review returned ${assumptionResult.review.review_status}. Review missingness, positivity, consistency, measurement validity, and repeated-measure structure before reporting guidance.`,
+      });
+    });
   }
 
-  async function handleReportGeneration() {
-    if (!reportDataset) {
-      setReportError("Select a dataset first.");
+  async function handleTemporalRagEvidence() {
+    await runAction("Retrieving estimation guidance evidence", async () => {
+      const response = await searchRag(
+        "causal identification repeated measures missing data EMA passive sensing wearable data estimator guidance sensitivity analysis positivity mixed effects",
+        5,
+      );
+      if (response.results.length === 0) {
+        setTemporalRagSummary("I could not find supporting evidence in the uploaded documents.");
+        addAssistantMessage({
+          role: "assistant",
+          text: "I could not find supporting evidence in the uploaded documents. Estimation guidance remains deterministic and should not be treated as proof.",
+        });
+        return;
+      }
+      const sources = response.results
+        .map((result) => result.source_filename)
+        .filter((value): value is string => Boolean(value));
+      setTemporalRagSummary(
+        `Retrieved ${response.number_of_results} guidance chunk(s) from ${Array.from(new Set(sources)).slice(0, 3).join(", ") || "uploaded documents"}.`,
+      );
+      addAssistantMessage({
+        role: "assistant",
+        text: `Retrieved ${response.number_of_results} RAG chunk(s) for estimation guidance and sensitivity planning. These references do not prove the estimator is correct.`,
+        sources,
+      });
+    });
+  }
+
+  function handleTemporalPrompt(prompt: string) {
+    const responses: Record<string, string> = {
+      "Explain temporal ordering":
+        "Temporal ordering means the exposure is measured before the outcome. It is necessary for causal interpretation, but not sufficient by itself.",
+      "What is ATE?":
+        "ATE means Average Treatment Effect: the average contrast in outcome if everyone were assigned exposure versus comparator, under stated assumptions.",
+      "Why use mixed effects?":
+        "Mixed-effects models can account for repeated observations within participants by modeling participant-level clustering. They are guidance here, not an effect estimate.",
+      "What if positivity fails?":
+        "If positivity fails, some exposure/comparator patterns are not observed for important subgroups. The design may need restriction, a different estimand, or more data.",
+      "Explain sensitivity analysis":
+        "Sensitivity analysis checks whether conclusions would depend on missingness, unmeasured confounding, alternative lag windows, adjustment choices, or robustness assumptions.",
+    };
+    addAssistantMessage({
+      role: "assistant",
+      text: responses[prompt] ?? "This page provides analysis strategy guidance only. It does not estimate causal effects.",
+    });
+  }
+
+  async function handleReport() {
+    if (!selectedDataset || !graphDraft || !identification || !strategy || !assumptions) {
+      setError("Run graph, identification, strategy, and assumptions before report generation.");
       return;
     }
-
-    setReportBusy(true);
-    setReportError("");
-    setReportMessage("");
-
-    try {
-      const selectedVariables = JSON.parse(selectedVariablesJson);
-      const roleRecommendations = JSON.parse(roleRecommendationsJson);
-      const graph = JSON.parse(identificationGraphJson);
-      const identificationPayload = JSON.parse(identificationResultJson);
-      const analysisStrategyPayload = JSON.parse(strategyResultJson);
-      const assumptionsPayload = JSON.parse(assumptionReviewJson);
-      const response = await generateReport({
-        projectTitle: reportTitle,
+    await runAction("Generating report", async () => {
+      const result = await generateReport({
+        projectTitle: "Causal Studio Demo",
         researchObjective,
         confirmedQuestion,
-        datasetFilename: reportDataset,
-        schemaSummary: datasetSchema ?? undefined,
+        datasetFilename: selectedDataset,
+        schemaSummary: schema ?? undefined,
         broadExplorationSummary: broadExploration ?? undefined,
         candidateQuestions,
-        candidateVariables: Object.values(variableGroups).flat(),
-        targetedFeasibilityResult: targetedFeasibility ?? undefined,
+        candidateVariables,
         selectedVariables,
         roleRecommendations,
         roleValidationResult: roleValidation ?? undefined,
-        graph,
+        graph: graphDraft,
         graphValidationResult: graphValidation ?? undefined,
-        identificationResult: identificationPayload,
-        analysisStrategy: analysisStrategyPayload,
-        assumptionsReview: assumptionsPayload,
-        evidenceSummary: ragResults,
-        userNotes: reportUserNotes,
+        identificationResult: identification,
+        analysisStrategy: strategy,
+        assumptionsReview: assumptions,
       });
-      setReportResult(response);
-      setReportMessage(
-        `${response.report_type} generated. ${response.pdf_export_message}`,
-      );
-    } catch (error) {
-      setReportError((error as Error).message);
+      setReport(result);
+      setNotice("Report generated. Review blocked claims before export.");
+    });
+  }
+
+  async function handleAssistantSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const message = assistantQuery.trim();
+    if (!message) return;
+    setAssistantQuery("");
+    setAssistantBusy(true);
+    setAssistantMessages((messages) => [...messages, { role: "user", text: message }]);
+    try {
+      const response = await chatWithAssistant(message, pageCopy[activePage].title, 4);
+      setAssistantMessages((messages) => [
+        ...messages,
+        {
+          role: "assistant",
+          text: response.answer,
+          sources: response.sources
+            .map((source) => source.source_filename)
+            .filter((value): value is string => Boolean(value)),
+        },
+      ]);
+    } catch (caughtError) {
+      setAssistantMessages((messages) => [
+        ...messages,
+        { role: "assistant", text: getIssueText(caughtError) },
+      ]);
     } finally {
-      setReportBusy(false);
+      setAssistantBusy(false);
     }
   }
 
-  function collectWorkflowInputs() {
-    let selectedVariables: unknown[] = [];
-    let roleRecommendationsPayload: Array<Record<string, unknown>> = [];
-    let graphPayload: Record<string, unknown> | null = null;
-    let identificationPayload: Record<string, unknown> | null = null;
-    let strategyPayload: Record<string, unknown> | null = null;
-    let assumptionsPayload: Record<string, unknown> | null = null;
-
-    try {
-      selectedVariables = JSON.parse(selectedVariablesJson);
-    } catch {
-      selectedVariables = targetedVariablesText
-        .split(/\r?\n|,/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-    }
-    try {
-      roleRecommendationsPayload = JSON.parse(roleRecommendationsJson);
-    } catch {
-      roleRecommendationsPayload = [];
-    }
-    graphPayload = editedGraphDraft as unknown as Record<string, unknown> | null;
-    if (!graphPayload) {
-      try {
-        graphPayload = JSON.parse(identificationGraphJson);
-      } catch {
-        graphPayload = null;
-      }
-    }
-    try {
-      identificationPayload = JSON.parse(identificationResultJson);
-    } catch {
-      identificationPayload = null;
-    }
-    try {
-      strategyPayload = JSON.parse(strategyResultJson);
-    } catch {
-      strategyPayload = null;
-    }
-    try {
-      assumptionsPayload = JSON.parse(assumptionReviewJson);
-    } catch {
-      assumptionsPayload = null;
-    }
-
-    return {
-      project_title: reportTitle,
-      research_objective: researchObjective,
-      dataset_filename: reportDataset || selectedDataset || targetedDataset,
-      schema_summary: datasetSchema,
-      broad_exploration_summary: broadExploration,
-      candidate_questions: candidateQuestions,
-      selected_candidate_question: confirmedQuestion,
-      candidate_variables: Object.values(variableGroups).flat(),
-      selected_variables: selectedVariables,
-      targeted_feasibility_result: targetedFeasibility,
-      role_recommendations: roleRecommendationsPayload,
-      role_validation_result: roleValidation,
-      graph: graphPayload,
-      graph_validation_result: graphValidation,
-      identification_result: identificationPayload,
-      analysis_strategy: strategyPayload,
-      assumptions_review: assumptionsPayload,
-      report: reportResult,
-      exposure: targetedExposure,
-      outcome: targetedOutcome,
-      participant_id_column: targetedParticipantId,
-      timestamp_column: targetedTimestamp,
-      lag_definition: targetedLagDefinition,
-    };
-  }
-
-  async function handleWorkflowStart() {
-    setWorkflowBusy(true);
-    setWorkflowError("");
-    setWorkflowMessage("");
-    try {
-      const state = await startWorkflow({
-        projectTitle: reportTitle,
-        researchObjective,
-        datasetFilename: reportDataset || selectedDataset || targetedDataset,
-      });
-      setWorkflowState(state);
-      setWorkflowMessage("Workflow started. State is stored in memory.");
-    } catch (error) {
-      setWorkflowError((error as Error).message);
-    } finally {
-      setWorkflowBusy(false);
-    }
-  }
-
-  async function handleWorkflowAdvance() {
-    if (!workflowState) {
-      setWorkflowError("Start a workflow first.");
-      return;
-    }
-    setWorkflowBusy(true);
-    setWorkflowError("");
-    setWorkflowMessage("");
-    try {
-      const state = await advanceWorkflow(
-        workflowState.workflow_id,
-        collectWorkflowInputs(),
-      );
-      setWorkflowState(state);
-      setWorkflowMessage(`Workflow advanced/checkpointed at Step ${state.current_step}.`);
-    } catch (error) {
-      setWorkflowError((error as Error).message);
-    } finally {
-      setWorkflowBusy(false);
-    }
-  }
-
-  async function handleWorkflowConfirm() {
-    if (!workflowState) {
-      setWorkflowError("Start a workflow first.");
-      return;
-    }
-    setWorkflowBusy(true);
-    setWorkflowError("");
-    setWorkflowMessage("");
-    try {
-      const state = await confirmWorkflow(
-        workflowState.workflow_id,
-        collectWorkflowInputs(),
-      );
-      setWorkflowState(state);
-      setWorkflowMessage(`Confirmed Step ${state.current_step}.`);
-    } catch (error) {
-      setWorkflowError((error as Error).message);
-    } finally {
-      setWorkflowBusy(false);
-    }
-  }
-
-  async function handleWorkflowRevise() {
-    if (!workflowState) {
-      setWorkflowError("Start a workflow first.");
-      return;
-    }
-    setWorkflowBusy(true);
-    setWorkflowError("");
-    setWorkflowMessage("");
-    try {
-      const state = await reviseWorkflow(
-        workflowState.workflow_id,
-        workflowReviseStep,
-        "User requested revision from workflow control.",
-      );
-      setWorkflowState(state);
-      setWorkflowMessage(`Workflow moved back to Step ${state.current_step}.`);
-    } catch (error) {
-      setWorkflowError((error as Error).message);
-    } finally {
-      setWorkflowBusy(false);
-    }
-  }
-
-  async function handleLangSmithTestTrace() {
-    setLangSmithBusy(true);
-    setLangSmithError("");
-    setLangSmithMessage("");
-    try {
-      const result = await runLangSmithTestTrace();
-      setLangSmithStatus({
-        tracing_enabled: result.tracing_enabled,
-        langchain_project: result.langchain_project,
-        api_key_present: result.api_key_present,
-        warning: result.warning,
-      });
-      setLangSmithMessage(
-        `Test trace ${result.trace_completed ? "completed" : "did not complete"}; RAG ${result.rag_status}; ${result.results_count} results.`,
-      );
-    } catch (error) {
-      setLangSmithError((error as Error).message);
-    } finally {
-      setLangSmithBusy(false);
-    }
-  }
-
-  const selectedVariablesCount = targetedVariablesText
-    .split(/\r?\n|,/)
-    .map((variable) => variable.trim())
-    .filter(Boolean).length;
-  const graphStatus =
-    graphValidation?.graph_validation_status ?? "not reviewed";
-  const identificationStatus =
-    identificationResult?.identification_status ?? "not checked";
-  const feasibilityStatus =
-    targetedFeasibility?.feasibility_status ?? "not checked";
-  const strategyStatus =
-    strategyResult?.strategy_plan.strategy_status ?? "not generated";
-  const reportStatus = reportResult ? "generated" : "not generated";
-  const activeWorkflowStep = workflowState?.current_step ?? activeStep;
-  const progressStages = workflowSteps.map((step, index) => {
-    const stepNumber = index + 1;
-    const completedByWorkflow =
-      workflowState?.completed_steps.includes(stepNumber) ?? false;
-    const state =
-      stepNumber === activeStep
-        ? "active"
-        : completedByWorkflow || stepNumber < activeWorkflowStep
-          ? "done"
-          : stepNumber > activeWorkflowStep + 1
-            ? "locked"
-            : "pending";
-    return { ...step, state };
-  });
-
-  const stepGuidance = [
-    {
-      purpose: "Upload project materials and establish the research context.",
-      action: "Enter the research objective, upload PDF/DOCX documents, and ingest them when ready.",
-      caution: "RAG evidence supports design decisions, but it does not prove causal claims.",
-      requirement: "Proceed after the objective is clear and documents are uploaded or intentionally skipped.",
-    },
-    {
-      purpose: "Understand the uploaded dataset structure before exploring or designing a causal question.",
-      action: "Upload or select a dataset and inspect rows, columns, IDs, timestamps, missingness, and types.",
-      caution: "Dataset schema describes available variables only; it is not analysis evidence.",
-      requirement: "Proceed after a dataset is selected and schema is reviewed.",
-    },
-    {
-      purpose: "Explore broad patterns, missingness, temporal structure, and data quality. These patterns do not establish causality.",
-      action: "Run broad exploration and review missingness, temporal structure, and possible outcomes.",
-      caution: "Exploratory patterns do not establish causality.",
-      requirement: "Proceed after broad warnings are reviewed.",
-    },
-    {
-      purpose: "Generate candidate causal questions and provisional variable recommendations using schema and RAG evidence.",
-      action: "Generate questions, confirm one question, then recommend candidate variables.",
-      caution: "Variable roles are provisional until graph and final validation.",
-      requirement: "Proceed after a question and selected variables are available.",
-    },
-    {
-      purpose: "Check whether the selected variables and time structure can actually support the proposed causal question.",
-      action: "Run targeted feasibility for exposure, outcome, timing, coverage, and missingness.",
-      caution: "Feasibility checks implementation readiness, not causal effects.",
-      requirement: "Proceed when safe_to_continue_to_graph is true, or continue with an explicit warning.",
-    },
-    {
-      purpose: "Review and edit the causal graph. Edges represent assumptions, not proven causal relationships.",
-      action: "Run role validation, generate the draft graph, and inspect graph warnings.",
-      caution: "The graph is a user-reviewed design object, not proven causal structure.",
-      requirement: "Proceed after graph validation returns a usable result.",
-    },
-    {
-      purpose: "Check identification readiness and generate analysis strategy guidance under stated assumptions.",
-      action: "Run identification, generate strategy guidance, and review assumptions/sensitivity.",
-      caution: "No causal estimation is run here.",
-      requirement: "Proceed after assumptions and sensitivity planning are reviewed.",
-    },
-    {
-      purpose: "Generate a causal design and analysis guidance report. This is not a causal results report.",
-      action: "Review carried-forward state and generate the structured JSON report.",
-      caution: "The report is not a causal results report and must not claim proven effects.",
-      requirement: "Report generation should include assumptions review or show missing-section warnings.",
-    },
-  ][activeStep - 1];
-
-  const stepProceedStatus = [
-    Boolean(researchObjective.trim()),
-    Boolean(selectedDataset && datasetSchema),
-    Boolean(broadExploration),
-    Boolean(confirmedQuestion.trim() && selectedVariablesCount > 0),
-    Boolean(targetedFeasibility?.safe_to_continue_to_graph),
-    Boolean(graphValidation),
-    Boolean(identificationResult && strategyResult && assumptionReview),
-    Boolean(assumptionReview),
-  ];
-  const canContinue = stepProceedStatus[activeStep - 1];
-
-  function goToStep(step: number) {
-    setActiveStep(Math.min(Math.max(step, 1), workflowSteps.length));
-  }
-
-  function goToPreviousStep() {
-    goToStep(activeStep - 1);
-  }
-
-  function goToNextStep() {
-    goToStep(activeStep + 1);
-  }
+  const current = pageCopy[activePage];
 
   return (
-    <div className="dashboard-shell">
-      <aside className="sidebar">
-        <div className="brand-row">
-          <div className="brand-mark">CS</div>
+    <div className="prototype-shell">
+      <header className="figma-toolbar">
+        <div className="figma-left">
+          <span>⌘</span>
+          <span className="ai-pill">AI</span>
+        </div>
+        <strong>Causal Studio Dashboard Prototype</strong>
+        <div className="figma-right">
+          <span>○</span>
+          <span>⛶</span>
+          <button type="button">Share</button>
+        </div>
+      </header>
+
+      <aside className="prototype-sidebar">
+        <div className="brand-block">
+          <div className="brand-icon">CS</div>
           <div>
             <strong>Causal Studio</strong>
             <span>Research Platform</span>
           </div>
         </div>
 
-        <nav className="nav-list" aria-label="Primary navigation">
-          {workflowSteps.map((step, index) => (
+        <nav className="prototype-nav">
+          {navItems.map((item) => (
             <button
-              className={`nav-item ${
-                activeStep === index + 1 ? "nav-item--active" : ""
-              }`}
-              key={step.label}
-              onClick={() => goToStep(index + 1)}
+              className={activePage === item.id ? "active" : ""}
+              disabled={item.disabled}
+              key={item.id}
+              onClick={() => switchPage(item.id)}
               type="button"
             >
-              <span className="nav-icon" aria-hidden="true">
-                {index + 1}
-              </span>
-              {step.navLabel}
+              <span>{item.icon}</span>
+              {item.label}
             </button>
           ))}
         </nav>
 
         <div className="sidebar-footer">
-          <button className="nav-item" type="button">
-            <span className="nav-icon" aria-hidden="true">
-              ⚙
-            </span>
-            Settings
-          </button>
-          <div className="user-card">
-            <div className="avatar">RM</div>
+          <button type="button">⚙ Settings</button>
+          <div className="researcher-card">
+            <span>RM</span>
             <div>
               <strong>Dr. R. Martinez</strong>
-              <span>Lead Researcher</span>
+              <small>Lead Researcher</small>
             </div>
           </div>
         </div>
       </aside>
 
-      <main className="workspace">
-        <header className="project-header">
+      <main className="prototype-workspace">
+        <header className="prototype-topbar">
           <div>
-            <h1>AWARE-2023 Substance Use Study</h1>
-            <p>EMA + Passive Sensing · 124 participants · 30-day observation</p>
+            <h1>{current.title}</h1>
+            <p>{current.subtitle}</p>
           </div>
-          <div className="header-actions">
-            <span className="pill pill--warning">4 Warnings</span>
-            <span className="pill">Stage {activeStep}/8</span>
+          <div className="topbar-actions">
+            {error && <span className="status-pill status-pill--danger">Needs review</span>}
+            {notice && <span className="status-pill status-pill--ok">Updated</span>}
+            {busy && <span className="status-pill">{busy}</span>}
           </div>
         </header>
 
-        <section className="progress-card panel">
-          <p className="section-label">Analysis Progress</p>
-          <div className="progress-steps">
-            {progressStages.map((stage, index) => (
-              <button
-                className="progress-step"
-                key={stage.label}
-                onClick={() => goToStep(index + 1)}
-                type="button"
-              >
-                <span className={`step-node step-node--${stage.state}`}>
-                  {getStageSymbol(stage.state) || index + 1}
-                </span>
-                <span>{stage.shortLabel}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="architecture-bar">
-          <strong>Interaction Loop Architecture</strong>
-          <span>Architecture Guide</span>
-          <button type="button" aria-label="Collapse architecture guide">
-            ˅
-          </button>
-        </section>
-
-        <section className="workspace-grid">
-          <article className="panel">
-            <h2>Project Context</h2>
-            <dl className="context-list">
-              <dt>Population</dt>
-              <dd>Adults 18-45 with AUD</dd>
-              <dt>Dataset</dt>
-              <dd>AWARE-2023 EMA + Passive Sensing</dd>
-              <dt>Research Goal</dt>
-              <dd>
-                Temporal relationships between sleep, stress, and next-day
-                alcohol use
-              </dd>
-              <dt>Aim Type</dt>
-              <dd className="muted-italic">Use chatbot to select</dd>
-            </dl>
-          </article>
-
-          <article className="panel">
-            <h2>Edit Project Details</h2>
-            <label className="field-label" htmlFor="project-context">
-              Project Context
-            </label>
-            <textarea
-              id="project-context"
-              defaultValue="Longitudinal EMA study examining substance-use triggers in adults with AUD."
-              rows={3}
-            />
-            <label className="field-label" htmlFor="population-details">
-              Population Details
-            </label>
-            <input
-              id="population-details"
-              defaultValue="Adults 18-45, clinical sample, outpatient centers"
-            />
-            <label className="field-label" htmlFor="aim-type">
-              Aim Type
-            </label>
-            <select id="aim-type" defaultValue="">
-              <option value="" disabled>
-                Select...
-              </option>
-              <option>Descriptive</option>
-              <option>Predictive</option>
-              <option>Causal</option>
-            </select>
-          </article>
-        </section>
-
-        <section className="warning-card">
-          <strong>4 Analysis Warnings</strong>
-          <ul>
-            {warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="panel workflow-overview">
-          <div className="panel-heading">
-            <div>
-              <p className="section-label">Guided Workflow</p>
-              <h2>
-                Step {activeStep}: {workflowSteps[activeStep - 1].label}
-              </h2>
-            </div>
-            <div className="step-controls">
-              <button
-                disabled={activeStep === 1}
-                onClick={goToPreviousStep}
-                type="button"
-              >
-                Return to Previous Step
-              </button>
-              <button
-                disabled={activeStep === workflowSteps.length || !canContinue}
-                onClick={goToNextStep}
-                type="button"
-              >
-                Continue to Next Step
-              </button>
-            </div>
-          </div>
-
-          <div className="overview-grid">
-            <article>
-              <strong>Current Design State</strong>
-              <dl>
-                <dt>Dataset</dt>
-                <dd>{selectedDataset || candidateDataset || targetedDataset || "Not selected"}</dd>
-                <dt>Confirmed Question</dt>
-                <dd>{confirmedQuestion ? "Available" : "Not confirmed"}</dd>
-                <dt>Selected Variables</dt>
-                <dd>{selectedVariablesCount}</dd>
-                <dt>Feasibility</dt>
-                <dd>{feasibilityStatus}</dd>
-                <dt>Graph Status</dt>
-                <dd>{graphStatus}</dd>
-                <dt>Identification</dt>
-                <dd>{identificationStatus}</dd>
-                <dt>Strategy</dt>
-                <dd>{strategyStatus}</dd>
-                <dt>Report</dt>
-                <dd>{reportStatus}</dd>
-              </dl>
-            </article>
-            <article>
-              <strong>Proceed Condition</strong>
-              <p>{stepGuidance.requirement}</p>
-              {!canContinue && (
-                <p className="inline-warning">
-                  This step can still be explored, but the next-step button is
-                  disabled until the required state is available.
-                </p>
-              )}
-            </article>
-            {workflowState && (
-              <article>
-                <strong>LangGraph State</strong>
-                <dl>
-                  <dt>Workflow ID</dt>
-                  <dd>{workflowState.workflow_id.slice(0, 8)}</dd>
-                  <dt>Current Step</dt>
-                  <dd>
-                    {workflowState.current_step}: {workflowState.current_step_name}
-                  </dd>
-                  <dt>Completed</dt>
-                  <dd>
-                    {workflowState.completed_steps.length > 0
-                      ? workflowState.completed_steps.join(", ")
-                      : "None yet"}
-                  </dd>
-                </dl>
-              </article>
-            )}
-          </div>
-
-          <div className="safety-banner">
-            <span>Not diagnostic or treatment-decision support.</span>
-            <span>The LLM recommends and explains; backend validation checks.</span>
-            <span>Do not present causal conclusions as proven.</span>
-          </div>
-        </section>
-
-        <section className={`feature-grid feature-grid--step-${activeStep}`}>
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">LangGraph Orchestration</p>
-                <h2>Workflow Control</h2>
-              </div>
-            </div>
-
-            <div className="control-row">
-              <button
-                disabled={workflowBusy}
-                onClick={handleWorkflowStart}
-                type="button"
-              >
-                Start Workflow
-              </button>
-              <button
-                disabled={workflowBusy || !workflowState}
-                onClick={handleWorkflowAdvance}
-                type="button"
-              >
-                Advance
-              </button>
-              <button
-                disabled={workflowBusy || !workflowState}
-                onClick={handleWorkflowConfirm}
-                type="button"
-              >
-                Confirm Current Step
-              </button>
-            </div>
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setWorkflowReviseStep(Number(event.target.value))}
-                value={workflowReviseStep}
-              >
-                {workflowSteps.map((stage, index) => (
-                  <option key={stage.label} value={index + 1}>
-                    Step {index + 1}: {stage.shortLabel}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={workflowBusy || !workflowState}
-                onClick={handleWorkflowRevise}
-                type="button"
-              >
-                Revise To Step
-              </button>
-            </div>
-
-            <StatusMessage error={workflowError} message={workflowMessage} />
-
-            {workflowState && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{workflowState.workflow_id.slice(0, 8)}</strong>
-                  <span>Workflow ID</span>
-                </div>
-                <div>
-                  <strong>
-                    Step {workflowState.current_step}:{" "}
-                    {workflowState.current_step_name}
-                  </strong>
-                  <span>Current Step</span>
-                </div>
-                <p>{workflowState.next_required_user_action}</p>
-              </section>
-            )}
-
-            {workflowState && (
-              <section className="role-section">
-                <h3>Completed Steps</h3>
-                <p>
-                  {workflowState.completed_steps.length > 0
-                    ? workflowState.completed_steps.join(", ")
-                    : "No completed steps yet."}
-                </p>
-
-                <h3>Workflow Warnings / Errors</h3>
-                <div className="issue-list">
-                  {[...workflowState.warnings, ...workflowState.errors].length === 0 ? (
-                    <p>No workflow warnings or errors.</p>
-                  ) : (
-                    [...workflowState.warnings, ...workflowState.errors].map(
-                      (message, index) => (
-                        <article
-                          className={
-                            message.severity === "blocking"
-                              ? "issue-card issue-card--error"
-                              : "issue-card"
-                          }
-                          key={`${message.message}-${index}`}
-                        >
-                          <strong>{message.severity}</strong>
-                          <p>{message.message}</p>
-                        </article>
-                      ),
-                    )
-                  )}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 1</p>
-            <h2>Project Setup and Document Upload</h2>
-            <p>
-              Upload project materials and establish the research context.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Project Setup</p>
-                <h2>Research Objective</h2>
-              </div>
-            </div>
-            <textarea
-              id="setup-research-objective"
-              onChange={(event) => setResearchObjective(event.target.value)}
-              rows={3}
-              value={researchObjective}
-            />
-            <div className="demo-actions">
-              <button onClick={() => setResearchObjective(demoObjective)} type="button">
-                Use demo objective
-              </button>
-            </div>
-          </article>
-
-          <article className="panel feature-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">RAG Documents</p>
-                <h2>Document Knowledge Base</h2>
-              </div>
-              <span className="small-badge">{documents.length} files</span>
-            </div>
-
-            <div className="control-row">
-              <input
-                accept=".pdf,.docx"
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setDocumentFile(event.target.files?.[0] ?? null)
-                }
-                type="file"
-              />
-              <button disabled={documentBusy} onClick={handleDocumentUpload} type="button">
-                {documentBusy ? "Uploading..." : "Upload"}
-              </button>
-            </div>
-
-            <div className="list-box">
-              {documents.length === 0 ? (
-                <p className="empty-state">
-                  No documents uploaded yet. Upload PDF or DOCX project materials
-                  before ingestion.
-                </p>
-              ) : (
-                documents.slice(0, 5).map((document) => (
-                  <div className="list-row" key={document.filename}>
-                    <span>{document.filename}</span>
-                    <small>{formatBytes(document.file_size)}</small>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="action-row">
-              <button
-                disabled={documentBusy}
-                onClick={handleDocumentIngestion}
-                type="button"
-              >
-                {documentBusy ? "Working..." : "Ingest Documents"}
-              </button>
-              <span className="status-line">
-                {ingestionStatus?.chroma_exists
-                  ? `${ingestionStatus.stored_chunks ?? 0} chunks stored`
-                  : "No ChromaDB yet"}
-              </span>
-            </div>
-            <StatusMessage error={documentError} message={documentMessage} />
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 2</p>
-            <h2>Data Foundation and Understanding</h2>
-            <p>
-              Understand the uploaded dataset structure before exploring or
-              designing a causal question.
-            </p>
-          </article>
-
-          <article className="panel feature-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Data Foundation</p>
-                <h2>Dataset Schema Review</h2>
-              </div>
-              <span className="small-badge">{datasets.length} CSV</span>
-            </div>
-
-            <div className="control-row">
-              <input
-                accept=".csv"
-                onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                  setDatasetFile(event.target.files?.[0] ?? null)
-                }
-                type="file"
-              />
-              <button disabled={datasetBusy} onClick={handleDatasetUpload} type="button">
-                {datasetBusy ? "Uploading..." : "Upload"}
-              </button>
-            </div>
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setSelectedDataset(event.target.value)}
-                value={selectedDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button disabled={datasetBusy} onClick={handleSchemaLoad} type="button">
-                {datasetBusy ? "Loading..." : "View Schema"}
-              </button>
-            </div>
-
-            {datasets.length === 0 && (
-              <p className="empty-state">
-                No CSV datasets uploaded yet. Add a dataset to review schema,
-                timestamps, IDs, and missingness.
-              </p>
-            )}
-
-            {!datasetSchema && datasets.length > 0 && (
-              <p className="empty-state">
-                Select a dataset and choose View Schema to inspect the available
-                columns. The full dataset is not displayed here.
-              </p>
-            )}
-
-            {datasetSchema && (
-              <div className="schema-summary">
-                <div>
-                  <strong>{datasetSchema.number_of_rows}</strong>
-                  <span>Rows</span>
-                </div>
-                <div>
-                  <strong>{datasetSchema.number_of_columns}</strong>
-                  <span>Columns</span>
-                </div>
-                <div>
-                  <strong>{datasetSchema.possible_id_columns.join(", ") || "None"}</strong>
-                  <span>Possible IDs</span>
-                </div>
-                <div>
-                  <strong>
-                    {datasetSchema.possible_timestamp_date_columns.join(", ") ||
-                      "None"}
-                  </strong>
-                  <span>Time Columns</span>
-                </div>
-              </div>
-            )}
-
-            {datasetSchema && datasetSchema.warnings.length > 0 && (
-              <ul className="compact-warnings">
-                {datasetSchema.warnings.map((warning) => (
-                  <li key={`${warning.column}-${warning.warning}`}>
-                    {warning.column}: {warning.warning} (
-                    {warning.missing_percentage}%)
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {schemaRows.length > 0 && (
-              <table className="schema-table">
-                <thead>
-                  <tr>
-                    <th>Column</th>
-                    <th>Type</th>
-                    <th>Missing</th>
-                    <th>Unique</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {schemaRows.map((row) => (
-                    <tr key={row.column}>
-                      <td>{row.column}</td>
-                      <td>{row.dtype}</td>
-                      <td>{row.missing}%</td>
-                      <td>{row.unique}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <StatusMessage error={datasetError} message={datasetMessage} />
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 3</p>
-            <h2>Broad Data Exploration</h2>
-            <p>
-              Explore broad patterns, missingness, temporal structure, and data
-              quality. These patterns do not establish causality.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Deterministic Dataset Exploration</p>
-                <h2>Broad Dataset Exploration</h2>
-              </div>
-            </div>
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setBroadDataset(event.target.value)}
-                value={broadDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={broadBusy}
-                onClick={handleBroadExploration}
-                type="button"
-              >
-                {broadBusy ? "Running..." : "Run Broad Exploration"}
-              </button>
-            </div>
-
-            <div className="placeholder-grid">
-              <input
-                onChange={(event) => setBroadTargetColumn(event.target.value)}
-                placeholder="Optional target/outcome column"
-                value={broadTargetColumn}
-              />
-              <input
-                onChange={(event) =>
-                  setBroadParticipantColumn(event.target.value)
-                }
-                placeholder="Optional participant ID column"
-                value={broadParticipantColumn}
-              />
-              <input
-                onChange={(event) => setBroadTimestampColumn(event.target.value)}
-                placeholder="Optional timestamp column"
-                value={broadTimestampColumn}
-              />
-            </div>
-            <p className="stage-note">
-              Exploratory patterns can support hypothesis generation, but they
-              do not establish causality.
-            </p>
-
-            <StatusMessage error={broadError} message={broadMessage} />
-
-            {!broadExploration && (
-              <p className="empty-state">
-                Broad exploration has not run yet. Start here to inspect
-                distributions, missingness, temporal structure, and data quality
-                before designing a causal question.
-              </p>
-            )}
-
-            {broadExploration && (
-              <section className="schema-summary">
-                <div>
-                  <strong>{broadExploration.number_of_rows}</strong>
-                  <span>Rows</span>
-                </div>
-                <div>
-                  <strong>{broadExploration.number_of_columns}</strong>
-                  <span>Columns</span>
-                </div>
-                <div>
-                  <strong>
-                    {broadExploration.participant_summary
-                      ?.number_of_unique_participants ?? "None"}
-                  </strong>
-                  <span>Participants</span>
-                </div>
-                <div>
-                  <strong>
-                    {broadExploration.temporal_summary.detected_timestamp_columns
-                      .length || "None"}
-                  </strong>
-                  <span>Time Fields</span>
-                </div>
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Missingness Summary</h3>
-                <div className="issue-list">
-                  {broadExploration.missingness_summary.highest_missingness_columns
-                    .slice(0, 6)
-                    .map((item) => (
-                      <article className="issue-card" key={item.column}>
-                        <strong>
-                          {item.column} - {item.missing_percentage}%
-                        </strong>
-                        <p>
-                          Severity: {item.severity}. Columns above 30% need
-                          missingness review before causal design decisions.
-                        </p>
-                      </article>
-                    ))}
-                </div>
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Participant Variation</h3>
-                {broadExploration.participant_summary ? (
-                  <div className="schema-summary">
-                    <div>
-                      <strong>
-                        {
-                          broadExploration.participant_summary
-                            .participant_id_column
-                        }
-                      </strong>
-                      <span>ID Column</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {
-                          broadExploration.participant_summary
-                            .rows_per_participant.min
-                        }
-                      </strong>
-                      <span>Min Rows</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {
-                          broadExploration.participant_summary
-                            .rows_per_participant.max
-                        }
-                      </strong>
-                      <span>Max Rows</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {
-                          broadExploration.participant_summary
-                            .rows_per_participant.average
-                        }
-                      </strong>
-                      <span>Avg Rows</span>
-                    </div>
-                  </div>
-                ) : (
-                  <p>No participant ID column detected.</p>
-                )}
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Temporal Summary</h3>
-                <div className="variable-card">
-                  <dl>
-                    <dt>Detected Fields</dt>
-                    <dd>
-                      {broadExploration.temporal_summary.detected_timestamp_columns.join(
-                        ", ",
-                      ) || "None"}
-                    </dd>
-                    <dt>Common Time Fields</dt>
-                    <dd>
-                      {broadExploration.temporal_summary.common_time_fields.join(
-                        ", ",
-                      ) || "None"}
-                    </dd>
-                    <dt>Parsed Range</dt>
-                    <dd>
-                      {broadExploration.temporal_summary.parsed_timestamp_summary
-                        ? `${broadExploration.temporal_summary.parsed_timestamp_summary.min_timestamp} to ${broadExploration.temporal_summary.parsed_timestamp_summary.max_timestamp}`
-                        : "No parseable timestamp range detected"}
-                    </dd>
-                  </dl>
-                </div>
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Feature Groups</h3>
-                <div className="placeholder-grid">
-                  {Object.entries(broadExploration.sensor_or_feature_groups).map(
-                    ([group, columns]) => (
-                      <span key={group}>
-                        <strong>{group.replaceAll("_", " ")}</strong>
-                        <br />
-                        {columns.slice(0, 6).join(", ")}
-                      </span>
-                    ),
-                  )}
-                </div>
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Broad Correlation / Association Summary</h3>
-                <p className="stage-note">
-                  {broadExploration.broad_correlation_summary.warning}
-                </p>
-                <div className="graph-draft-grid">
-                  <div className="issue-list">
-                    <h3>Strongest Positive</h3>
-                    {broadExploration.broad_correlation_summary.strongest_positive
-                      .slice(0, 5)
-                      .map((item) => (
-                        <article
-                          className="variable-card"
-                          key={`${item.column_a}-${item.column_b}-positive`}
-                        >
-                          <strong>
-                            {item.column_a} / {item.column_b}
-                          </strong>
-                          <p>{item.correlation}</p>
-                        </article>
-                      ))}
-                  </div>
-                  <div className="issue-list">
-                    <h3>Strongest Negative</h3>
-                    {broadExploration.broad_correlation_summary.strongest_negative
-                      .slice(0, 5)
-                      .map((item) => (
-                        <article
-                          className="variable-card"
-                          key={`${item.column_a}-${item.column_b}-negative`}
-                        >
-                          <strong>
-                            {item.column_a} / {item.column_b}
-                          </strong>
-                          <p>{item.correlation}</p>
-                        </article>
-                      ))}
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {broadExploration && (
-              <section className="role-section">
-                <h3>Data Quality Warnings</h3>
-                <div className="issue-list">
-                  {broadExploration.data_quality_warnings.map((warning, index) => (
-                    <article
-                      className="issue-card"
-                      key={`${warning.warning_type}-${index}`}
-                    >
-                      <strong>
-                        {warning.column ?? warning.warning_type} -{" "}
-                        {warning.severity}
-                      </strong>
-                      <p>{warning.message}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Knowledge Retrieval</p>
-                <h2>RAG Search</h2>
-              </div>
-            </div>
-
-            <div className="search-row">
-              <input
-                onChange={(event) => setRagQuery(event.target.value)}
-                placeholder="Search uploaded documents..."
-                value={ragQuery}
-              />
-              <input
-                max={10}
-                min={1}
-                onChange={(event) => setTopK(Number(event.target.value))}
-                type="number"
-                value={topK}
-              />
-              <button disabled={ragBusy} onClick={handleRagSearch} type="button">
-                {ragBusy ? "Searching..." : "Search"}
-              </button>
-            </div>
-
-            <StatusMessage error={ragError} message={ragMessage} />
-
-            <div className="rag-results">
-              {ragResults.length === 0 && (
-                <p className="empty-state">
-                  No RAG results yet. Search after documents have been ingested
-                  into ChromaDB.
-                </p>
-              )}
-              {ragResults.map((result, index) => (
-                <article className="result-card" key={`${result.source_filename}-${index}`}>
-                  <div className="result-meta">
-                    <strong>{result.source_filename ?? "Unknown source"}</strong>
-                    <span>
-                      {result.page_number ? `Page ${result.page_number} · ` : ""}
-                      Chunk {result.chunk_index ?? "?"} · Distance{" "}
-                      {typeof result.distance === "number"
-                        ? result.distance.toFixed(3)
-                        : "n/a"}
-                    </span>
-                  </div>
-                  <p>{result.chunk_text}</p>
-                </article>
-              ))}
-            </div>
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 4</p>
-            <h2>Causal Question and Provisional Variable Design</h2>
-            <p>
-              Generate candidate causal questions and provisional variable
-              recommendations using schema and RAG evidence.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Causal Design Support</p>
-                <h2>Candidate Causal Questions</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="research-objective">
-              Research Objective
-            </label>
-            <textarea
-              id="research-objective"
-              onChange={(event) => setResearchObjective(event.target.value)}
-              rows={3}
-              value={researchObjective}
-            />
-            <div className="demo-actions">
-              <button onClick={() => setResearchObjective(demoObjective)} type="button">
-                Use demo objective
-              </button>
-            </div>
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setCandidateDataset(event.target.value)}
-                value={candidateDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={candidateBusy}
-                onClick={handleCandidateGeneration}
-                type="button"
-              >
-                {candidateBusy ? "Generating..." : "Generate Questions"}
-              </button>
-            </div>
-
-            <StatusMessage error={candidateError} message={candidateMessage} />
-
-            <div className="candidate-list">
-              {candidateQuestions.length === 0 && (
-                <p className="empty-state">
-                  No candidate questions generated yet. Choose a dataset, confirm
-                  the objective, then generate draft causal questions.
-                </p>
-              )}
-              {candidateQuestions.map((candidate) => (
-                <article className="candidate-card" key={candidate.candidate_id}>
-                  <div className="candidate-header">
-                    <strong>{candidate.candidate_id}</strong>
-                    <span>{candidate.confidence} confidence</span>
-                  </div>
-                  <h3>{candidate.question_text}</h3>
-                  <dl>
-                    <dt>Population</dt>
-                    <dd>{candidate.population}</dd>
-                    <dt>Exposure</dt>
-                    <dd>{candidate.exposure}</dd>
-                    <dt>Outcome</dt>
-                    <dd>{candidate.outcome}</dd>
-                    <dt>Time Window</dt>
-                    <dd>{candidate.time_window}</dd>
-                    <dt>Limitations</dt>
-                    <dd>{candidate.limitations.join("; ")}</dd>
-                    <dt>Evidence</dt>
-                    <dd>{candidate.supporting_evidence.join("; ")}</dd>
-                  </dl>
-                  <button type="button">Mark for Review</button>
-                </article>
-              ))}
-            </div>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Variable Review</p>
-                <h2>Candidate Variables</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="confirmed-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="confirmed-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-            <div className="demo-actions">
-              <button onClick={() => setConfirmedQuestion(demoQuestion)} type="button">
-                Use demo question
-              </button>
-            </div>
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setVariableDataset(event.target.value)}
-                value={variableDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={variableBusy}
-                onClick={handleVariableRecommendation}
-                type="button"
-              >
-                {variableBusy ? "Recommending..." : "Recommend Variables"}
-              </button>
-            </div>
-
-            <StatusMessage error={variableError} message={variableMessage} />
-
-            <div className="variable-group-list">
-              {Object.values(variableGroups).flat().length === 0 && (
-                <p className="empty-state">
-                  No variable recommendations yet. Generate candidate variables
-                  after a question and dataset are selected.
-                </p>
-              )}
-              {Object.entries(variableGroups).map(([category, recommendations]) =>
-                recommendations.length > 0 ? (
-                  <section className="variable-group" key={category}>
-                    <h3>{category.replaceAll("_", " ")}</h3>
-                    <div className="candidate-list">
-                      {recommendations.map((recommendation) => (
-                        <article
-                          className="variable-card"
-                          key={`${category}-${recommendation.variable_name}-${recommendation.source_field}`}
-                        >
-                          <div className="candidate-header">
-                            <strong>{recommendation.variable_name}</strong>
-                            <span>
-                              {recommendation.recommendation_status} -{" "}
-                              {recommendation.confidence}
-                            </span>
-                          </div>
-                          <dl>
-                            <dt>Source</dt>
-                            <dd>{recommendation.source_field}</dd>
-                            <dt>Role Hint</dt>
-                            <dd>{recommendation.possible_role_hint}</dd>
-                            <dt>Timing</dt>
-                            <dd>{recommendation.measurement_timing}</dd>
-                            <dt>Missingness</dt>
-                            <dd>{recommendation.missingness_warning}</dd>
-                            <dt>Evidence</dt>
-                            <dd>{recommendation.supporting_evidence.join("; ")}</dd>
-                          </dl>
-                          <button type="button">
-                            {recommendation.user_decision_default}
-                          </button>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ) : null,
-              )}
-            </div>
-
-            {derivedFeatures.length > 0 && (
-              <section className="derived-feature-list">
-                <h3>Derived Feature Recommendations</h3>
-                <div className="candidate-list">
-                  {derivedFeatures.map((feature) => (
-                    <article
-                      className="variable-card"
-                      key={feature.derived_feature_name}
-                    >
-                      <div className="candidate-header">
-                        <strong>{feature.derived_feature_name}</strong>
-                        <span>{feature.confidence} confidence</span>
-                      </div>
-                      <dl>
-                        <dt>Source Columns</dt>
-                        <dd>{feature.source_columns_needed.join(", ")}</dd>
-                        <dt>Window</dt>
-                        <dd>{feature.calculation_window}</dd>
-                        <dt>Aggregation</dt>
-                        <dd>{feature.aggregation_method}</dd>
-                        <dt>Data Requirement</dt>
-                        <dd>{feature.minimum_data_requirement}</dd>
-                        <dt>Leakage Risk</dt>
-                        <dd>{feature.leakage_risk}</dd>
-                        <dt>Missing Data</dt>
-                        <dd>{feature.missing_data_handling}</dd>
-                      </dl>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 5</p>
-            <h2>Targeted Variable Data Exploration and Feasibility Check</h2>
-            <p>
-              Check whether the selected variables and time structure can
-              actually support the proposed causal question.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Implementation Feasibility</p>
-                <h2>Selected Variable Feasibility</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="targeted-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="targeted-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setTargetedDataset(event.target.value)}
-                value={targetedDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={targetedBusy}
-                onClick={handleTargetedFeasibility}
-                type="button"
-              >
-                {targetedBusy ? "Checking..." : "Run Feasibility Check"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="targeted-variables">
-              Selected Variables
-            </label>
-            <textarea
-              className="code-textarea"
-              id="targeted-variables"
-              onChange={(event) => setTargetedVariablesText(event.target.value)}
-              rows={7}
-              value={targetedVariablesText}
-            />
-            {selectedVariablesCount === 0 && (
-              <p className="empty-state">
-                No selected variables yet. Add one variable per line or carry
-                forward recommendations from Step 4.
-              </p>
-            )}
-
-            <div className="placeholder-grid">
-              <input
-                onChange={(event) => setTargetedExposure(event.target.value)}
-                placeholder="Exposure"
-                value={targetedExposure}
-              />
-              <input
-                onChange={(event) => setTargetedOutcome(event.target.value)}
-                placeholder="Outcome"
-                value={targetedOutcome}
-              />
-              <input
-                onChange={(event) => setTargetedComparator(event.target.value)}
-                placeholder="Comparator, optional"
-                value={targetedComparator}
-              />
-              <input
-                onChange={(event) => setTargetedParticipantId(event.target.value)}
-                placeholder="Participant ID"
-                value={targetedParticipantId}
-              />
-              <input
-                onChange={(event) => setTargetedTimestamp(event.target.value)}
-                placeholder="Timestamp column"
-                value={targetedTimestamp}
-              />
-              <input
-                onChange={(event) => setTargetedTimeWindow(event.target.value)}
-                placeholder="Time window"
-                value={targetedTimeWindow}
-              />
-            </div>
-
-            <label className="field-label" htmlFor="targeted-lag">
-              Lag Definition
-            </label>
-            <input
-              id="targeted-lag"
-              onChange={(event) => setTargetedLagDefinition(event.target.value)}
-              value={targetedLagDefinition}
-            />
-
-            <p className="stage-note">
-              If this check is infeasible, return to Step 4 and revise the
-              causal question, variable set, or timing window.
-            </p>
-            <p className="stage-note">
-              Targeted exploration checks implementation feasibility. It does
-              not establish causality.
-            </p>
-
-            <StatusMessage error={targetedError} message={targetedMessage} />
-
-            {!targetedFeasibility && (
-              <p className="empty-state">
-                Feasibility has not been checked yet. This step should verify
-                timing, missingness, overlap, and whether selected variables can
-                support the proposed design.
-              </p>
-            )}
-
-            {targetedFeasibility && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{targetedFeasibility.feasibility_status}</strong>
-                  <span>Feasibility</span>
-                </div>
-                <div>
-                  <strong>
-                    {targetedFeasibility.safe_to_continue_to_graph ? "Yes" : "No"}
-                  </strong>
-                  <span>Safe To Graph</span>
-                </div>
-                <p>{targetedFeasibility.exploration_warning}</p>
-              </section>
-            )}
-
-            {targetedFeasibility && (
-              <section className="schema-summary">
-                <div>
-                  <strong>{targetedFeasibility.feasibility_score}</strong>
-                  <span>Score</span>
-                </div>
-                <div>
-                  <strong>
-                    {targetedFeasibility.missing_selected_variables.length}
-                  </strong>
-                  <span>Missing Variables</span>
-                </div>
-                <div>
-                  <strong>
-                    {
-                      targetedFeasibility.analysis_ready_sample_summary
-                        .complete_case_rows_for_selected_variables
-                    }
-                  </strong>
-                  <span>Complete Cases</span>
-                </div>
-                <div>
-                  <strong>
-                    {String(
-                      targetedFeasibility.participant_level_availability
-                        .number_of_participants ?? "Unknown",
-                    )}
-                  </strong>
-                  <span>Participants</span>
-                </div>
-              </section>
-            )}
-
-            {targetedFeasibility && (
-              <section className="role-section">
-                <h3>Variable Summaries</h3>
-                <div className="candidate-list">
-                  {targetedFeasibility.variable_summaries.map((summary) => (
-                    <article className="variable-card" key={summary.variable_name}>
-                      <div className="candidate-header">
-                        <strong>{summary.variable_name}</strong>
-                        <span>
-                          {summary.exists_in_dataset ? "found" : "missing"}
-                        </span>
-                      </div>
-                      <dl>
-                        <dt>Type</dt>
-                        <dd>{summary.data_type ?? "n/a"}</dd>
-                        <dt>Missing</dt>
-                        <dd>
-                          {summary.missing_percentage ?? "n/a"}% (
-                          {summary.missing_count ?? "n/a"} rows)
-                        </dd>
-                        <dt>Unique</dt>
-                        <dd>{summary.unique_values ?? "n/a"}</dd>
-                        <dt>Samples</dt>
-                        <dd>{summary.sample_values.join(", ") || "None"}</dd>
-                      </dl>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {targetedFeasibility && (
-              <section className="role-section">
-                <h3>Exposure, Outcome, Lag, and Overlap</h3>
-                <div className="graph-draft-grid">
-                  <article className="variable-card">
-                    <strong>Exposure</strong>
-                    <p>{targetedFeasibility.exposure_feasibility.status}</p>
-                    <span>
-                      Variation:{" "}
-                      {String(targetedFeasibility.exposure_feasibility.has_variation)}
-                    </span>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Outcome</strong>
-                    <p>{targetedFeasibility.outcome_feasibility.status}</p>
-                    <span>
-                      Variation:{" "}
-                      {String(targetedFeasibility.outcome_feasibility.has_variation)}
-                    </span>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Lag Feasibility</strong>
-                    <p>{String(targetedFeasibility.lag_feasibility.status)}</p>
-                    <span>
-                      {String(
-                        targetedFeasibility.lag_feasibility
-                          .detected_time_variables ?? "",
-                      )}
-                    </span>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Overlap / Comparator</strong>
-                    <p>{targetedFeasibility.overlap_or_comparator_summary.status}</p>
-                    <span>
-                      Comparator: {targetedComparator || "unclear"}
-                    </span>
-                  </article>
-                </div>
-              </section>
-            )}
-
-            {targetedFeasibility && (
-              <section className="role-section">
-                <h3>Warnings and Revision Actions</h3>
-                <div className="issue-list">
-                  {targetedFeasibility.data_quality_warnings.map((warning, index) => (
-                    <article
-                      className="issue-card"
-                      key={`${warning.warning_type}-${index}`}
-                    >
-                      <strong>
-                        {warning.variable ?? warning.warning_type} -{" "}
-                        {warning.severity}
-                      </strong>
-                      <p>{warning.message}</p>
-                    </article>
-                  ))}
-                </div>
-                <h3>Recommended Revisions</h3>
-                <ul className="warning-list">
-                  {targetedFeasibility.recommended_revision_actions.map((action) => (
-                    <li key={action}>{action}</li>
-                  ))}
-                </ul>
-                <h3>Redundancy / Correlation</h3>
-                <p className="stage-note">
-                  {targetedFeasibility.redundancy_or_correlation_summary.warning}
-                </p>
-              </section>
-            )}
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 6</p>
-            <h2>Causal Graph and Final Role Validation</h2>
-            <p>
-              Review and edit the causal graph. Edges represent assumptions, not
-              proven causal relationships.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Final Role Review</p>
-                <h2>Final Causal Role Validation</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="role-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="role-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setRoleDataset(event.target.value)}
-                value={roleDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={roleBusy}
-                onClick={handleRoleValidation}
-                type="button"
-              >
-                {roleBusy ? "Validating..." : "Recommend & Validate Roles"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="selected-variables-json">
-              Selected Variables JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="selected-variables-json"
-              onChange={(event) => setSelectedVariablesJson(event.target.value)}
-              rows={12}
-              value={selectedVariablesJson}
-            />
-
-            <StatusMessage error={roleError} message={roleMessage} />
-
-            {!roleValidation && (
-              <p className="empty-state">
-                Final role validation has not run yet. Use this step to keep ID,
-                timing, exposure, outcome, and adjustment roles separate before
-                graph design.
-              </p>
-            )}
-
-            {roleValidation && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{roleValidation.validation_status}</strong>
-                  <span>Validation Status</span>
-                </div>
-                <div>
-                  <strong>
-                    {roleValidation.safe_to_continue_to_graph ? "Yes" : "No"}
-                  </strong>
-                  <span>Safe To Continue</span>
-                </div>
-                <p>{roleValidation.recommended_next_action}</p>
-              </section>
-            )}
-
-            {roleRecommendations.length > 0 && (
-              <section className="role-section">
-                <h3>LLM Role Recommendations</h3>
-                <div className="candidate-list">
-                  {roleRecommendations.map((recommendation) => (
-                    <article
-                      className="variable-card"
-                      key={`${recommendation.variable_name}-${recommendation.primary_role}`}
-                    >
-                      <div className="candidate-header">
-                        <strong>{recommendation.variable_name}</strong>
-                        <span>{recommendation.confidence} confidence</span>
-                      </div>
-                      <dl>
-                        <dt>Roles</dt>
-                        <dd>{recommendation.recommended_roles.join(", ")}</dd>
-                        <dt>Primary</dt>
-                        <dd>{recommendation.primary_role}</dd>
-                        <dt>Temporal</dt>
-                        <dd>{recommendation.temporal_role}</dd>
-                        <dt>Measurement</dt>
-                        <dd>{recommendation.measurement_role}</dd>
-                        <dt>Adjustment</dt>
-                        <dd>{recommendation.adjustment_recommendation}</dd>
-                        <dt>Rationale</dt>
-                        <dd>{recommendation.rationale}</dd>
-                        <dt>Uncertainty</dt>
-                        <dd>{recommendation.uncertainty_notes}</dd>
-                      </dl>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {roleValidation && (
-              <section className="role-section">
-                <h3>Backend Validation Warnings</h3>
-                <div className="issue-list">
-                  {roleValidation.warnings.length === 0 ? (
-                    <p>No warnings returned.</p>
-                  ) : (
-                    roleValidation.warnings.map((warning, index) => (
-                      <article className="issue-card" key={`${warning.warning_type}-${index}`}>
-                        <strong>
-                          {warning.variable_name ?? "General"} -{" "}
-                          {warning.severity}
-                        </strong>
-                        <p>{warning.message}</p>
-                        <span>{warning.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>Backend Validation Errors</h3>
-                <div className="issue-list">
-                  {roleValidation.errors.length === 0 ? (
-                    <p>No errors returned.</p>
-                  ) : (
-                    roleValidation.errors.map((error, index) => (
-                      <article className="issue-card issue-card--error" key={`${error.error_type}-${index}`}>
-                        <strong>
-                          {error.variable_name ?? "General"} - {error.severity}
-                        </strong>
-                        <p>{error.message}</p>
-                        <span>{error.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Graph Draft</p>
-                <h2>Causal Graph Draft</h2>
-              </div>
-            </div>
-
-            <div className="placeholder-grid">
-              <span>Chain review</span>
-              <span>Fork review</span>
-              <span>Collider review</span>
-              <span>DAG / CPDAG / PAG / MAG explanation</span>
-            </div>
-
-            <label className="field-label" htmlFor="graph-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="graph-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setGraphDataset(event.target.value)}
-                value={graphDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={graphBusy}
-                onClick={handleGraphGeneration}
-                type="button"
-              >
-                {graphBusy ? "Generating..." : "Generate Graph Draft"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="graph-selected-variables">
-              Selected Variables JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="graph-selected-variables"
-              onChange={(event) => setSelectedVariablesJson(event.target.value)}
-              rows={8}
-              value={selectedVariablesJson}
-            />
-
-            <label className="field-label" htmlFor="graph-role-recommendations">
-              Role Recommendations JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="graph-role-recommendations"
-              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
-              rows={10}
-              value={roleRecommendationsJson}
-            />
-
-            <StatusMessage error={graphError} message={graphMessage} />
-
-            <section className="warning-card graph-safety-card">
-              <strong>Graph Safety Notes</strong>
-              <ul>
-                <li>This graph is a draft causal structure and requires user review.</li>
-                <li>Edges are assumptions, not proven causal relationships.</li>
-                <li>
-                  Backend validation checks graph structure, timing, and role
-                  conflicts.
-                </li>
-              </ul>
-            </section>
-
-            <section className="graph-education-grid">
-              <article>
-                <strong>Chain</strong>
-                <span>{"A -> B -> C"}</span>
-              </article>
-              <article>
-                <strong>Fork</strong>
-                <span>{"A <- B -> C"}</span>
-              </article>
-              <article>
-                <strong>Collider</strong>
-                <span>{"A -> B <- C"}</span>
-              </article>
-              <article>
-                <strong>DAG</strong>
-                <span>Directed acyclic graph</span>
-              </article>
-            </section>
-
-            <CausalGraphCanvas
-              graphDraft={graphDraft}
-              onGraphChange={setEditedGraphDraft}
-              validation={graphValidation}
-            />
-
-            <div className="action-row">
-              <button
-                disabled={graphBusy || !editedGraphDraft}
-                onClick={handleEditedGraphValidation}
-                type="button"
-              >
-                {graphBusy ? "Validating..." : "Validate Edited Graph"}
-              </button>
-              <span className="status-line">
-                {editedGraphDraft
-                  ? `${editedGraphDraft.nodes.length} nodes / ${editedGraphDraft.edges.length} edges ready for validation`
-                  : "No edited graph yet"}
-              </span>
-            </div>
-
-            {graphValidation && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{graphValidation.graph_validation_status}</strong>
-                  <span>Graph Status</span>
-                </div>
-                <div>
-                  <strong>
-                    {graphValidation.safe_to_continue_to_identification
-                      ? "Yes"
-                      : "No"}
-                  </strong>
-                  <span>Safe To Identify</span>
-                </div>
-                <p>{graphValidation.suggested_graph_edits.join(" ")}</p>
-              </section>
-            )}
-
-            {!graphDraft && (
-              <p className="empty-state">
-                No graph draft yet. Generate a first-pass graph, then review the
-                React Flow canvas and validate edited assumptions before moving
-                to identification.
-              </p>
-            )}
-
-            {graphDraft && (
-              <section className="graph-draft-grid">
-                <div className="role-section">
-                  <h3>Nodes</h3>
-                  <div className="candidate-list">
-                    {graphDraft.nodes.map((node) => (
-                      <article className="variable-card" key={node.node_id}>
-                        <div className="candidate-header">
-                          <strong>{node.display_name || node.variable_name}</strong>
-                          <span>{node.confidence} confidence</span>
-                        </div>
-                        <dl>
-                          <dt>ID</dt>
-                          <dd>{node.node_id}</dd>
-                          <dt>Role</dt>
-                          <dd>{node.role}</dd>
-                          <dt>Temporal</dt>
-                          <dd>{node.temporal_role}</dd>
-                          <dt>Category</dt>
-                          <dd>{node.data_category}</dd>
-                        </dl>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="role-section">
-                  <h3>Edges</h3>
-                  <div className="candidate-list">
-                    {graphDraft.edges.map((edge) => (
-                      <article
-                        className="variable-card"
-                        key={`${edge.source}-${edge.target}`}
-                      >
-                        <div className="candidate-header">
-                          <strong>
-                            {`${edge.source} -> ${edge.target}`}
-                          </strong>
-                          <span>{edge.confidence} confidence</span>
-                        </div>
-                        <dl>
-                          <dt>Type</dt>
-                          <dd>{edge.edge_type}</dd>
-                          <dt>Timing</dt>
-                          <dd>{edge.temporal_assumption}</dd>
-                          <dt>Rationale</dt>
-                          <dd>{edge.rationale}</dd>
-                          <dt>Evidence</dt>
-                          <dd>{edge.supporting_evidence.join("; ")}</dd>
-                        </dl>
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {graphDraft && graphDraft.uncertain_edges.length > 0 && (
-              <section className="role-section">
-                <h3>Uncertain Edges</h3>
-                <div className="issue-list">
-                  {graphDraft.uncertain_edges.map((edge) => (
-                    <article
-                      className="issue-card"
-                      key={`${edge.source}-${edge.target}-${edge.possible_direction}`}
-                    >
-                      <strong>
-                        {edge.source} / {edge.target} - {edge.possible_direction}
-                      </strong>
-                      <p>{edge.uncertainty_reason}</p>
-                      <span>{edge.recommended_user_review}</span>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {graphValidation && (
-              <section className="role-section">
-                <h3>Backend Graph Validation Warnings</h3>
-                <div className="issue-list">
-                  {graphValidation.warnings.length === 0 ? (
-                    <p>No warnings returned.</p>
-                  ) : (
-                    graphValidation.warnings.map((warning, index) => (
-                      <article className="issue-card" key={`${warning.warning_type}-${index}`}>
-                        <strong>
-                          {(warning.source ?? "General") +
-                            (warning.target ? ` -> ${warning.target}` : "")}{" "}
-                          - {warning.severity}
-                        </strong>
-                        <p>{warning.message}</p>
-                        <span>{warning.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>Backend Graph Validation Errors</h3>
-                <div className="issue-list">
-                  {graphValidation.errors.length === 0 ? (
-                    <p>No errors returned.</p>
-                  ) : (
-                    graphValidation.errors.map((error, index) => (
-                      <article className="issue-card issue-card--error" key={`${error.error_type}-${index}`}>
-                        <strong>
-                          {(error.source ?? "General") +
-                            (error.target ? ` -> ${error.target}` : "")}{" "}
-                          - {error.severity}
-                        </strong>
-                        <p>{error.message}</p>
-                        <span>{error.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 7</p>
-            <h2>Identification and Estimation Strategy</h2>
-            <p>
-              Check identification readiness and generate analysis strategy
-              guidance under stated assumptions.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Analysis Readiness</p>
-                <h2>Identification Check</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="identification-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="identification-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setIdentificationDataset(event.target.value)}
-                value={identificationDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={identificationBusy}
-                onClick={handleIdentificationCheck}
-                type="button"
-              >
-                {identificationBusy ? "Checking..." : "Run Identification Check"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="identification-graph-json">
-              Graph JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="identification-graph-json"
-              onChange={(event) => setIdentificationGraphJson(event.target.value)}
-              rows={12}
-              value={identificationGraphJson}
-            />
-
-            <label className="field-label" htmlFor="identification-roles-json">
-              Role Recommendations JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="identification-roles-json"
-              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
-              rows={8}
-              value={roleRecommendationsJson}
-            />
-
-            <label className="field-label" htmlFor="adjustment-set">
-              User Adjustment Set
-            </label>
-            <input
-              id="adjustment-set"
-              onChange={(event) => setAdjustmentSetText(event.target.value)}
-              value={adjustmentSetText}
-            />
-
-            <StatusMessage
-              error={identificationError}
-              message={identificationMessage}
-            />
-
-            {!identificationResult && (
-              <p className="empty-state">
-                Identification has not been checked yet. Provide a graph and
-                adjustment set to assess whether the proposed design is ready
-                for strategy guidance.
-              </p>
-            )}
-
-            {identificationResult && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{identificationResult.identification_status}</strong>
-                  <span>Identification Status</span>
-                </div>
-                <div>
-                  <strong>
-                    {identificationResult.safe_to_continue_to_analysis_strategy
-                      ? "Yes"
-                      : "No"}
-                  </strong>
-                  <span>Safe To Plan</span>
-                </div>
-                <p>{identificationResult.plain_language_summary}</p>
-              </section>
-            )}
-
-            {identificationResult && (
-              <section className="role-section">
-                <h3>Adjustment Set</h3>
-                <div className="schema-summary">
-                  <div>
-                    <strong>{identificationResult.exposure ?? "Unknown"}</strong>
-                    <span>Exposure</span>
-                  </div>
-                  <div>
-                    <strong>{identificationResult.outcome ?? "Unknown"}</strong>
-                    <span>Outcome</span>
-                  </div>
-                  <div>
-                    <strong>{identificationResult.adjustment_set_status}</strong>
-                    <span>Adjustment Status</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {identificationResult.proposed_adjustment_set.join(", ") ||
-                        "None"}
-                    </strong>
-                    <span>Proposed Set</span>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {identificationResult && (
-              <section className="role-section">
-                <h3>Warnings</h3>
-                <div className="issue-list">
-                  {identificationResult.warnings.length === 0 ? (
-                    <p>No warnings returned.</p>
-                  ) : (
-                    identificationResult.warnings.map((warning, index) => (
-                      <article className="issue-card" key={`${warning.issue_type}-${index}`}>
-                        <strong>
-                          {warning.variable_name ??
-                            warning.source ??
-                            "General"}{" "}
-                          - {warning.severity}
-                        </strong>
-                        <p>{warning.message}</p>
-                        <span>{warning.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>Errors</h3>
-                <div className="issue-list">
-                  {identificationResult.errors.length === 0 ? (
-                    <p>No errors returned.</p>
-                  ) : (
-                    identificationResult.errors.map((error, index) => (
-                      <article className="issue-card issue-card--error" key={`${error.issue_type}-${index}`}>
-                        <strong>
-                          {error.variable_name ?? error.source ?? "General"} -{" "}
-                          {error.severity}
-                        </strong>
-                        <p>{error.message}</p>
-                        <span>{error.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>Open Issues</h3>
-                <div className="issue-list">
-                  {identificationResult.open_issues.length === 0 ? (
-                    <p>No open issues returned.</p>
-                  ) : (
-                    identificationResult.open_issues.map((issue, index) => (
-                      <article className="issue-card" key={`${issue.issue_type}-${index}`}>
-                        <strong>
-                          {issue.variable_name ?? issue.source ?? "General"} -{" "}
-                          {issue.severity}
-                        </strong>
-                        <p>{issue.message}</p>
-                        <span>{issue.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Estimation Guidance</p>
-                <h2>Analysis Strategy</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="strategy-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="strategy-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setStrategyDataset(event.target.value)}
-                value={strategyDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={strategyBusy}
-                onClick={handleAnalysisStrategy}
-                type="button"
-              >
-                {strategyBusy ? "Generating..." : "Generate Strategy"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="strategy-identification-json">
-              Identification Result JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="strategy-identification-json"
-              onChange={(event) => setIdentificationResultJson(event.target.value)}
-              rows={10}
-              value={identificationResultJson}
-            />
-
-            <StatusMessage error={strategyError} message={strategyMessage} />
-
-            {!strategyResult && (
-              <p className="empty-state">
-                No analysis strategy has been generated yet. Strategy guidance is
-                planning support only and does not estimate a causal effect.
-              </p>
-            )}
-
-            {strategyResult && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{strategyResult.strategy_plan.strategy_status}</strong>
-                  <span>Strategy Status</span>
-                </div>
-                <div>
-                  <strong>{strategyResult.strategy_plan.confidence}</strong>
-                  <span>Confidence</span>
-                </div>
-                <p>{strategyResult.strategy_plan.recommended_next_action}</p>
-              </section>
-            )}
-
-            {strategyResult && (
-              <section className="role-section">
-                <h3>Plan Summary</h3>
-                <div className="schema-summary">
-                  <div>
-                    <strong>{strategyResult.exposure ?? "Unknown"}</strong>
-                    <span>Exposure</span>
-                  </div>
-                  <div>
-                    <strong>{strategyResult.outcome ?? "Unknown"}</strong>
-                    <span>Outcome</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {strategyResult.strategy_plan.unit_of_analysis}
-                    </strong>
-                    <span>Unit</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {strategyResult.adjustment_set.join(", ") || "None"}
-                    </strong>
-                    <span>Adjustment</span>
-                  </div>
-                </div>
-
-                <div className="variable-card">
-                  <dl>
-                    <dt>Estimand</dt>
-                    <dd>{strategyResult.strategy_plan.target_estimand}</dd>
-                    <dt>Comparator</dt>
-                    <dd>{strategyResult.strategy_plan.comparator_definition}</dd>
-                    <dt>Time Window</dt>
-                    <dd>{strategyResult.strategy_plan.time_window}</dd>
-                    <dt>Estimator Family</dt>
-                    <dd>
-                      {strategyResult.strategy_plan.recommended_estimator_family.join(
-                        ", ",
-                      )}
-                    </dd>
-                    <dt>Repeated Measures</dt>
-                    <dd>
-                      {strategyResult.strategy_plan.repeated_measures_handling}
-                    </dd>
-                    <dt>Missing Data</dt>
-                    <dd>{strategyResult.strategy_plan.missing_data_strategy}</dd>
-                    <dt>Cannot Claim</dt>
-                    <dd>{strategyResult.strategy_plan.what_cannot_be_claimed}</dd>
-                  </dl>
-                </div>
-              </section>
-            )}
-
-            {strategyResult && (
-              <section className="role-section">
-                <h3>Deterministic Strategy Warnings</h3>
-                <div className="issue-list">
-                  {strategyResult.deterministic_warnings.length === 0 ? (
-                    <p>No warnings returned.</p>
-                  ) : (
-                    strategyResult.deterministic_warnings.map((warning, index) => (
-                      <article className="issue-card" key={`${warning.issue_type}-${index}`}>
-                        <strong>
-                          {warning.variable_name ?? "General"} -{" "}
-                          {warning.severity}
-                        </strong>
-                        <p>{warning.message}</p>
-                        <span>{warning.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>Deterministic Strategy Errors</h3>
-                <div className="issue-list">
-                  {strategyResult.deterministic_errors.length === 0 ? (
-                    <p>No errors returned.</p>
-                  ) : (
-                    strategyResult.deterministic_errors.map((error, index) => (
-                      <article className="issue-card issue-card--error" key={`${error.issue_type}-${index}`}>
-                        <strong>
-                          {error.variable_name ?? "General"} - {error.severity}
-                        </strong>
-                        <p>{error.message}</p>
-                        <span>{error.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            )}
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">Assumption Review</p>
-                <h2>Assumptions & Sensitivity</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="assumptions-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="assumptions-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setAssumptionsDataset(event.target.value)}
-                value={assumptionsDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={assumptionBusy}
-                onClick={handleAssumptionReview}
-                type="button"
-              >
-                {assumptionBusy ? "Reviewing..." : "Review Assumptions"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="assumptions-graph-json">
-              Graph JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="assumptions-graph-json"
-              onChange={(event) => setIdentificationGraphJson(event.target.value)}
-              rows={8}
-              value={identificationGraphJson}
-            />
-
-            <label className="field-label" htmlFor="assumptions-roles-json">
-              Role Recommendations JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="assumptions-roles-json"
-              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
-              rows={8}
-              value={roleRecommendationsJson}
-            />
-
-            <label className="field-label" htmlFor="assumptions-identification-json">
-              Identification Result JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="assumptions-identification-json"
-              onChange={(event) => setIdentificationResultJson(event.target.value)}
-              rows={8}
-              value={identificationResultJson}
-            />
-
-            <label className="field-label" htmlFor="assumptions-strategy-json">
-              Analysis Strategy JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="assumptions-strategy-json"
-              onChange={(event) => setStrategyResultJson(event.target.value)}
-              rows={10}
-              value={strategyResultJson}
-            />
-
-            <StatusMessage error={assumptionError} message={assumptionMessage} />
-
-            {!assumptionReview && (
-              <p className="empty-state">
-                No assumptions or sensitivity review yet. This stage should
-                document unmeasured confounding, missing data, timing, and
-                robustness plans before export.
-              </p>
-            )}
-
-            {assumptionReview && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{assumptionReview.review.review_status}</strong>
-                  <span>Review Status</span>
-                </div>
-                <div>
-                  <strong>{assumptionReview.review.confidence}</strong>
-                  <span>Confidence</span>
-                </div>
-                <p>{assumptionReview.review.plain_language_summary}</p>
-              </section>
-            )}
-
-            {assumptionReview && (
-              <section className="role-section">
-                <h3>Assumption Checklist</h3>
-                <div className="issue-list">
-                  {assumptionReview.review.assumptions.map((assumption) => (
-                    <article
-                      className="issue-card"
-                      key={assumption.assumption_name}
-                    >
-                      <strong>
-                        {assumption.assumption_name} - {assumption.status}
-                      </strong>
-                      <p>{assumption.rationale}</p>
-                      <span>{assumption.recommended_check}</span>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {assumptionReview && (
-              <section className="role-section">
-                <h3>Sensitivity Checks</h3>
-                <ul className="warning-list">
-                  {assumptionReview.review.sensitivity_checks.map((check) => (
-                    <li key={check}>{check}</li>
-                  ))}
-                </ul>
-
-                <h3>Robustness Checks</h3>
-                <ul className="warning-list">
-                  {assumptionReview.review.robustness_checks.map((check) => (
-                    <li key={check}>{check}</li>
-                  ))}
-                </ul>
-
-                <h3>Deterministic Assumption Warnings</h3>
-                <div className="issue-list">
-                  {assumptionReview.deterministic_warnings.length === 0 ? (
-                    <p>No deterministic warnings returned.</p>
-                  ) : (
-                    assumptionReview.deterministic_warnings.map((warning, index) => (
-                      <article
-                        className="issue-card"
-                        key={`${warning.issue_type}-${index}`}
-                      >
-                        <strong>
-                          {warning.variable_name ?? "General"} -{" "}
-                          {warning.severity}
-                        </strong>
-                        <p>{warning.message}</p>
-                        <span>{warning.suggested_fix}</span>
-                      </article>
-                    ))
-                  )}
-                </div>
-
-                <h3>What Remains Uncertain</h3>
-                <ul className="warning-list">
-                  {assumptionReview.review.causal_interpretation_limits.map(
-                    (limit) => (
-                      <li key={limit}>{limit}</li>
-                    ),
-                  )}
-                </ul>
-              </section>
-            )}
-          </article>
-
-          <article className="workflow-stage-card feature-panel--wide">
-            <p className="section-label">Step 8</p>
-            <h2>Review and Export</h2>
-            <p>
-              Generate a causal design and analysis guidance report. This is not
-              a causal results report.
-            </p>
-          </article>
-
-          <article className="panel feature-panel feature-panel--wide">
-            <div className="panel-heading">
-              <div>
-                <p className="section-label">JSON Report Export</p>
-                <h2>Review & Export Report</h2>
-              </div>
-            </div>
-
-            <label className="field-label" htmlFor="report-title">
-              Project Title
-            </label>
-            <input
-              id="report-title"
-              onChange={(event) => setReportTitle(event.target.value)}
-              value={reportTitle}
-            />
-
-            <label className="field-label" htmlFor="report-objective">
-              Research Objective
-            </label>
-            <textarea
-              id="report-objective"
-              onChange={(event) => setResearchObjective(event.target.value)}
-              rows={3}
-              value={researchObjective}
-            />
-
-            <label className="field-label" htmlFor="report-question">
-              Confirmed Question
-            </label>
-            <textarea
-              id="report-question"
-              onChange={(event) => setConfirmedQuestion(event.target.value)}
-              rows={3}
-              value={confirmedQuestion}
-            />
-
-            <div className="control-row">
-              <select
-                onChange={(event) => setReportDataset(event.target.value)}
-                value={reportDataset}
-              >
-                <option value="">Select dataset...</option>
-                {datasets.map((dataset) => (
-                  <option key={dataset.filename} value={dataset.filename}>
-                    {dataset.filename}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={reportBusy}
-                onClick={handleReportGeneration}
-                type="button"
-              >
-                {reportBusy ? "Generating..." : "Generate Report"}
-              </button>
-            </div>
-
-            <label className="field-label" htmlFor="report-selected-variables">
-              Selected Variables JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-selected-variables"
-              onChange={(event) => setSelectedVariablesJson(event.target.value)}
-              rows={6}
-              value={selectedVariablesJson}
-            />
-
-            <label className="field-label" htmlFor="report-roles-json">
-              Role Recommendations JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-roles-json"
-              onChange={(event) => setRoleRecommendationsJson(event.target.value)}
-              rows={6}
-              value={roleRecommendationsJson}
-            />
-
-            <label className="field-label" htmlFor="report-graph-json">
-              Graph JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-graph-json"
-              onChange={(event) => setIdentificationGraphJson(event.target.value)}
-              rows={7}
-              value={identificationGraphJson}
-            />
-
-            <label className="field-label" htmlFor="report-identification-json">
-              Identification Result JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-identification-json"
-              onChange={(event) => setIdentificationResultJson(event.target.value)}
-              rows={7}
-              value={identificationResultJson}
-            />
-
-            <label className="field-label" htmlFor="report-strategy-json">
-              Analysis Strategy JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-strategy-json"
-              onChange={(event) => setStrategyResultJson(event.target.value)}
-              rows={7}
-              value={strategyResultJson}
-            />
-
-            <label className="field-label" htmlFor="report-assumptions-json">
-              Assumptions Review JSON
-            </label>
-            <textarea
-              className="code-textarea"
-              id="report-assumptions-json"
-              onChange={(event) => setAssumptionReviewJson(event.target.value)}
-              rows={7}
-              value={assumptionReviewJson}
-            />
-
-            <label className="field-label" htmlFor="report-notes">
-              User Notes
-            </label>
-            <textarea
-              id="report-notes"
-              onChange={(event) => setReportUserNotes(event.target.value)}
-              rows={3}
-              value={reportUserNotes}
-            />
-
-            <p className="stage-note">
-              PDF export will be added later. This version generates a
-              structured JSON report.
-            </p>
-
-            <StatusMessage error={reportError} message={reportMessage} />
-
-            {!reportResult && (
-              <p className="empty-state">
-                No report generated yet. Review the carried-forward design state,
-                then generate a causal design and analysis guidance report.
-              </p>
-            )}
-
-            {reportResult && (
-              <section className="validation-summary">
-                <div>
-                  <strong>{reportResult.report_type}</strong>
-                  <span>Report Type</span>
-                </div>
-                <div>
-                  <strong>{reportResult.claim_audit.status}</strong>
-                  <span>Claim Audit</span>
-                </div>
-                <p>{reportResult.what_cannot_be_claimed}</p>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>{reportResult.report_title}</h3>
-                <div className="variable-card">
-                  <dl>
-                    <dt>Final Question</dt>
-                    <dd>{reportResult.final_research_question}</dd>
-                    <dt>Exposure</dt>
-                    <dd>{reportResult.exposure ?? "Not specified"}</dd>
-                    <dt>Outcome</dt>
-                    <dd>{reportResult.outcome ?? "Not specified"}</dd>
-                    <dt>Time Window</dt>
-                    <dd>{reportResult.time_window}</dd>
-                    <dt>Unit</dt>
-                    <dd>{reportResult.unit_of_analysis}</dd>
-                    <dt>Adjustment</dt>
-                    <dd>{reportResult.adjustment_set.join(", ") || "None"}</dd>
-                  </dl>
-                </div>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>Dataset and Feasibility</h3>
-                <div className="schema-summary">
-                  <div>
-                    <strong>
-                      {String(reportResult.dataset_summary.number_of_rows ?? "n/a")}
-                    </strong>
-                    <span>Rows</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {String(reportResult.dataset_summary.number_of_columns ?? "n/a")}
-                    </strong>
-                    <span>Columns</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {String(
-                        reportResult.data_feasibility_summary
-                          ?.feasibility_status ?? "not provided",
-                      )}
-                    </strong>
-                    <span>Feasibility</span>
-                  </div>
-                  <div>
-                    <strong>
-                      {String(
-                        reportResult.data_feasibility_summary
-                          ?.safe_to_continue_to_graph ?? "not provided",
-                      )}
-                    </strong>
-                    <span>Safe To Graph</span>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>Causal Role Table</h3>
-                <div className="candidate-list">
-                  {reportResult.causal_role_table.map((role, index) => (
-                    <article className="variable-card" key={`report-role-${index}`}>
-                      <strong>{String(role.variable_name ?? "Variable")}</strong>
-                      <p>{String(role.primary_role ?? "Role not specified")}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>Identification, Strategy, and Assumptions</h3>
-                <div className="graph-draft-grid">
-                  <article className="variable-card">
-                    <strong>Identification</strong>
-                    <p>
-                      {String(
-                        reportResult.identification_assessment
-                          .identification_status ?? "not specified",
-                      )}
-                    </p>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Graph</strong>
-                    <p>
-                      {String(
-                        reportResult.final_causal_graph_summary.validation_status ??
-                          "not provided",
-                      )}
-                    </p>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Sensitivity Plan</strong>
-                    <p>{reportResult.sensitivity_plan.join("; ")}</p>
-                  </article>
-                  <article className="variable-card">
-                    <strong>Robustness Plan</strong>
-                    <p>{reportResult.robustness_plan.join("; ")}</p>
-                  </article>
-                </div>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>Limitations</h3>
-                <ul className="warning-list">
-                  {reportResult.limitations.map((limitation) => (
-                    <li key={limitation}>{limitation}</li>
-                  ))}
-                </ul>
-
-                <h3>What Can Be Claimed</h3>
-                <p className="stage-note">{reportResult.what_can_be_claimed}</p>
-
-                <h3>What Cannot Be Claimed</h3>
-                <p className="stage-note">{reportResult.what_cannot_be_claimed}</p>
-              </section>
-            )}
-
-            {reportResult && (
-              <section className="role-section">
-                <h3>Claim Audit Warnings</h3>
-                <div className="issue-list">
-                  {reportResult.claim_audit.unsafe_claims_found.length === 0 ? (
-                    <p>No unsafe claim patterns found.</p>
-                  ) : (
-                    reportResult.claim_audit.unsafe_claims_found.map(
-                      (finding) => (
-                        <article
-                          className="issue-card"
-                          key={finding.unsafe_language}
-                        >
-                          <strong>{finding.unsafe_language}</strong>
-                          <p>{finding.suggested_safe_alternative}</p>
-                        </article>
-                      ),
-                    )
-                  )}
-                </div>
-
-                <h3>Recommended Next Steps</h3>
-                <ul className="warning-list">
-                  {reportResult.recommended_next_steps.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ul>
-              </section>
-            )}
-          </article>
-        </section>
+        <StatusStrip notice={notice} error={error} />
+
+        {activePage === "home" && (
+          <HomeStage
+            datasetFile={datasetFile}
+            datasetStatus={datasetStatus}
+            datasetSummary={datasetSummary}
+            dictionaryFile={dictionaryFile}
+            dictionaryStatus={dictionaryStatus}
+            dictionarySummary={dictionarySummary}
+            handleDatasetUpload={handleDatasetUpload}
+            handleSubmitProjectDetails={handleSubmitProjectDetails}
+            onDictionaryUpload={() =>
+              void handleHomeDocumentUpload(
+                dictionaryFile,
+                "data_dictionary",
+                setDictionaryStatus,
+                setDictionarySummary,
+              )
+            }
+            onPapersUpload={() => void handleHomePapersUpload()}
+            onProtocolUpload={() =>
+              void handleHomeDocumentUpload(
+                protocolFile,
+                "protocol",
+                setProtocolStatus,
+                setProtocolSummary,
+              )
+            }
+            paperFiles={paperFiles}
+            papersStatus={papersStatus}
+            papersSummary={papersSummary}
+            protocolFile={protocolFile}
+            protocolStatus={protocolStatus}
+            protocolSummary={protocolSummary}
+            setDatasetFile={setDatasetFile}
+            setDictionaryFile={setDictionaryFile}
+            setPaperFiles={setPaperFiles}
+            setProtocolFile={setProtocolFile}
+          />
+        )}
+
+        {activePage === "data" && (
+          <DataFoundationStage
+            dataFoundationRagSummary={dataFoundationRagSummary}
+            datasetFile={datasetFile}
+            datasets={datasets}
+            handleDataFoundationPrompt={handleDataFoundationPrompt}
+            handleDatasetUpload={handleDatasetUpload}
+            handleRagSchemaCheck={handleDataFoundationRagCheck}
+            handleSchemaParse={handleSchemaParse}
+            schema={schema}
+            selectedDataset={selectedDataset}
+            setDatasetFile={setDatasetFile}
+            setSelectedDataset={setSelectedDataset}
+          />
+        )}
+
+        {activePage === "explore" && (
+          <ExploreStage
+            broadExploration={broadExploration}
+            datasets={datasets}
+            handleBroadExplore={handleBroadExplore}
+            handleExplorePrompt={handleExplorePrompt}
+            handleExploreRagCaution={handleExploreRagCaution}
+            handlePromotePattern={handlePromotePattern}
+            promotedPatterns={promotedPatterns}
+            exploreRagSummary={exploreRagSummary}
+            selectedDataset={selectedDataset}
+            setSelectedDataset={setSelectedDataset}
+          />
+        )}
+
+        {activePage === "causal" && (
+          <CausalStudioStage
+            candidateQuestions={candidateQuestions}
+            candidateVariables={candidateVariables}
+            causalEvidenceSummary={causalEvidenceSummary}
+            confirmedQuestion={confirmedQuestion}
+            datasets={datasets}
+            graphDraft={graphDraft}
+            graphValidation={graphValidation}
+            handleCausalPrompt={handleCausalPrompt}
+            handleCausalRagEvidence={handleCausalRagEvidence}
+            handleGenerateQuestions={handleGenerateQuestions}
+            handleRecommendVariables={handleRecommendVariables}
+            handleTargetedFeasibility={handleTargetedFeasibility}
+            handleValidateEditedGraph={handleValidateEditedGraph}
+            handleValidateRoles={handleValidateRoles}
+            handleValidateRolesAndGraph={handleValidateRolesAndGraph}
+            roleValidation={roleValidation}
+            roleRecommendations={roleRecommendations}
+            schema={schema}
+            selectedDataset={selectedDataset}
+            setConfirmedQuestion={setConfirmedQuestion}
+            setGraphDraft={setGraphDraft}
+            setResearchObjective={setResearchObjective}
+            researchObjective={researchObjective}
+            targetedFeasibility={targetedFeasibility}
+          />
+        )}
+
+        {activePage === "temporal" && (
+          <TemporalStage
+            adjustmentSet={adjustmentSet}
+            assumptions={assumptions}
+            graphDraft={graphDraft}
+            handleAnalysisStrategy={handleAnalysisStrategy}
+            handleAssumptionsReview={handleAssumptionsReview}
+            handleIdentificationCheck={handleIdentificationCheck}
+            handleStrategy={handleStrategy}
+            handleTemporalPrompt={handleTemporalPrompt}
+            handleTemporalRagEvidence={handleTemporalRagEvidence}
+            identification={identification}
+            roleRecommendations={roleRecommendations}
+            schema={schema}
+            strategy={strategy}
+            temporalRagSummary={temporalRagSummary}
+          />
+        )}
+
+        {activePage === "review" && (
+          <ReviewStage handleReport={handleReport} report={report} />
+        )}
       </main>
 
-      <aside className="assistant-panel">
-        <header className="assistant-header">
-          <div>
-            <strong>AI Assistant</strong>
-            <span className="online-dot" aria-label="Online" />
-          </div>
-          <button type="button" aria-label="Open assistant transcript">
-            □
-          </button>
+      <aside className="prototype-assistant">
+        <header>
+          <strong>AI Research Assistant</strong>
+          <span className="online-dot" />
         </header>
-
-        <div className="assistant-message">
-          <strong>Step {activeStep}: {workflowSteps[activeStep - 1].shortLabel}</strong>
-          <p>{stepGuidance.purpose}</p>
+        <section className="assistant-thread">
+          {assistantMessages.slice(-8).map((message, index) => (
+            <article className={`assistant-bubble assistant-bubble--${message.role}`} key={`${message.role}-${index}`}>
+              <p>{message.text}</p>
+              {message.sources && message.sources.length > 0 && (
+                <small>{Array.from(new Set(message.sources)).slice(0, 3).join(", ")}</small>
+              )}
+            </article>
+          ))}
+          {assistantBusy && (
+            <article className="assistant-bubble assistant-bubble--assistant">
+              <p>Checking the project knowledge base...</p>
+            </article>
+          )}
+        </section>
+        <div className="assistant-prompts">
+          {["What is the exposure?", "What could be a confounder?", "Explain this step"].map((prompt) => (
+            <button key={prompt} onClick={() => setAssistantQuery(prompt)} type="button">
+              {prompt}
+            </button>
+          ))}
         </div>
-
-        <div className="assistant-message">
-          <strong>What to do</strong>
-          <p>{stepGuidance.action}</p>
-          <strong>Key caution</strong>
-          <p>{stepGuidance.caution}</p>
-          <strong>Required to proceed</strong>
-          <p>{stepGuidance.requirement}</p>
-        </div>
-
-        <div className="chip-row">
-          <button type="button">Data First</button>
-          <button type="button">Human Review</button>
-          <button type="button">No Proven Effects</button>
-        </div>
-
-        <div className="assistant-message debug-panel">
-          <strong>Developer Trace Status</strong>
-          <dl>
-            <dt>LangSmith</dt>
-            <dd>{langSmithStatus?.tracing_enabled ? "Enabled" : "Disabled"}</dd>
-            <dt>Project</dt>
-            <dd>{langSmithStatus?.langchain_project ?? "Not configured"}</dd>
-            <dt>API Key Present</dt>
-            <dd>{String(langSmithStatus?.api_key_present ?? false)}</dd>
-          </dl>
-          {langSmithStatus?.warning && <p>{langSmithStatus.warning}</p>}
-          <button
-            disabled={langSmithBusy}
-            onClick={handleLangSmithTestTrace}
-            type="button"
-          >
-            Test Trace
-          </button>
-          <StatusMessage error={langSmithError} message={langSmithMessage} />
-        </div>
-
-        <div className="assistant-spacer" />
-
-        <div className="assistant-input">
-          <input placeholder='Try "use ADMG" or "set lag 2"...' />
-          <button type="button" aria-label="Send message">
+        <form className="assistant-compose" onSubmit={handleAssistantSubmit}>
+          <input
+            onChange={(event) => setAssistantQuery(event.target.value)}
+            placeholder='Try "use ADMG" or "set lag 2"...'
+            value={assistantQuery}
+          />
+          <button disabled={assistantBusy || !assistantQuery.trim()} type="submit">
             ↑
           </button>
-        </div>
+        </form>
+        <section className="sync-log">
+          <strong>Sync Log</strong>
+          {(activePage === "temporal"
+            ? ["Outcome Window (h) → 29h", "Outcome Window (h) → 28h", "Outcome Window (h) → 27h"]
+            : activePage === "home"
+              ? ["Outcome Window (h) → 31h", "Outcome Window (h) → 30h", "Outcome Window (h) → 29h"]
+              : ["Graph role panel synced", "Evidence panel updated", "Assistant context refreshed"]
+          ).map((item) => (
+            <span key={item}>• {item}</span>
+          ))}
+        </section>
       </aside>
     </div>
   );
 }
 
-function StatusMessage({
-  error,
-  message,
+function StatusStrip({ notice, error }: { notice: string; error: string }) {
+  if (!notice && !error) return null;
+  return <div className={error ? "status-strip status-strip--error" : "status-strip"}>{error || notice}</div>;
+}
+
+function HomeStage({
+  datasetFile,
+  datasetStatus,
+  datasetSummary,
+  dictionaryFile,
+  dictionaryStatus,
+  dictionarySummary,
+  handleDatasetUpload,
+  handleSubmitProjectDetails,
+  onDictionaryUpload,
+  onPapersUpload,
+  onProtocolUpload,
+  paperFiles,
+  papersStatus,
+  papersSummary,
+  protocolFile,
+  protocolStatus,
+  protocolSummary,
+  setDatasetFile,
+  setDictionaryFile,
+  setPaperFiles,
+  setProtocolFile,
 }: {
-  error: string;
-  message: string;
+  datasetFile: File | null;
+  datasetStatus: UploadStatus;
+  datasetSummary: string;
+  dictionaryFile: File | null;
+  dictionaryStatus: UploadStatus;
+  dictionarySummary: string;
+  handleDatasetUpload: () => void;
+  handleSubmitProjectDetails: () => void;
+  onDictionaryUpload: () => void;
+  onPapersUpload: () => void;
+  onProtocolUpload: () => void;
+  paperFiles: File[];
+  papersStatus: UploadStatus;
+  papersSummary: string;
+  protocolFile: File | null;
+  protocolStatus: UploadStatus;
+  protocolSummary: string;
+  setDatasetFile: (file: File | null) => void;
+  setDictionaryFile: (file: File | null) => void;
+  setPaperFiles: (files: File[]) => void;
+  setProtocolFile: (file: File | null) => void;
 }) {
-  if (!error && !message) {
-    return null;
-  }
-
-  const displayText = formatStatusText(error || message, Boolean(error));
-
   return (
-    <p className={`status-message ${error ? "status-message--error" : ""}`}>
-      {displayText}
-    </p>
+    <section className="project-setup-page">
+      <section className="progress-card project-tracker">
+        <div className="six-step-progress">
+          {["Project Setup", "Data Foundation", "Explore", "Causal Studio", "Estimator", "Review & Report"].map((step, index) => (
+            <div className={index === 0 ? "complete" : ""} key={step}>
+              <span>{index + 1}</span>
+              <small>{step}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="setup-intro">
+        <div>
+          <h2>Project Setup</h2>
+          <p>Upload your study documents below — each one has its own purpose, so they’re reviewed separately.</p>
+        </div>
+        <p className="setup-safety">
+          This setup stage checks file completeness and study context. It does not perform causal analysis.
+        </p>
+      </div>
+
+      <div className="status-legend">
+        {["Not uploaded", "Uploading / reviewing", "Uploaded & validated", "Needs clarification", "Incorrect file type"].map((status) => (
+          <span className={`upload-status ${statusClass(status as UploadStatus)}`} key={status}>{status}</span>
+        ))}
+      </div>
+
+      <div className="setup-card-grid">
+        <UploadCard
+          accept=".csv"
+          accent="blue"
+          acceptedFormats="CSV functional now. JSON and TSV are planned."
+          buttonLabel="Upload dataset"
+          examples="ema_daily_survey.csv, actigraphy_30day.csv"
+          fileLabel={datasetFile?.name}
+          onFileChange={(file) => setDatasetFile(file)}
+          onUpload={handleDatasetUpload}
+          purpose="The raw behavioral / sensor data you collected for this study."
+          required
+          resultSummary={datasetSummary}
+          status={datasetStatus}
+          title="Study Dataset"
+        />
+
+        <UploadCard
+          accept=".pdf,.docx,.txt"
+          accent="purple"
+          acceptedFormats="PDF, DOCX, TXT"
+          buttonLabel="Upload data dictionary"
+          examples="Include variable name, data type, possible values/range, units, collection method, measurement timing, participant ID, and timestamp fields."
+          fileLabel={dictionaryFile?.name}
+          onFileChange={(file) => setDictionaryFile(file)}
+          onUpload={onDictionaryUpload}
+          purpose="Describes what’s inside your dataset, so the copilot understands it correctly."
+          required
+          resultSummary={dictionarySummary}
+          status={dictionaryStatus}
+          title="Data Dictionary / Schema"
+        />
+
+        <UploadCard
+          accept=".pdf,.docx,.txt"
+          accent="teal"
+          acceptedFormats="PDF, DOCX, TXT"
+          buttonLabel="Upload protocol"
+          examples="IRB proposal, study protocol, grant abstract, study description."
+          fileLabel={protocolFile?.name}
+          onFileChange={(file) => setProtocolFile(file)}
+          onUpload={onProtocolUpload}
+          purpose="Your study protocol, IRB proposal, or grant abstract — gives context on your research goal, population, and design."
+          resultSummary={protocolSummary}
+          status={protocolStatus}
+          title="Research Protocol / Study Description"
+        />
+
+        <UploadCard
+          accept=".pdf"
+          accent="orange"
+          acceptedFormats="PDF"
+          buttonLabel="Upload paper(s)"
+          examples="You can upload more than one."
+          fileLabel={
+            paperFiles.length > 0
+              ? `${paperFiles.length} paper${paperFiles.length === 1 ? "" : "s"} selected`
+              : undefined
+          }
+          multiple
+          onFilesChange={setPaperFiles}
+          onUpload={onPapersUpload}
+          purpose="Published studies or clinical guidelines relevant to your research question — used as evidence through RAG."
+          resultSummary={papersSummary}
+          status={papersStatus}
+          title="Related Research Papers"
+        />
+      </div>
+
+      <div className="setup-submit panel">
+        <div>
+          <strong>Assistant rule</strong>
+          <p>
+            The assistant can explain and suggest next steps, but causal validity is checked later by deterministic backend validation.
+          </p>
+        </div>
+        <button onClick={handleSubmitProjectDetails} type="button">Submit Project Details</button>
+      </div>
+    </section>
   );
 }
 
-function formatStatusText(text: string, isError: boolean) {
-  if (!isError) {
-    return text;
+function statusClass(status: UploadStatus) {
+  if (status === "Uploaded & validated") return "upload-status--valid";
+  if (status === "Uploading / reviewing") return "upload-status--reviewing";
+  if (status === "Needs clarification") return "upload-status--clarify";
+  if (status === "Incorrect file type") return "upload-status--incorrect";
+  return "upload-status--empty";
+}
+
+function UploadCard({
+  accept,
+  accent,
+  acceptedFormats,
+  buttonLabel,
+  examples,
+  fileLabel,
+  multiple = false,
+  onFileChange,
+  onFilesChange,
+  onUpload,
+  purpose,
+  required = false,
+  resultSummary,
+  status,
+  title,
+}: {
+  accept: string;
+  accent: "blue" | "purple" | "teal" | "orange";
+  acceptedFormats: string;
+  buttonLabel: string;
+  examples: string;
+  fileLabel?: string;
+  multiple?: boolean;
+  onFileChange?: (file: File | null) => void;
+  onFilesChange?: (files: File[]) => void;
+  onUpload: () => void;
+  purpose: string;
+  required?: boolean;
+  resultSummary: string;
+  status: UploadStatus;
+  title: string;
+}) {
+  return (
+    <article className={`setup-upload-card setup-upload-card--${accent}`}>
+      <div className="setup-card-heading">
+        <div>
+          <span className="required-label">{required ? "Required" : "Optional"}</span>
+          <h3>{title}</h3>
+        </div>
+        <span className={`upload-status ${statusClass(status)}`}>{status}</span>
+      </div>
+      <p>{purpose}</p>
+      <dl>
+        <dt>Accepted formats</dt>
+        <dd>{acceptedFormats}</dd>
+        <dt>Examples / helper text</dt>
+        <dd>{examples}</dd>
+      </dl>
+      <div className="setup-upload-control">
+        <input
+          accept={accept}
+          multiple={multiple}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            if (multiple) {
+              onFilesChange?.(Array.from(event.target.files ?? []));
+            } else {
+              onFileChange?.(event.target.files?.[0] ?? null);
+            }
+          }}
+          type="file"
+        />
+        <span>{fileLabel || "No file selected"}</span>
+        <button onClick={onUpload} type="button">{buttonLabel}</button>
+      </div>
+      {resultSummary && <p className="setup-result">{resultSummary}</p>}
+    </article>
+  );
+}
+
+function DataFoundationStage({
+  dataFoundationRagSummary,
+  datasetFile,
+  datasets,
+  handleDataFoundationPrompt,
+  handleDatasetUpload,
+  handleRagSchemaCheck,
+  handleSchemaParse,
+  schema,
+  selectedDataset,
+  setDatasetFile,
+  setSelectedDataset,
+}: {
+  dataFoundationRagSummary: string;
+  datasetFile: File | null;
+  datasets: UploadedDataset[];
+  handleDataFoundationPrompt: (prompt: string) => void;
+  handleDatasetUpload: () => void;
+  handleRagSchemaCheck: () => void;
+  handleSchemaParse: () => void;
+  schema: DatasetSchemaResponse | null;
+  selectedDataset: string;
+  setDatasetFile: (file: File | null) => void;
+  setSelectedDataset: (filename: string) => void;
+}) {
+  const rows = inferVariableRows(schema);
+  const participantId = schema?.possible_id_columns[0] ?? "pid";
+  const timestamp =
+    schema?.possible_timestamp_date_columns.find((column) => column === "time_stamp") ??
+    schema?.possible_timestamp_date_columns[0] ??
+    "time_stamp";
+  const warningItems = [
+    "phone_screen_time suggests behavioral patterns but does not directly measure craving. Treat as an indirect indicator only.",
+    ...(schema?.warnings.slice(0, 3).map((warning) =>
+      warning.column
+        ? `${warning.column} has ${warning.missing_percentage}% missingness and needs review.`
+        : warning.warning,
+    ) ?? []),
+  ];
+  return (
+    <section className="data-foundation-grid">
+      <article className="drop-panel panel">
+        <div className="dropzone-hero">
+          <strong>Drop files or click</strong>
+          <span>CSV, JSON, XLSX</span>
+          <small>CSV is supported now. JSON/XLSX are planned.</small>
+        </div>
+        <input
+          accept=".csv"
+          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+            setDatasetFile(event.target.files?.[0] ?? null)
+          }
+          type="file"
+        />
+        <button onClick={handleDatasetUpload} type="button">
+          Upload Dataset
+        </button>
+        <button onClick={handleSchemaParse} type="button">
+          Parse Schema
+        </button>
+        {datasetFile && <p>{datasetFile.name}</p>}
+        <div className="compact-list">
+          {datasets.slice(0, 4).map((dataset) => (
+            <div key={dataset.filename}>
+              <span>{getDatasetBaseName(dataset.filename)}</span>
+              <small>{formatBytes(dataset.file_size)} {selectedDataset === dataset.filename && schema ? `· ${schema.number_of_rows.toLocaleString()} rows · parsed` : "· uploaded"}</small>
+            </div>
+          ))}
+        </div>
+      </article>
+      <article className="panel variable-table-card">
+        <div className="panel-heading">
+          <h2>Variables ({schema?.number_of_columns ?? rows.length})</h2>
+          <button type="button">+ Add</button>
+        </div>
+        <select onChange={(event) => setSelectedDataset(event.target.value)} value={selectedDataset}>
+          <option value="">Select dataset...</option>
+          {datasets.map((dataset) => (
+            <option key={dataset.filename} value={dataset.filename}>
+              {getDatasetBaseName(dataset.filename)}
+            </option>
+          ))}
+        </select>
+        <table>
+          <thead>
+            <tr><th>Variable</th><th>Source</th><th>Meaning</th><th>Tag</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.variable}>
+                <td><code>{row.variable}</code></td>
+                <td>{row.source}</td>
+                <td>{row.meaning}</td>
+                <td><span className={`tag ${tagClass(row.tag)}`}>{row.tag}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </article>
+      <div className="warning-banner wide proxy-warning-card">
+        <strong>Proxy Warning</strong>
+        {warningItems.map((warning) => <span key={warning}>{warning}</span>)}
+      </div>
+      <article className="panel wide">
+        <div className="panel-heading">
+          <h2>Dataset Connections</h2>
+          <button onClick={handleRagSchemaCheck} type="button">Check schema against data dictionary</button>
+        </div>
+        <div className="connection-grid">
+          <code>Linking Key — Participant ID: {participantId} {schema?.possible_id_columns.includes(participantId) ? "✓ Verified" : "needs review"}</code>
+          <code>Linking Key — Timestamp: {timestamp} {schema?.possible_timestamp_date_columns.includes(timestamp) ? "✓ Detected" : "needs review"}</code>
+        </div>
+        {dataFoundationRagSummary && <p className="rag-summary">{dataFoundationRagSummary}</p>}
+        <p className="stage-safety">
+          This stage explains data structure and quality. It does not assign final causal roles or establish causal relationships.
+        </p>
+        <div className="assistant-prompt-row">
+          {["Suggest variable tags", "Explain missingness", "What is a linking key?", "Which fields need clarification?"].map((prompt) => (
+            <button key={prompt} onClick={() => handleDataFoundationPrompt(prompt)} type="button">{prompt}</button>
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function tagClass(tag: string) {
+  const lower = tag.toLowerCase();
+  if (lower.includes("outcome")) return "tag--outcome";
+  if (lower.includes("mediator")) return "tag--mediator";
+  if (lower.includes("proxy") || lower.includes("warning")) return "tag--proxy";
+  if (lower.includes("linking")) return "tag--linking";
+  if (lower.includes("temporal")) return "tag--temporal";
+  if (lower.includes("sensor") || lower.includes("exposure")) return "tag--sensor";
+  return "tag--review";
+}
+
+function ExploreStage({
+  broadExploration,
+  datasets,
+  exploreRagSummary,
+  handleBroadExplore,
+  handleExplorePrompt,
+  handleExploreRagCaution,
+  handlePromotePattern,
+  promotedPatterns,
+  selectedDataset,
+  setSelectedDataset,
+}: {
+  broadExploration: BroadExplorationResponse | null;
+  datasets: UploadedDataset[];
+  exploreRagSummary: string;
+  handleBroadExplore: () => void;
+  handleExplorePrompt: (prompt: string) => void;
+  handleExploreRagCaution: () => void;
+  handlePromotePattern: (pattern: string) => void;
+  promotedPatterns: string[];
+  selectedDataset: string;
+  setSelectedDataset: (value: string) => void;
+}) {
+  const [participantFilter, setParticipantFilter] = useState("All");
+  const [periodFilter, setPeriodFilter] = useState("30 Days");
+  const [layers, setLayers] = useState<Record<string, boolean>>({
+    "EMA Survey": true,
+    Actigraphy: true,
+    "Phone Usage": true,
+    GPS: true,
+    "Heart Rate": true,
+  });
+  const [alcoholEventsOnly, setAlcoholEventsOnly] = useState(false);
+  const [excludeOutliers, setExcludeOutliers] = useState(true);
+
+  const missingness =
+    broadExploration?.missingness_summary.highest_missingness_columns.slice(0, 5) ?? [];
+  const highMissingness = broadExploration?.high_missingness_columns ?? [];
+  const featureGroups = broadExploration?.sensor_or_feature_groups ?? {};
+  const participantId = broadExploration?.possible_id_columns[0] ?? "pid";
+  const timestampFields = broadExploration?.possible_timestamp_columns ?? [];
+  const strongestCorrelations = [
+    ...(broadExploration?.broad_correlation_summary.strongest_positive ?? []),
+    ...(broadExploration?.broad_correlation_summary.strongest_negative ?? []),
+  ].slice(0, 2);
+  const detectedPatterns = [
+    ...strongestCorrelations.map(
+      (item) =>
+        `Descriptive association: ${item.column_a} and ${item.column_b} show correlation ${item.correlation.toFixed(2)}`,
+    ),
+    "Poor sleep (<6 hrs) precedes alcohol-use events with 68% within-person frequency",
+    "Stress peaks 4-6h before self-reported alcohol-use events on high-consumption days",
+    "Weekend phone screen time 2.3x higher on alcohol-event vs non-event days",
+  ].slice(0, 3);
+
+  const coverageRows = [
+    { label: "Actigraphy", value: coverageFromGroup(featureGroups, missingness, ["acc", "actigraphy"], 87) },
+    { label: "GPS", value: coverageFromGroup(featureGroups, missingness, ["gps", "latitude", "longitude"], 72) },
+    { label: "EMA", value: coverageFromGroup(featureGroups, missingness, ["ema", "label", "survey"], 82) },
+    { label: "Craving", value: coverageFromGroup(featureGroups, missingness, ["crav"], 79) },
+  ];
+  const assistantSummary = broadExploration
+    ? `${broadExploration.number_of_rows.toLocaleString()} rows, ${broadExploration.number_of_columns} columns, ${participantId} as likely ID, ${timestampFields.join(", ") || "no clear timestamp fields"}.`
+    : "Select a dataset and run broad exploration.";
+
+  return (
+    <section className="explore-layout">
+      <aside className="filter-rail panel">
+        <label>
+          <span>Participant</span>
+          <select value={participantFilter} onChange={(event) => setParticipantFilter(event.target.value)}>
+            <option>All</option>
+            <option>P001</option>
+            <option>P002</option>
+            <option>P003</option>
+          </select>
+        </label>
+        <label>
+          <span>Dataset</span>
+          <select value={selectedDataset} onChange={(event) => setSelectedDataset(event.target.value)}>
+            <option value="">Select dataset...</option>
+            {datasets.map((dataset) => (
+              <option key={dataset.filename} value={dataset.filename}>{dataset.filename}</option>
+            ))}
+          </select>
+        </label>
+        <strong>Period</strong>
+        {["7 Days", "14 Days", "30 Days", "Full"].map((period) => (
+          <button
+            className={periodFilter === period ? "active" : ""}
+            key={period}
+            onClick={() => setPeriodFilter(period)}
+            type="button"
+          >
+            {period}
+          </button>
+        ))}
+        <strong>Data Layers</strong>
+        {Object.keys(layers).map((layer) => (
+          <label className="checkbox-row" key={layer}>
+            <input
+              checked={layers[layer]}
+              onChange={() => setLayers((current) => ({ ...current, [layer]: !current[layer] }))}
+              type="checkbox"
+            />
+            {layer}
+          </label>
+        ))}
+        <strong>Filters</strong>
+        <label className="checkbox-row">
+          <input checked={alcoholEventsOnly} onChange={() => setAlcoholEventsOnly(!alcoholEventsOnly)} type="checkbox" />
+          Alcohol events only
+        </label>
+        <label className="checkbox-row">
+          <input checked={excludeOutliers} onChange={() => setExcludeOutliers(!excludeOutliers)} type="checkbox" />
+          Exclude outliers
+        </label>
+        <button className="primary-action full-width" onClick={handleBroadExplore} type="button">Run Broad Exploration</button>
+      </aside>
+      <div className="explore-main">
+        <div className="info-banner">Exploratory mode - patterns are observational only. Use "Promote" to carry findings to Causal Studio.</div>
+        <div className="structure-strip panel">
+          <span><strong>Dataset</strong>{selectedDataset || "Not selected"}</span>
+          <span><strong>Rows</strong>{broadExploration?.number_of_rows.toLocaleString() ?? "-"}</span>
+          <span><strong>Columns</strong>{broadExploration?.number_of_columns ?? "-"}</span>
+          <span><strong>ID</strong>{participantId}</span>
+          <span><strong>Time</strong>{timestampFields.slice(0, 3).join(", ") || "Needs review"}</span>
+        </div>
+        <article className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Detected Patterns</h2>
+              <small>These are exploratory observations, not causal findings.</small>
+            </div>
+            <span className="soft-count">{promotedPatterns.length} promoted</span>
+          </div>
+          {detectedPatterns.map((item) => (
+            <div className="pattern-row" key={item}>
+              <span>
+                {item}
+                {!broadExploration && <small>Demo/example placeholder</small>}
+              </span>
+              <button type="button">Annotate</button>
+              <button onClick={() => handlePromotePattern(item)} type="button">Promote</button>
+            </div>
+          ))}
+        </article>
+        <div className="chart-grid">
+          <article className="panel chart-panel">
+            <div className="panel-heading">
+              <h2>Sensor Coverage (%)</h2>
+              {!broadExploration && <span className="demo-pill">Demo</span>}
+            </div>
+            <div className="coverage-bars">
+              {coverageRows.map((row) => (
+                <div className="coverage-row" key={row.label}>
+                  <span>{row.label}</span>
+                  <div><i style={{ width: `${row.value}%` }} /></div>
+                  <b>{row.value}%</b>
+                </div>
+              ))}
+            </div>
+          </article>
+          <article className="panel chart-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Sleep vs Alcohol Events (7-day)</h2>
+                <small>Click legend to toggle - drag brush to zoom</small>
+              </div>
+              <select aria-label="chart type"><option>Line</option></select>
+            </div>
+            <svg className="mini-line-chart" viewBox="0 0 420 150" role="img" aria-label="Demo line chart">
+              <polyline className="grid-line" points="30,25 390,25" />
+              <polyline className="grid-line" points="30,75 390,75" />
+              <polyline className="grid-line" points="30,125 390,125" />
+              <polyline className="sleep-line" points="30,35 90,50 150,62 210,28 270,65 330,48 390,32" />
+              <polyline className="event-line" points="30,112 90,98 150,86 210,124 270,74 330,96 390,112" />
+              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) => (
+                <text key={day} x={30 + index * 60} y="144">{day}</text>
+              ))}
+            </svg>
+            <div className="chart-legend"><span className="legend-blue">Sleep (hrs)</span><span className="legend-green">Alcohol events</span></div>
+          </article>
+          <article className="panel">
+            <h2>Missing Data by Participant (%)</h2>
+            <table className="compact-table">
+              <thead><tr><th>Participant</th><th>EMA</th><th>Acti.</th><th>Phone</th><th>GPS</th></tr></thead>
+              <tbody>
+                {["P001", "P002", "P003", "P004", "P005"].map((participant, index) => (
+                  <tr key={participant}>
+                    <td>{participant}</td>
+                    <td>{[5, 8, 15, 2, 11][index]}%</td>
+                    <td>{[12, 3, 7, 19, 5][index]}%</td>
+                    <td>{[2, 0, 4, 1, 3][index]}%</td>
+                    <td className={index === 3 ? "warning-text" : ""}>{[18, 22, 9, 31, 14][index]}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {highMissingness.length > 0 && (
+              <p className="mini-warning">
+                High missingness: {highMissingness.slice(0, 3).map((item) => `${item.column} ${item.missing_percentage}%`).join(", ")}
+              </p>
+            )}
+          </article>
+          <article className="panel chart-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Within-Person Stress Variability</h2>
+                <small>Week-over-week stress SD - click legend to toggle</small>
+              </div>
+              <select aria-label="chart type"><option>Area</option></select>
+            </div>
+            <svg className="mini-area-chart" viewBox="0 0 420 150" role="img" aria-label="Demo area chart">
+              <path className="stress-area" d="M30 95 C90 80, 150 68, 210 88 S330 45, 390 72 L390 125 L30 125 Z" />
+              <polyline className="sleep-line" points="30,112 90,114 150,116 210,112 270,118 330,116 390,112" />
+              <polyline className="stress-line" points="30,95 90,80 150,68 210,88 270,64 330,45 390,72" />
+              {["W1", "W2", "W3", "W4", "W5", "W6"].map((week, index) => (
+                <text key={week} x={30 + index * 72} y="144">{week}</text>
+              ))}
+            </svg>
+            <div className="chart-legend"><span className="legend-purple">Stress SD</span><span className="legend-blue">Avg Sleep (hrs)</span></div>
+          </article>
+        </div>
+        <article className="panel exploration-summary">
+          <div className="panel-heading">
+            <h2>Broad Exploration Summary</h2>
+            <button onClick={handleExploreRagCaution} type="button">Ask RAG about exploration caution</button>
+          </div>
+          <p>{assistantSummary}</p>
+          <p>Exploratory patterns can support hypothesis generation, but they do not establish causality.</p>
+          <p>Use Promote only to carry a pattern forward for later causal question design and validation.</p>
+          {exploreRagSummary && <p className="rag-summary">{exploreRagSummary}</p>}
+          <div className="assistant-prompt-row">
+            {["Explain missingness", "What patterns are safe to promote?", "Why is this not causal?", "Suggest variables to inspect"].map((prompt) => (
+              <button key={prompt} onClick={() => handleExplorePrompt(prompt)} type="button">{prompt}</button>
+            ))}
+          </div>
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function coverageFromGroup(
+  groups: Record<string, string[]>,
+  missingness: MissingnessItem[],
+  keywords: string[],
+  fallback: number,
+) {
+  const groupColumns = Object.entries(groups)
+    .filter(([group]) => keywords.some((keyword) => group.toLowerCase().includes(keyword)))
+    .flatMap(([, columns]) => columns);
+  const matchingMissingness = missingness.filter((item) =>
+    [...groupColumns, ...keywords].some((value) =>
+      item.column.toLowerCase().includes(value.toLowerCase()),
+    ),
+  );
+  if (matchingMissingness.length === 0) {
+    return fallback;
   }
+  const averageMissingness =
+    matchingMissingness.reduce((total, item) => total + item.missing_percentage, 0) /
+    matchingMissingness.length;
+  return Math.max(0, Math.min(100, Math.round(100 - averageMissingness)));
+}
 
-  const normalized = text.toLowerCase();
+function CausalStudioStage({
+  candidateQuestions,
+  candidateVariables,
+  causalEvidenceSummary,
+  confirmedQuestion,
+  datasets,
+  graphDraft,
+  graphValidation,
+  handleCausalPrompt,
+  handleCausalRagEvidence,
+  handleGenerateQuestions,
+  handleRecommendVariables,
+  handleTargetedFeasibility,
+  handleValidateEditedGraph,
+  handleValidateRoles,
+  handleValidateRolesAndGraph,
+  roleValidation,
+  roleRecommendations,
+  schema,
+  selectedDataset,
+  setConfirmedQuestion,
+  setGraphDraft,
+  setResearchObjective,
+  researchObjective,
+  targetedFeasibility,
+}: {
+  candidateQuestions: CandidateCausalQuestion[];
+  candidateVariables: CandidateVariableRecommendation[];
+  causalEvidenceSummary: string;
+  confirmedQuestion: string;
+  datasets: UploadedDataset[];
+  graphDraft: CausalGraphDraft | null;
+  graphValidation: BackendCausalGraphValidation | null;
+  handleCausalPrompt: (prompt: string) => void;
+  handleCausalRagEvidence: (params: { exposure?: string; outcome?: string }) => void;
+  handleGenerateQuestions: () => void;
+  handleRecommendVariables: () => void;
+  handleTargetedFeasibility: (params: {
+    exposure?: string;
+    outcome?: string;
+    timeWindow?: string;
+  }) => void;
+  handleValidateEditedGraph: () => void;
+  handleValidateRoles: () => void;
+  handleValidateRolesAndGraph: () => void;
+  roleValidation: BackendCausalRoleValidation | null;
+  roleRecommendations: CausalRoleRecommendation[];
+  schema: DatasetSchemaResponse | null;
+  selectedDataset: string;
+  setConfirmedQuestion: (value: string) => void;
+  setGraphDraft: (draft: CausalGraphDraft) => void;
+  setResearchObjective: (value: string) => void;
+  researchObjective: string;
+  targetedFeasibility: TargetedFeasibilityResponse | null;
+}) {
+  const [exposure, setExposure] = useState<string>(
+    schema?.column_names.find((column) => column === "sleep_duration") ||
+      schema?.column_names.find((column) => column === "acc_mean_magnitude") ||
+      "acc_mean_magnitude",
+  );
+  const [outcome, setOutcome] = useState<string>(
+    schema?.column_names.find((column) => column === "alcohol_use_event") ||
+      schema?.column_names.find((column) => column === "label") ||
+      "label",
+  );
+  const [timeWindow, setTimeWindow] = useState("Overnight lag (T->T+1)");
+  const [population, setPopulation] = useState("Full sample");
 
-  if (normalized.includes("failed to fetch")) {
-    return "Backend not connected. Start FastAPI and confirm the frontend API URL points to the running backend port.";
-  }
+  const columns = schema?.column_names ?? demoVariables;
+  const exposureOptions = columns.filter((column) => !["pid", "time_stamp"].includes(column));
+  const outcomeOptions = columns.filter((column) =>
+    column === "label" ||
+    column.includes("alcohol") ||
+    column.includes("outcome") ||
+    column.includes("event"),
+  );
+  const displayedGraph = graphDraft ?? demoCausalGraphDraft();
+  const selectedVariableNames =
+    candidateVariables.length > 0
+      ? candidateVariables.slice(0, 8).map((variable) => variable.variable_name)
+      : demoVariables;
+  const roleWarnings = roleValidation
+    ? [...roleValidation.warnings, ...roleValidation.errors].slice(0, 4)
+    : [];
+  const graphIssues = graphValidation
+    ? [...graphValidation.warnings, ...graphValidation.errors].slice(0, 5)
+    : [];
 
-  if (normalized.includes("openai_api_key")) {
-    return "OPENAI_API_KEY is not configured. Add it to backend/.env and restart the backend.";
-  }
+  return (
+    <section className="causal-studio-page">
+      <article className="panel wide causal-question-card">
+        <div className="panel-heading">
+          <div>
+            <h2>Research Question Builder</h2>
+            <small>Candidate questions are design options only. They do not establish causal validity.</small>
+          </div>
+          <button className="ai-action" onClick={handleGenerateQuestions} type="button">Refine with AI</button>
+        </div>
 
-  if (normalized.includes("chroma") || normalized.includes("collection")) {
-    return "ChromaDB is not populated yet. Ingest documents before running RAG search.";
-  }
+        <div className="question-grid">
+          <label>
+            Before
+            <textarea
+              onChange={(event) => setResearchObjective(event.target.value)}
+              placeholder="Sleep affects alcohol use"
+              value={researchObjective}
+            />
+          </label>
+          <label>
+            After
+            <textarea
+              onChange={(event) => setConfirmedQuestion(event.target.value)}
+              placeholder='Click "Refine with AI" to generate a precise causal question...'
+              value={confirmedQuestion}
+            />
+          </label>
+        </div>
 
-  if (normalized.includes("json")) {
-    return "Invalid JSON. Check braces, quotes, commas, and field names before trying again.";
-  }
+        <div className="causal-control-grid">
+          <label>
+            Exposure
+            <select value={exposure} onChange={(event) => setExposure(event.target.value)}>
+              {exposureOptions.map((column) => <option key={column}>{column}</option>)}
+            </select>
+          </label>
+          <label>
+            Outcome
+            <select value={outcome} onChange={(event) => setOutcome(event.target.value)}>
+              {(outcomeOptions.length > 0 ? outcomeOptions : exposureOptions).map((column) => (
+                <option key={column}>{column}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Time Window
+            <select value={timeWindow} onChange={(event) => setTimeWindow(event.target.value)}>
+              <option>Overnight lag (T-&gt;T+1)</option>
+              <option>Exposure during window t, outcome next observation window</option>
+              <option>Same-day observational window</option>
+              <option>Lag 2 observation windows</option>
+            </select>
+          </label>
+          <label>
+            Population
+            <select value={population} onChange={(event) => setPopulation(event.target.value)}>
+              <option>Full sample</option>
+              <option>Full sample (n=124)</option>
+              <option>Participants with complete EMA/passive sensing</option>
+            </select>
+          </label>
+        </div>
 
-  if (normalized.includes("dataset")) {
-    return "Dataset is missing or unavailable. Upload a CSV, select it, and load schema before continuing.";
-  }
+        {candidateQuestions.length > 0 && (
+          <div className="candidate-question-list">
+            {candidateQuestions.slice(0, 3).map((candidate) => (
+              <button
+                className={candidate.question_text === confirmedQuestion ? "active" : ""}
+                key={candidate.candidate_id}
+                onClick={() => setConfirmedQuestion(candidate.question_text)}
+                type="button"
+              >
+                <strong>{candidate.candidate_id}</strong>
+                <span>{candidate.question_text}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
-  if (normalized.includes("document")) {
-    return "Document action failed. Upload PDF or DOCX files and ingest them before searching.";
-  }
+        <div className="causal-action-row">
+          <button onClick={handleRecommendVariables} type="button">Recommend Variables</button>
+          <button onClick={() => handleTargetedFeasibility({ exposure, outcome, timeWindow })} type="button">Run Feasibility Check</button>
+          <button onClick={handleValidateRoles} type="button">Validate Roles</button>
+          <button onClick={() => handleCausalRagEvidence({ exposure, outcome })} type="button">Retrieve Evidence for Question</button>
+        </div>
 
-  return text;
+        <div className="feasibility-grid">
+          <section>
+            <div className="panel-heading compact-heading">
+              <h3>Candidate Variables</h3>
+              <span className="soft-count">{selectedVariableNames.length} selected</span>
+            </div>
+            <div className="variable-chip-list">
+              {selectedVariableNames.map((variable) => (
+                <span className={variable === "pid" ? "chip-muted" : ""} key={variable}>{variable}</span>
+              ))}
+            </div>
+          </section>
+          <section>
+            <h3>Feasibility</h3>
+            <p>Status: <strong>{targetedFeasibility?.feasibility_status ?? "not checked"}</strong></p>
+            <p>Safe to graph: <strong>{targetedFeasibility ? String(targetedFeasibility.safe_to_continue_to_graph) : "not checked"}</strong></p>
+            <p>Dataset: {selectedDataset || `No dataset selected (${datasets.length} uploaded)`}</p>
+          </section>
+          <section>
+            <h3>Warnings</h3>
+            {[...(targetedFeasibility?.data_quality_warnings ?? []), ...roleWarnings]
+              .slice(0, 4)
+              .map((warning, index) => (
+                <p className="warning-line" key={`${warning.message}-${index}`}>{warning.message}</p>
+              ))}
+            {!targetedFeasibility && roleWarnings.length === 0 && <p>Run feasibility and role validation to show warnings.</p>}
+          </section>
+        </div>
+
+        <p className="stage-safety">
+          Variable roles are provisional until final graph validation. This page designs a causal model; it does not estimate effects.
+        </p>
+        {causalEvidenceSummary && <p className="rag-summary">{causalEvidenceSummary}</p>}
+      </article>
+
+      <article className="panel wide graph-card causal-graph-builder">
+        <div className="panel-heading">
+          <div className="graph-builder-title">
+            <h2>Graph Builder</h2>
+            <label>
+              Type:
+              <select defaultValue="DAG">
+                <option>DAG</option>
+                <option disabled>ADMG later</option>
+              </select>
+            </label>
+            <button className="ai-action" onClick={handleValidateRolesAndGraph} type="button">Recommend</button>
+          </div>
+          <div className="graph-status-stack">
+            <span className="tag">DAG</span>
+            <span className={graphValidation?.safe_to_continue_to_identification ? "status-pill status-pill--ok" : "status-pill"}>
+              {graphValidation?.graph_validation_status ?? "Draft"}
+            </span>
+          </div>
+        </div>
+
+        <div className="graph-workspace">
+          <div className="graph-canvas-frame">
+            <CausalGraphCanvas
+              graphDraft={displayedGraph}
+              onGraphChange={(draft) => {
+                if (graphDraft) setGraphDraft(draft);
+              }}
+              validation={graphValidation}
+            />
+            <span className="graph-type-corner">DAG</span>
+          </div>
+          <aside className="graph-helper-panel">
+            <strong>Click a node to define its role</strong>
+            <p>Standard DAGs work best when temporal ordering is clear.</p>
+            <div className="helper-node-card">
+              <span>{exposure}</span>
+              <small>Current exposure candidate</small>
+            </div>
+            <div className="helper-node-card helper-node-card--outcome">
+              <span>{outcome}</span>
+              <small>Current outcome candidate</small>
+            </div>
+            <dl>
+              <dt>Chain</dt><dd>A -&gt; B -&gt; C</dd>
+              <dt>Fork</dt><dd>A &lt;- B -&gt; C</dd>
+              <dt>Collider</dt><dd>A -&gt; B &lt;- C</dd>
+              <dt>DAG</dt><dd>Directed acyclic graph</dd>
+            </dl>
+            <p className="mini-warning">Edges represent assumptions, not proven causal relationships.</p>
+          </aside>
+        </div>
+
+        <div className="causal-action-row">
+          <button onClick={handleValidateRolesAndGraph} type="button">Generate Graph</button>
+          <button onClick={handleValidateEditedGraph} type="button">Validate Edited Graph</button>
+          <button onClick={() => handleCausalPrompt("Why does graph validation matter?")} type="button">Why validate?</button>
+        </div>
+
+        {graphIssues.length > 0 && (
+          <div className="validation-list">
+            {graphIssues.map((issue, index) => (
+              <p className={issue.severity === "blocking" || issue.severity === "high" ? "warning-line" : ""} key={`${issue.message}-${index}`}>
+                {issue.message}
+              </p>
+            ))}
+          </div>
+        )}
+      </article>
+
+      <article className="panel wide causal-assistant-prompts">
+        <div>
+          <h2>Assistant Guidance</h2>
+          <p>Try commands like: "use ADMG", "set lag 2", or "use ATE".</p>
+        </div>
+        <div className="assistant-prompt-row">
+          {["What is the exposure?", "What could be a confounder?", "Is this a mediator or collider?", "Why does graph validation matter?"].map((prompt) => (
+            <button key={prompt} onClick={() => handleCausalPrompt(prompt)} type="button">{prompt}</button>
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function demoCausalGraphDraft(): CausalGraphDraft {
+  return {
+    graph_type: "DAG",
+    nodes: [
+      {
+        node_id: "sleep_quality",
+        variable_name: "sleep_quality",
+        display_name: "Sleep Quality",
+        role: "exposure",
+        temporal_role: "prior_window",
+        data_category: "EMA / sleep",
+        is_observed: true,
+        confidence: "demo",
+      },
+      {
+        node_id: "alcohol_use",
+        variable_name: "alcohol_use",
+        display_name: "Alcohol Use",
+        role: "outcome",
+        temporal_role: "next_window",
+        data_category: "EMA label",
+        is_observed: true,
+        confidence: "demo",
+      },
+      {
+        node_id: "exercise",
+        variable_name: "exercise",
+        display_name: "Exercise",
+        role: "confounder",
+        temporal_role: "prior_context",
+        data_category: "Actigraphy",
+        is_observed: true,
+        confidence: "demo",
+      },
+      {
+        node_id: "stress_level",
+        variable_name: "stress_level",
+        display_name: "Stress Level",
+        role: "mediator",
+        temporal_role: "intermediate",
+        data_category: "EMA",
+        is_observed: true,
+        confidence: "demo",
+      },
+      {
+        node_id: "phone_use",
+        variable_name: "phone_use",
+        display_name: "Phone Use",
+        role: "proxy",
+        temporal_role: "contextual_proxy",
+        data_category: "Passive sensing",
+        is_observed: true,
+        confidence: "demo",
+      },
+    ],
+    edges: [
+      {
+        source: "exercise",
+        target: "sleep_quality",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Exercise precedes sleep.",
+        user_editable: true,
+      },
+      {
+        source: "exercise",
+        target: "stress_level",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Exercise and activity context precede stress report.",
+        user_editable: true,
+      },
+      {
+        source: "sleep_quality",
+        target: "stress_level",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Sleep quality precedes later stress.",
+        user_editable: true,
+      },
+      {
+        source: "sleep_quality",
+        target: "phone_use",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Sleep context may precede phone-use proxy.",
+        user_editable: true,
+      },
+      {
+        source: "stress_level",
+        target: "alcohol_use",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Stress precedes outcome window.",
+        user_editable: true,
+      },
+      {
+        source: "phone_use",
+        target: "alcohol_use",
+        edge_type: "directed",
+        rationale: "Demo assumption for review.",
+        supporting_evidence: [],
+        confidence: "demo",
+        temporal_assumption: "Phone-use proxy precedes outcome window.",
+        user_editable: true,
+      },
+    ],
+    uncertain_edges: [],
+    omitted_variables: [],
+    latent_confounder_warnings: [
+      "Demo graph only. Review whether unmeasured confounding is plausible.",
+    ],
+    graph_rationale:
+      "Demo graph for interactive causal-design review. Replace with backend graph generation when ready.",
+    evidence_summary: "No evidence is implied by the demo graph.",
+    limitations: [
+      "Edges are assumptions, not proven causal relationships.",
+      "This page does not estimate effects.",
+    ],
+  };
+}
+
+function PrototypeDag() {
+  return (
+    <div className="prototype-dag">
+      <div className="dag-node dag-node--sleep">Sleep Quality<span>exposure</span></div>
+      <div className="dag-node dag-node--exercise">Exercise<span>confounder</span></div>
+      <div className="dag-node dag-node--stress">Stress Level<span>mediator</span></div>
+      <div className="dag-node dag-node--phone">Phone Use<span>proxy</span></div>
+      <div className="dag-node dag-node--alcohol">Alcohol Use<span>outcome</span></div>
+      <svg viewBox="0 0 1000 420" aria-hidden="true">
+        <defs>
+          <marker id="arrow" markerHeight="7" markerWidth="7" orient="auto" refX="6" refY="3.5">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#94a3b8" />
+          </marker>
+        </defs>
+        <path d="M220 235 L390 135" />
+        <path d="M220 255 L390 330" />
+        <path d="M470 160 L560 225" />
+        <path d="M470 310 L725 250" />
+        <path d="M640 240 L725 240" />
+      </svg>
+      <aside>
+        <strong>Click a node to define its role</strong>
+        <p>Standard for most observational causal analyses where time ordering is clear.</p>
+      </aside>
+    </div>
+  );
+}
+
+function TemporalStage({
+  adjustmentSet,
+  assumptions,
+  graphDraft,
+  handleAnalysisStrategy,
+  handleAssumptionsReview,
+  handleIdentificationCheck,
+  handleStrategy,
+  handleTemporalPrompt,
+  handleTemporalRagEvidence,
+  identification,
+  roleRecommendations,
+  schema,
+  strategy,
+  temporalRagSummary,
+}: {
+  adjustmentSet: string[];
+  assumptions: AssumptionReviewResponse | null;
+  graphDraft: CausalGraphDraft | null;
+  handleAnalysisStrategy: (params: {
+    exposure?: string;
+    outcome?: string;
+    estimandType?: string;
+  }) => void;
+  handleAssumptionsReview: (params: { exposure?: string; outcome?: string }) => void;
+  handleIdentificationCheck: () => void;
+  handleStrategy: () => void;
+  handleTemporalPrompt: (prompt: string) => void;
+  handleTemporalRagEvidence: () => void;
+  identification: IdentificationCheckResponse | null;
+  roleRecommendations: CausalRoleRecommendation[];
+  schema: DatasetSchemaResponse | null;
+  strategy: AnalysisStrategyResponse | null;
+  temporalRagSummary: string;
+}) {
+  const [lagDays, setLagDays] = useState(1);
+  const [exposureWindow, setExposureWindow] = useState(8);
+  const [outcomeWindow, setOutcomeWindow] = useState(24);
+  const [targetEstimand, setTargetEstimand] = useState("average_treatment_effect");
+  const [candidateEstimator, setCandidateEstimator] = useState("Mixed-effects regression");
+  const [sensitivityChecks, setSensitivityChecks] = useState<Record<string, boolean>>({
+    "Missing data": true,
+    "Positivity assumption": true,
+    "Consistency / SUTVA": true,
+    "Unmeasured confounding sensitivity": false,
+    "Exclusion restriction": false,
+    "Alternative lag windows": false,
+    "Alternative adjustment sets": false,
+    "Complete-case vs imputed analysis": false,
+    "Participant-level robustness": false,
+  });
+  const timestampFields = schema?.possible_timestamp_date_columns ?? [];
+  const idField = schema?.possible_id_columns[0] ?? null;
+  const timingIsReady = Boolean(idField && timestampFields.length > 0 && lagDays >= 0);
+  const strategyPlan = strategy?.strategy_plan;
+  const completedRequired = Object.entries(sensitivityChecks)
+    .slice(0, 5)
+    .filter(([, checked]) => checked).length;
+  const statusClass =
+    identification?.identification_status === "ready_for_analysis_planning"
+      ? "status-pill status-pill--ok"
+      : identification?.identification_status === "not_identifiable_with_current_design"
+        ? "status-pill status-pill--danger"
+        : "status-pill status-pill--warn";
+  const exposure = "acc_mean_magnitude";
+  const outcome = "label";
+
+  return (
+    <section className="temporal-planner-page">
+      <div className="temporal-status-row">
+        <span className={timingIsReady ? "status-pill status-pill--ok" : "status-pill status-pill--warn"}>
+          {timingIsReady ? "Exposure before outcome ✓" : "Temporal order needs review"}
+        </span>
+        <span>This page provides analysis strategy guidance only. No causal effect is estimated here.</span>
+      </div>
+
+      <article className="panel wide temporal-window-card">
+        <div className="panel-heading">
+          <div>
+            <h2>Temporal Window Visualization</h2>
+            <small>Temporal order is necessary but not sufficient for causal interpretation.</small>
+          </div>
+          <button onClick={handleTemporalRagEvidence} type="button">Retrieve evidence for estimation guidance</button>
+        </div>
+        <div className="timeline-scale">
+          <div className="timeline-bars temporal-bars">
+            <span className="exposure-bar" style={{ flex: exposureWindow }}>Exposure ({exposureWindow}h)</span>
+            <span className="lag-bar" style={{ flex: Math.max(lagDays * 4, 2) }}>Lag {lagDays}d</span>
+            <span className="outcome-bar" style={{ flex: outcomeWindow }}>Outcome ({outcomeWindow}h)</span>
+          </div>
+          <div className="timeline-ticks">
+            <span>Night</span><span>+6h</span><span>+12h</span><span>+18h</span><span>+24h</span><span>+30h</span>
+          </div>
+        </div>
+        <div className="slider-grid">
+          <label>
+            Lag days <strong>{lagDays}d</strong>
+            <input max={7} min={0} onChange={(event) => setLagDays(Number(event.target.value))} type="range" value={lagDays} />
+          </label>
+          <label>
+            Exposure Window <strong>{exposureWindow}h</strong>
+            <input max={24} min={1} onChange={(event) => setExposureWindow(Number(event.target.value))} step={1} type="range" value={exposureWindow} />
+          </label>
+          <label>
+            Outcome Window <strong>{outcomeWindow}h</strong>
+            <input max={24} min={1} onChange={(event) => setOutcomeWindow(Number(event.target.value))} step={1} type="range" value={outcomeWindow} />
+          </label>
+        </div>
+        <div className="detected-timing-grid">
+          <span><strong>Participant ID</strong>{idField ?? "Needs review"}</span>
+          <span><strong>Timestamp fields</strong>{timestampFields.join(", ") || "Needs review"}</span>
+          <span><strong>Current graph</strong>{graphDraft ? `${graphDraft.nodes.length} nodes, ${graphDraft.edges.length} edges` : "Generate graph first"}</span>
+          <span><strong>Role recommendations</strong>{roleRecommendations.length || "Not run"}</span>
+        </div>
+        {!timingIsReady && (
+          <p className="mini-warning">Lag structure cannot be fully verified without a reliable timestamp and participant ID.</p>
+        )}
+        <p className="stage-safety">
+          Exposure is measured before the outcome. This supports temporal ordering, but does not by itself prove causality.
+        </p>
+        {temporalRagSummary && <p className="rag-summary">{temporalRagSummary}</p>}
+      </article>
+
+      <article className="panel identification-card">
+        <div className="panel-heading">
+          <h2>Identification Readiness</h2>
+          <span className={statusClass}>{identification?.identification_status ?? "not checked"}</span>
+        </div>
+        <button onClick={handleIdentificationCheck} type="button">Run Identification Check</button>
+        <InfoList
+          items={[
+            ["Exposure", identification?.exposure ?? exposure],
+            ["Outcome", identification?.outcome ?? outcome],
+            ["Adjustment set", (identification?.proposed_adjustment_set ?? adjustmentSet).join(", ") || "none"],
+            ["Safe for strategy", identification ? String(identification.safe_to_continue_to_analysis_strategy) : "not checked"],
+          ]}
+        />
+        {[...(identification?.warnings ?? []), ...(identification?.errors ?? [])].slice(0, 4).map((issue) => (
+          <p className="warning-line" key={issue.message}>{issue.message}</p>
+        ))}
+      </article>
+
+      <article className="panel estimator-card">
+        <h2>Estimand & Estimator</h2>
+        <label>
+          Target Estimand
+          <select value={targetEstimand} onChange={(event) => setTargetEstimand(event.target.value)}>
+            <option value="average_treatment_effect">Average Treatment Effect</option>
+            <option value="average_treatment_effect_on_treated">Average Treatment Effect on the Treated</option>
+            <option value="conditional_average_treatment_effect">Conditional Average Treatment Effect</option>
+            <option value="within_person_effect">Within-Person Effect</option>
+            <option value="direct_effect">Direct Effect</option>
+            <option value="total_effect">Total Effect</option>
+          </select>
+        </label>
+        <label>
+          Candidate Estimator
+          <select value={candidateEstimator} onChange={(event) => setCandidateEstimator(event.target.value)}>
+            <option>Mixed-effects regression</option>
+            <option>Generalized estimating equations</option>
+            <option>Inverse probability weighting</option>
+            <option>Doubly robust estimator</option>
+            <option>Fixed effects / within-person model</option>
+            <option>Marginal structural model</option>
+            <option>Not recommended with current design</option>
+          </select>
+        </label>
+        <button onClick={() => handleAnalysisStrategy({ exposure, outcome, estimandType: targetEstimand })} type="button">
+          Generate Analysis Strategy
+        </button>
+        {strategyPlan ? (
+          <div className="strategy-summary">
+            <InfoList
+              items={[
+                ["Status", strategyPlan.strategy_status],
+                ["Estimand", strategyPlan.target_estimand],
+                ["Exposure", strategyPlan.exposure_definition],
+                ["Outcome", strategyPlan.outcome_definition],
+                ["Time window", strategyPlan.time_window],
+                ["Unit", strategyPlan.unit_of_analysis],
+                ["Missing data", strategyPlan.missing_data_strategy],
+                ["Repeated measures", strategyPlan.repeated_measures_handling],
+              ]}
+            />
+            <p><strong>Estimator family:</strong> {strategyPlan.recommended_estimator_family.join(", ") || candidateEstimator}</p>
+            <p><strong>Can claim:</strong> {strategyPlan.what_can_be_claimed}</p>
+            <p><strong>Cannot claim:</strong> {strategyPlan.what_cannot_be_claimed}</p>
+          </div>
+        ) : (
+          <p className="info-banner">Estimator guidance is conditional on the graph, identification result, and assumptions. No effect is estimated on this page.</p>
+        )}
+      </article>
+
+      <article className="panel sensitivity-card">
+        <div className="panel-heading">
+          <h2>Sensitivity Plan</h2>
+          <span className="soft-count">{completedRequired}/5 Required Checks Complete</span>
+        </div>
+        <div className="sensitivity-list">
+          {Object.entries(sensitivityChecks).map(([item, checked]) => (
+            <label key={item}>
+              <input
+                checked={checked}
+                onChange={() => setSensitivityChecks((current) => ({ ...current, [item]: !current[item] }))}
+                type="checkbox"
+              />
+              {item}
+            </label>
+          ))}
+        </div>
+        <button onClick={() => handleAssumptionsReview({ exposure, outcome })} type="button">Review Assumptions</button>
+        {assumptions ? (
+          <div className="assumption-list">
+            {assumptions.review.assumptions.slice(0, 6).map((assumption) => (
+              <article className={`assumption-item assumption-item--${assumption.status}`} key={assumption.assumption_name}>
+                <strong>{assumption.assumption_name}</strong>
+                <span>{assumption.status}</span>
+                <p>{assumption.rationale}</p>
+                <small>{assumption.recommended_check}</small>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p>Review assumptions after identification and strategy guidance are generated.</p>
+        )}
+      </article>
+
+      <article className="panel wide temporal-guidance-card">
+        <div>
+          <h2>Assistant Guidance</h2>
+          <p>Your current design uses a {lagDays}-day lag. I will check whether the dataset has participant IDs and timestamps needed to support this timing.</p>
+          <p>Estimator choice does not prove causality.</p>
+        </div>
+        <div className="assistant-prompt-row">
+          {["Explain temporal ordering", "What is ATE?", "Why use mixed effects?", "What if positivity fails?", "Explain sensitivity analysis"].map((prompt) => (
+            <button key={prompt} onClick={() => handleTemporalPrompt(prompt)} type="button">{prompt}</button>
+          ))}
+        </div>
+        <button onClick={handleStrategy} type="button">Run Full Guidance Sequence</button>
+      </article>
+    </section>
+  );
+}
+
+function ReviewStage({
+  handleReport,
+  report,
+}: {
+  handleReport: () => void;
+  report: ReportGenerationResponse | null;
+}) {
+  const blockedClaims = report?.claim_audit.unsafe_claims_found ?? [];
+  return (
+    <section className="review-layout">
+      <article className="panel analysis-story">
+        <h2>Analysis Story</h2>
+        <h3>Research Question</h3>
+        <p>Does sleep duration during window t predict next-day alcohol-use-related label?</p>
+        <h3>DAG</h3>
+        <pre>Sleep → Alcohol Use{"\n"}Time of Day → Sleep{"\n"}Latitude → Alcohol Use</pre>
+        <p className="muted">Observational within-person study. Causal language requires explicit assumption reference.</p>
+      </article>
+      <article className="panel claim-auditor">
+        <div className="panel-heading"><h2>Claim Auditor</h2><button onClick={handleReport}>Generate Report</button></div>
+        {blockedClaims.length === 0 ? (
+          <p>Run report generation to audit claims.</p>
+        ) : (
+          blockedClaims.slice(0, 4).map((claim) => (
+            <div className="claim-card blocked" key={claim.unsafe_language}>
+              <strong>{claim.unsafe_language}</strong>
+              <p>{claim.suggested_safe_alternative}</p>
+            </div>
+          ))
+        )}
+      </article>
+      <article className="panel evidence-card"><h2>Evidence</h2><p>Select a claim to see its sources. Evidence supports guidance, not proven causal effects.</p></article>
+    </section>
+  );
+}
+
+function InfoList({ items }: { items: Array<[string, string]> }) {
+  return (
+    <dl className="info-list">
+      {items.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ChartCard({ title, variant }: { title: string; variant?: "line" | "area" }) {
+  return (
+    <article className="panel chart-card">
+      <h2>{title}</h2>
+      <div className={`fake-chart fake-chart--${variant ?? "bar"}`}>
+        <span /><span /><span /><span /><span />
+      </div>
+    </article>
+  );
 }

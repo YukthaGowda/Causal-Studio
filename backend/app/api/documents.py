@@ -14,7 +14,7 @@ from app.rag.ingestion import (
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
-ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
 
 def get_file_extension(filename: str) -> str:
@@ -38,7 +38,7 @@ def upload_document(file: UploadFile = File(...)) -> dict[str, str | int]:
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Upload a .pdf or .docx file.",
+            detail="Unsupported file type. Upload a .pdf, .docx, or .txt file.",
         )
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

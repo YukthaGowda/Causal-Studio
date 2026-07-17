@@ -57,6 +57,24 @@ export type RagSearchResponse = {
   results: RagSearchResult[];
 };
 
+export type AssistantChatSource = {
+  source_filename: string | null;
+  page_number?: number;
+  chunk_index: number | null;
+  distance: number | null;
+  chunk_text: string;
+};
+
+export type AssistantChatResponse = {
+  message: string;
+  answer: string;
+  llm_used: boolean;
+  model: string | null;
+  warning: string | null;
+  evidence_chunks_used: number;
+  sources: AssistantChatSource[];
+};
+
 export type DatasetUploadResponse = {
   original_filename: string;
   saved_filename: string;

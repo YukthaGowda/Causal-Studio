@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.analysis_strategy import router as analysis_strategy_router
+from app.api.assistant import router as assistant_router
 from app.api.assumptions import router as assumptions_router
 from app.api.candidate_variables import router as candidate_variables_router
 from app.api.causal_graph import router as causal_graph_router
@@ -40,6 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(documents_router)
+app.include_router(assistant_router)
 app.include_router(rag_router)
 app.include_router(datasets_router)
 app.include_router(exploration_router)

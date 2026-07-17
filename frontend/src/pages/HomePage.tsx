@@ -32,6 +32,7 @@ import type {
   IdentificationCheckResponse,
   IngestionStatusResponse,
   MissingnessItem,
+  RagSearchResult,
   ReportGenerationResponse,
   SelectedCausalVariable,
   TargetedFeasibilityResponse,
@@ -1195,6 +1196,7 @@ export function HomePage() {
         broadExplorationSummary: broadExploration ?? undefined,
         candidateQuestions,
         candidateVariables,
+        targetedFeasibilityResult: targetedFeasibility ?? undefined,
         selectedVariables,
         roleRecommendations,
         roleValidationResult: roleValidation ?? undefined,
@@ -1206,6 +1208,10 @@ export function HomePage() {
       });
       setReport(result);
       setNotice("Report generated. Review blocked claims before export.");
+      addAssistantMessage({
+        role: "assistant",
+        text: "Your Causal Design and Analysis Guidance Report is ready for review. Please confirm that the research question, graph assumptions, adjustment set, and claim boundaries are accurate.",
+      });
     });
   }
 
@@ -1426,7 +1432,24 @@ export function HomePage() {
         )}
 
         {activePage === "review" && (
-          <ReviewStage handleReport={handleReport} report={report} />
+          <ReviewStage
+            adjustmentSet={adjustmentSet}
+            assumptions={assumptions}
+            broadExploration={broadExploration}
+            candidateVariables={candidateVariables}
+            confirmedQuestion={confirmedQuestion}
+            graphDraft={graphDraft}
+            graphValidation={graphValidation}
+            handleReport={handleReport}
+            identification={identification}
+            report={report}
+            roleValidation={roleValidation}
+            schema={schema}
+            selectedVariables={selectedVariables}
+            strategy={strategy}
+            targetedFeasibility={targetedFeasibility}
+            onAssistantMessage={addAssistantMessage}
+          />
         )}
       </main>
 
@@ -2826,37 +2849,489 @@ function TemporalStage({
 }
 
 function ReviewStage({
+  adjustmentSet,
+  assumptions,
+  broadExploration,
+  candidateVariables,
+  confirmedQuestion,
+  graphDraft,
+  graphValidation,
   handleReport,
+  identification,
+  onAssistantMessage,
   report,
+  roleValidation,
+  schema,
+  selectedVariables,
+  strategy,
+  targetedFeasibility,
 }: {
+  adjustmentSet: string[];
+  assumptions: AssumptionReviewResponse | null;
+  broadExploration: BroadExplorationResponse | null;
+  candidateVariables: CandidateVariableRecommendation[];
+  confirmedQuestion: string;
+  graphDraft: CausalGraphDraft | null;
+  graphValidation: BackendCausalGraphValidation | null;
   handleReport: () => void;
+  identification: IdentificationCheckResponse | null;
+  onAssistantMessage: (message: AssistantMessage) => void;
   report: ReportGenerationResponse | null;
+  roleValidation: BackendCausalRoleValidation | null;
+  schema: DatasetSchemaResponse | null;
+  selectedVariables: SelectedCausalVariable[];
+  strategy: AnalysisStrategyResponse | null;
+  targetedFeasibility: TargetedFeasibilityResponse | null;
 }) {
-  const blockedClaims = report?.claim_audit.unsafe_claims_found ?? [];
+  type ReviewClaim = {
+    id: string;
+    text: string;
+    status: "linked" | "needs_review" | "blocked";
+    reason: string;
+    saferRewrite?: string;
+  };
+
+  const [selectedClaim, setSelectedClaim] = useState<ReviewClaim | null>(null);
+  const [evidenceResults, setEvidenceResults] = useState<RagSearchResult[]>([]);
+  const [evidenceMessage, setEvidenceMessage] = useState("Select a claim to see its sources.");
+  const [approvalMessage, setApprovalMessage] = useState("");
+
+  const linkedClaims: ReviewClaim[] = [
+    {
+      id: "linked-1",
+      text: "The proposed design evaluates an association under a specified causal model.",
+      status: "linked",
+      reason: "This wording stays within design guidance and stated assumptions.",
+    },
+    {
+      id: "linked-2",
+      text: "The selected adjustment set is based on the current DAG assumptions.",
+      status: "linked",
+      reason: "It links the adjustment set to the graph rather than claiming truth.",
+    },
+    {
+      id: "linked-3",
+      text: "Temporal ordering is supported if exposure is measured before outcome.",
+      status: "linked",
+      reason: "This treats timing as necessary support, not causal proof.",
+    },
+    {
+      id: "linked-4",
+      text: "Results, if estimated later, should be interpreted under stated assumptions.",
+      status: "linked",
+      reason: "This preserves the boundary between design guidance and future results.",
+    },
+  ];
+  const reviewClaims: ReviewClaim[] = [
+    {
+      id: "review-1",
+      text: "Sleep-related passive sensing features may help characterize next-window alcohol-use risk.",
+      status: "needs_review",
+      reason: "Needs careful wording because this is not a treatment, diagnosis, or validated prediction claim.",
+      saferRewrite:
+        "Sleep-related passive sensing features are candidate variables for later design review and validation.",
+    },
+  ];
+  const blockedClaims: ReviewClaim[] = [
+    {
+      id: "blocked-1",
+      text: "Stress causes alcohol use.",
+      status: "blocked",
+      reason: "Overstates causality without completed estimation and assumptions.",
+      saferRewrite:
+        "Stress patterns were explored as candidate variables of interest, but this design does not prove that stress causes alcohol use.",
+    },
+    {
+      id: "blocked-2",
+      text: "Participants will relapse if sleep falls below 5 hours.",
+      status: "blocked",
+      reason: "Diagnostic/predictive clinical claim outside project scope.",
+      saferRewrite:
+        "Short sleep may be reviewed as a candidate risk-related signal, but this tool does not predict relapse.",
+    },
+    {
+      id: "blocked-3",
+      text: "This graph proves that poor sleep causes alcohol use.",
+      status: "blocked",
+      reason: "Graph edges are assumptions, not proven causal relationships.",
+      saferRewrite:
+        "This graph represents assumptions to be reviewed before any later causal analysis.",
+    },
+    ...(report?.claim_audit.unsafe_claims_found.map((finding, index) => ({
+      id: `backend-blocked-${index}`,
+      text: finding.unsafe_language,
+      status: "blocked" as const,
+      reason: `Backend claim audit severity: ${finding.severity}.`,
+      saferRewrite: finding.suggested_safe_alternative,
+    })) ?? []),
+  ];
+  const allClaims = [...linkedClaims, ...reviewClaims, ...blockedClaims];
+  const missingSections = [
+    !confirmedQuestion && "No confirmed research question yet",
+    !graphValidation && "No graph validation result yet",
+    !identification && "No identification result yet",
+    !strategy && "No analysis strategy yet",
+    !assumptions && "No assumptions review yet",
+  ].filter((item): item is string => Boolean(item));
+  const graphNodes = graphDraft?.nodes.length ?? 0;
+  const graphEdges = graphDraft?.edges.length ?? 0;
+  const exposure =
+    strategy?.exposure ||
+    graphDraft?.nodes.find((node) => node.role.toLowerCase().includes("exposure"))?.variable_name ||
+    "acc_mean_magnitude";
+  const outcome =
+    strategy?.outcome ||
+    graphDraft?.nodes.find((node) => node.role.toLowerCase().includes("outcome"))?.variable_name ||
+    "label";
+  const mediators =
+    graphDraft?.nodes
+      .filter((node) => node.role.toLowerCase().includes("mediator"))
+      .map((node) => node.display_name || node.variable_name)
+      .join(", ") || "Needs review";
+  const proxies =
+    graphDraft?.nodes
+      .filter((node) => node.role.toLowerCase().includes("proxy"))
+      .map((node) => node.display_name || node.variable_name)
+      .join(", ") || "Needs review";
+
+  async function verifyClaimEvidence(claim: ReviewClaim) {
+    setSelectedClaim(claim);
+    setEvidenceResults([]);
+    setEvidenceMessage("Searching uploaded documents...");
+    try {
+      const response = await searchRag(
+        `${claim.text} ${confirmedQuestion} ${exposure} ${outcome} measurement timing assumptions estimator guidance`,
+        5,
+      );
+      setEvidenceResults(response.results);
+      if (response.results.length === 0) {
+        setEvidenceMessage("I could not find supporting details in the uploaded documents.");
+      } else {
+        setEvidenceMessage(`Found ${response.number_of_results} evidence snippet(s). Evidence snippets are references for design justification; they do not prove causal effects.`);
+      }
+    } catch (caughtError) {
+      setEvidenceMessage(getIssueText(caughtError));
+    }
+  }
+
+  async function verifyEvidenceLinks() {
+    setEvidenceResults([]);
+    setEvidenceMessage("Checking important report statements against uploaded documents...");
+    try {
+      const response = await searchRag(
+        `${confirmedQuestion} ${exposure} ${outcome} measurement timing assumptions adjustment set estimator guidance sensitivity plan EMA passive sensing`,
+        8,
+      );
+      setEvidenceResults(response.results);
+      setEvidenceMessage(
+        response.results.length > 0
+          ? `Found ${response.number_of_results} supporting snippet(s) for report-level evidence links. Do not treat snippets as causal proof.`
+          : "I could not find supporting details in the uploaded documents.",
+      );
+      onAssistantMessage({
+        role: "assistant",
+        text:
+          response.results.length > 0
+            ? "I found evidence snippets for report review. They can support design justification, but they do not prove causal effects."
+            : "I could not find supporting details in the uploaded documents.",
+        sources: response.results
+          .map((result) => result.source_filename)
+          .filter((value): value is string => Boolean(value)),
+      });
+    } catch (caughtError) {
+      setEvidenceMessage(getIssueText(caughtError));
+    }
+  }
+
+  function exportJson() {
+    const payload = report ?? buildLocalReportPreview();
+    downloadText(
+      `causal_design_guidance_report_${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json",
+    );
+  }
+
+  function exportMarkdown() {
+    downloadText(
+      `causal_design_guidance_report_${new Date().toISOString().slice(0, 10)}.md`,
+      buildMarkdownReport(),
+      "text/markdown",
+    );
+  }
+
+  function downloadText(filename: string, text: string, type: string) {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleApprove() {
+    if (missingSections.length > 0) {
+      setApprovalMessage(`Cannot approve yet: ${missingSections.join("; ")}.`);
+      return;
+    }
+    if (blockedClaims.length > 0) {
+      setApprovalMessage("Cannot approve while blocked claims remain. Rewrite or remove blocked claims first.");
+      onAssistantMessage({
+        role: "assistant",
+        text: "I found blocked claims. They imply causal proof or clinical prediction beyond the current design. Use the safer rewrites before approving.",
+      });
+      return;
+    }
+    setApprovalMessage("Design artifact approved for review/export.");
+  }
+
+  function buildLocalReportPreview() {
+    return {
+      report_type: "Causal Design and Analysis Guidance Report",
+      project_summary: "Causal Studio causal-design support artifact",
+      confirmed_question: confirmedQuestion || demoQuestion,
+      dataset_summary: schema
+        ? { rows: schema.number_of_rows, columns: schema.number_of_columns }
+        : "Schema not parsed",
+      broad_exploration_summary: broadExploration,
+      selected_variables: selectedVariables.map((variable) => variable.variable_name),
+      targeted_feasibility: targetedFeasibility,
+      graph_summary: { nodes: graphNodes, edges: graphEdges, validation: graphValidation?.graph_validation_status },
+      identification_status: identification?.identification_status ?? "not checked",
+      analysis_strategy: strategy?.strategy_plan ?? "not generated",
+      assumptions_review: assumptions?.review ?? "not reviewed",
+      claim_audit: { linked: linkedClaims.length, needs_review: reviewClaims.length, blocked: blockedClaims.length },
+      what_cannot_be_claimed:
+        "No causal effect is estimated here. Clinical prediction, diagnosis, or treatment recommendations are outside scope.",
+    };
+  }
+
+  function buildMarkdownReport() {
+    const plan = strategy?.strategy_plan;
+    return `# Causal Design and Analysis Guidance Report
+
+## Project Summary
+Causal Studio causal-design support artifact. This is not a causal results report.
+
+## Confirmed Causal Question
+${confirmedQuestion || demoQuestion}
+
+## Dataset and Schema Summary
+${schema ? `${schema.number_of_rows.toLocaleString()} rows and ${schema.number_of_columns} columns.` : "Schema not parsed."}
+
+## Variable Definitions and Roles
+Exposure: ${exposure}
+Outcome: ${outcome}
+Adjustment set: ${adjustmentSet.join(", ") || "Needs review"}
+
+## Causal Graph Summary
+Nodes: ${graphNodes}
+Edges: ${graphEdges}
+Validation: ${graphValidation?.graph_validation_status ?? "not run"}
+
+## Identification Review
+${identification?.plain_language_summary ?? "Identification has not been checked."}
+
+## Analysis Strategy Guidance
+${plan ? `${plan.target_estimand}. ${plan.recommended_estimator_family.join(", ")}. ${plan.what_can_be_claimed}` : "Analysis strategy has not been generated."}
+
+## Assumptions and Sensitivity Plan
+${assumptions?.review.sensitivity_checks.join("\n") ?? "Assumptions have not been reviewed."}
+
+## Claim Safety Audit
+Blocked claims: ${blockedClaims.length}
+Needs review: ${reviewClaims.length}
+Linked claims: ${linkedClaims.length}
+
+## What Cannot Be Claimed
+No causal effect is estimated here. Do not make clinical prediction, diagnosis, treatment recommendation, or causal proof claims.
+`;
+  }
+
+  function handleReviewPrompt(prompt: string) {
+    const responses: Record<string, string> = {
+      "Explain blocked claims":
+        `Blocked claims include causal proof, diagnosis, treatment, relapse prediction, or unsupported claims. Current blocked count: ${blockedClaims.length}.`,
+      "What can I safely claim?":
+        "You can safely describe the proposed causal design, variables, graph assumptions, adjustment rationale, data limitations, and analysis guidance under stated assumptions.",
+      "Show missing sections":
+        missingSections.length > 0 ? missingSections.join("; ") : "All required review sections are present.",
+      "Summarize report":
+        `This is a Causal Design and Analysis Guidance Report for: ${confirmedQuestion || demoQuestion}. It does not report estimated causal effects.`,
+      "Check evidence links":
+        "Use Verify Evidence Links or select a claim. I will retrieve uploaded document snippets without inventing citations or claiming proof.",
+    };
+    onAssistantMessage({
+      role: "assistant",
+      text: responses[prompt] ?? "This page audits design completeness, evidence links, and unsafe claims.",
+    });
+  }
+
   return (
-    <section className="review-layout">
+    <section className="review-export-page">
+      <div className="review-top-actions">
+        <div className="status-pill status-pill--warn">
+          {blockedClaims.length} blocked claims
+        </div>
+        <button onClick={exportMarkdown} type="button">Export Report</button>
+        <button className="primary-action" onClick={handleApprove} type="button">Approve & Sign Off</button>
+      </div>
+
       <article className="panel analysis-story">
-        <h2>Analysis Story</h2>
+        <div className="panel-heading">
+          <div>
+            <h2>Analysis Story</h2>
+            <small>Assembled from prior workflow stages.</small>
+          </div>
+          <span className="tag">Guidance Report</span>
+        </div>
         <h3>Research Question</h3>
-        <p>Does sleep duration during window t predict next-day alcohol-use-related label?</p>
-        <h3>DAG</h3>
-        <pre>Sleep → Alcohol Use{"\n"}Time of Day → Sleep{"\n"}Latitude → Alcohol Use</pre>
-        <p className="muted">Observational within-person study. Causal language requires explicit assumption reference.</p>
-      </article>
-      <article className="panel claim-auditor">
-        <div className="panel-heading"><h2>Claim Auditor</h2><button onClick={handleReport}>Generate Report</button></div>
-        {blockedClaims.length === 0 ? (
-          <p>Run report generation to audit claims.</p>
-        ) : (
-          blockedClaims.slice(0, 4).map((claim) => (
-            <div className="claim-card blocked" key={claim.unsafe_language}>
-              <strong>{claim.unsafe_language}</strong>
-              <p>{claim.suggested_safe_alternative}</p>
-            </div>
-          ))
+        <p>{confirmedQuestion || demoQuestion}</p>
+        <h3>DAG Summary</h3>
+        <InfoList
+          items={[
+            ["Exposure", exposure],
+            ["Outcome", outcome],
+            ["Adjustment set", adjustmentSet.join(", ") || "Needs review"],
+            ["Mediators", mediators],
+            ["Proxies", proxies],
+            ["Graph validation", graphValidation?.graph_validation_status ?? "No graph validation result yet"],
+            ["Nodes / Edges", `${graphNodes} nodes / ${graphEdges} edges`],
+          ]}
+        />
+        <h3>Assumptions</h3>
+        <ul className="review-bullet-list">
+          {(assumptions?.review.assumptions.map((assumption) => `${assumption.assumption_name}: ${assumption.status}`) ?? [
+            "Temporal ordering: needs review",
+            "No unmeasured confounding / exchangeability: needs review",
+            "Positivity: needs review",
+            "Consistency: needs review",
+            "SUTVA / no interference: needs review",
+            "Measurement validity: needs review",
+            "Missingness assumptions: needs review",
+          ]).slice(0, 8).map((item) => <li key={item}>{item}</li>)}
+        </ul>
+        <h3>Timing</h3>
+        <InfoList
+          items={[
+            ["Exposure window", strategy?.strategy_plan.time_window ?? "Window t / needs review"],
+            ["Lag", "1 day / next observation window"],
+            ["Outcome window", "Next observation window"],
+            ["Timestamp field", schema?.possible_timestamp_date_columns[0] ?? "No timestamp detected"],
+            ["Participant ID", schema?.possible_id_columns[0] ?? "No participant ID detected"],
+          ]}
+        />
+        <h3>Sensitivity</h3>
+        <ul className="review-bullet-list">
+          {(assumptions?.review.sensitivity_checks ?? [
+            "Missing data sensitivity",
+            "Alternative lag windows",
+            "Alternative adjustment sets",
+            "Unmeasured confounding sensitivity",
+            "Complete-case vs imputed analysis",
+            "Participant-level robustness",
+          ]).map((item) => <li key={item}>{item}</li>)}
+        </ul>
+        {missingSections.length > 0 && (
+          <div className="incomplete-list">
+            {missingSections.map((item) => <span key={item}>{item}</span>)}
+          </div>
         )}
+        <p className="stage-safety">This report describes a causal design and analysis guidance plan. It does not report estimated causal effects.</p>
       </article>
-      <article className="panel evidence-card"><h2>Evidence</h2><p>Select a claim to see its sources. Evidence supports guidance, not proven causal effects.</p></article>
+
+      <article className="panel claim-auditor">
+        <div className="panel-heading">
+          <div>
+            <h2>Claim Auditor</h2>
+            <small>{blockedClaims.length} blocked claims · {linkedClaims.length} linked claims · {reviewClaims.length} needs review</small>
+          </div>
+          <button onClick={handleReport} type="button">Generate Report</button>
+        </div>
+        <div className="claim-stack">
+          {allClaims.map((claim) => (
+            <button
+              className={`claim-card claim-card--${claim.status}`}
+              key={claim.id}
+              onClick={() => verifyClaimEvidence(claim)}
+              type="button"
+            >
+              <strong>{claim.text}</strong>
+              <span>{claim.status.replace("_", " ")}</span>
+              <p>{claim.reason}</p>
+              {claim.saferRewrite && <small>Safer rewrite: {claim.saferRewrite}</small>}
+            </button>
+          ))}
+        </div>
+      </article>
+
+      <article className="panel evidence-card">
+        <div className="panel-heading">
+          <div>
+            <h2>Evidence Source Verification</h2>
+            <small>Evidence snippets are references for design justification. They do not prove causal effects.</small>
+          </div>
+          <button onClick={verifyEvidenceLinks} type="button">Verify Evidence Links</button>
+        </div>
+        <p>{selectedClaim ? `Selected claim: ${selectedClaim.text}` : evidenceMessage}</p>
+        {selectedClaim && <p>{evidenceMessage}</p>}
+        <div className="evidence-snippet-list">
+          {evidenceResults.slice(0, 5).map((result, index) => (
+            <article key={`${result.source_filename}-${result.chunk_index}-${index}`}>
+              <strong>{result.source_filename || "Uploaded document"}</strong>
+              <small>
+                {result.file_extension || "document"} · chunk {result.chunk_index ?? "?"}
+                {typeof result.distance === "number" ? ` · distance ${result.distance.toFixed(3)}` : ""}
+              </small>
+              <p>{result.chunk_text}</p>
+            </article>
+          ))}
+        </div>
+      </article>
+
+      <article className="panel report-export-card">
+        <div className="panel-heading">
+          <div>
+            <h2>Causal Design and Analysis Guidance Report</h2>
+            <small>This is a design and analysis guidance report, not a causal results report.</small>
+          </div>
+          <div className="export-actions">
+            <button onClick={handleReport} type="button">Generate Report</button>
+            <button onClick={exportJson} type="button">Export JSON</button>
+            <button onClick={exportMarkdown} type="button">Export Markdown</button>
+            <button disabled type="button">Export PDF planned</button>
+          </div>
+        </div>
+        <div className="report-preview">
+          <h3>Project Summary</h3>
+          <p>{report?.project_summary ? JSON.stringify(report.project_summary) : "Causal Studio causal-design support artifact."}</p>
+          <h3>Confirmed Causal Question</h3>
+          <p>{report?.final_research_question ?? confirmedQuestion ?? demoQuestion}</p>
+          <h3>Variable Definitions and Roles</h3>
+          <p>{selectedVariables.map((variable) => variable.variable_name).join(", ") || "No variables selected."}</p>
+          <h3>Identification Review</h3>
+          <p>{identification?.plain_language_summary ?? "Identification review has not been run."}</p>
+          <h3>Analysis Strategy Guidance</h3>
+          <p>{strategy?.strategy_plan.estimator_rationale ?? "Analysis strategy has not been generated."}</p>
+          <h3>What Can and Cannot Be Claimed</h3>
+          <p>{report?.what_can_be_claimed ?? "You can describe the design, assumptions, and planned analysis guidance."}</p>
+          <p>{report?.what_cannot_be_claimed ?? "You cannot claim causal proof, clinical prediction, diagnosis, treatment recommendations, or estimated effects from this page."}</p>
+        </div>
+        {approvalMessage && <p className={approvalMessage.startsWith("Design artifact approved") ? "status-strip" : "status-strip status-strip--error"}>{approvalMessage}</p>}
+      </article>
+
+      <article className="panel wide review-assistant-actions">
+        <div>
+          <h2>Assistant Review</h2>
+          <p>I am reviewing the Analysis Story for completeness, evidence links, unsafe claims, and missing assumptions.</p>
+        </div>
+        <div className="assistant-prompt-row">
+          {["Explain blocked claims", "What can I safely claim?", "Show missing sections", "Summarize report", "Check evidence links"].map((prompt) => (
+            <button key={prompt} onClick={() => handleReviewPrompt(prompt)} type="button">{prompt}</button>
+          ))}
+        </div>
+      </article>
     </section>
   );
 }

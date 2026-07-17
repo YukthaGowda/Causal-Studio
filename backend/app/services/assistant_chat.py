@@ -101,7 +101,10 @@ def generate_assistant_response(
 
     warning = None
     if not api_key:
-        warning = "OPENAI_API_KEY is not configured, so I returned deterministic guidance without an LLM call."
+        warning = (
+            "LLM explanation is unavailable because the API key is not configured, "
+            "but deterministic checks still work."
+        )
         answer = _fallback_answer(normalized_message, rag_response, warning)
         llm_used = False
     else:

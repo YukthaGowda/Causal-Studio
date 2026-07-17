@@ -8,6 +8,16 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
     const detail = Array.isArray(data.detail)
       ? data.detail.map((item: { msg?: string }) => item.msg).join(" ")
       : data.detail;
+    if (
+      typeof detail === "string" &&
+      (detail.includes("ChromaDB has not been created") ||
+        detail.includes("RAG collection was not found") ||
+        detail.includes("No documents have been ingested"))
+    ) {
+      throw new Error(
+        "No ingested documents are available yet. Upload and ingest documents before running evidence search.",
+      );
+    }
     throw new Error(detail ?? "RAG search request failed.");
   }
 

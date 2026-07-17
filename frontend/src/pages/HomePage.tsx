@@ -462,7 +462,7 @@ export function HomePage() {
 
   async function handleSchemaParse() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Parsing schema", async () => {
@@ -497,7 +497,7 @@ export function HomePage() {
       );
       addAssistantMessage({
         role: "assistant",
-        text: `RAG schema check found ${response.number_of_results} supporting evidence chunk(s). I will show retrieved sources, but I will not invent meanings if evidence is incomplete. LLM explanation is unavailable if the API key is not configured, but schema parsing and deterministic checks are still available.`,
+        text: `RAG schema check found ${response.number_of_results} supporting evidence chunk(s). I will show retrieved sources, but I will not invent meanings if evidence is incomplete. LLM explanation is unavailable because the API key is not configured, but deterministic checks still work.`,
         sources,
       });
     });
@@ -688,7 +688,7 @@ export function HomePage() {
 
   async function handleBroadExplore() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Running broad exploration", async () => {
@@ -797,7 +797,7 @@ export function HomePage() {
 
   async function handleGenerateQuestions() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Generating questions", async () => {
@@ -814,7 +814,7 @@ export function HomePage() {
 
   async function handleRecommendVariables() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Recommending variables", async () => {
@@ -839,7 +839,7 @@ export function HomePage() {
     timeWindow?: string;
   }) {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Checking targeted feasibility", async () => {
@@ -866,7 +866,7 @@ export function HomePage() {
 
   async function handleValidateRoles() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Validating roles", async () => {
@@ -888,7 +888,7 @@ export function HomePage() {
 
   async function handleValidateRolesAndGraph() {
     if (!selectedDataset) {
-      setError("Select a dataset first.");
+      setError("Upload or select a dataset before running this step.");
       return;
     }
     await runAction("Validating roles and graph", async () => {
@@ -2722,7 +2722,7 @@ function TemporalStage({
           <p className="mini-warning">Lag structure cannot be fully verified without a reliable timestamp and participant ID.</p>
         )}
         <p className="stage-safety">
-          Exposure is measured before the outcome. This supports temporal ordering, but does not by itself prove causality.
+          Exposure is measured before the outcome. This supports temporal ordering, but does not by itself establish causality.
         </p>
         {temporalRagSummary && <p className="rag-summary">{temporalRagSummary}</p>}
       </article>
@@ -2835,7 +2835,7 @@ function TemporalStage({
         <div>
           <h2>Assistant Guidance</h2>
           <p>Your current design uses a {lagDays}-day lag. I will check whether the dataset has participant IDs and timestamps needed to support this timing.</p>
-          <p>Estimator choice does not prove causality.</p>
+          <p>Estimator choice does not establish causality.</p>
         </div>
         <div className="assistant-prompt-row">
           {["Explain temporal ordering", "What is ATE?", "Why use mixed effects?", "What if positivity fails?", "Explain sensitivity analysis"].map((prompt) => (
@@ -2927,7 +2927,7 @@ function ReviewStage({
       id: "review-1",
       text: "Sleep-related passive sensing features may help characterize next-window alcohol-use risk.",
       status: "needs_review",
-      reason: "Needs careful wording because this is not a treatment, diagnosis, or validated prediction claim.",
+      reason: "Needs careful wording because this is not clinical action guidance or a validated prediction claim.",
       saferRewrite:
         "Sleep-related passive sensing features are candidate variables for later design review and validation.",
     },
@@ -3103,7 +3103,7 @@ function ReviewStage({
       assumptions_review: assumptions?.review ?? "not reviewed",
       claim_audit: { linked: linkedClaims.length, needs_review: reviewClaims.length, blocked: blockedClaims.length },
       what_cannot_be_claimed:
-        "No causal effect is estimated here. Clinical prediction, diagnosis, or treatment recommendations are outside scope.",
+        "No causal effect is estimated here. Clinical prediction, clinical classification, or action guidance is outside scope.",
     };
   }
 
@@ -3112,7 +3112,7 @@ function ReviewStage({
     return `# Causal Design and Analysis Guidance Report
 
 ## Project Summary
-Causal Studio causal-design support artifact. This is not a causal results report.
+Causal Studio causal-design support artifact. This is not an effects-results report.
 
 ## Confirmed Causal Question
 ${confirmedQuestion || demoQuestion}
@@ -3145,14 +3145,14 @@ Needs review: ${reviewClaims.length}
 Linked claims: ${linkedClaims.length}
 
 ## What Cannot Be Claimed
-No causal effect is estimated here. Do not make clinical prediction, diagnosis, treatment recommendation, or causal proof claims.
+No causal effect is estimated here. Do not make clinical prediction, clinical classification, action guidance, or causal proof claims.
 `;
   }
 
   function handleReviewPrompt(prompt: string) {
     const responses: Record<string, string> = {
       "Explain blocked claims":
-        `Blocked claims include causal proof, diagnosis, treatment, relapse prediction, or unsupported claims. Current blocked count: ${blockedClaims.length}.`,
+        `Blocked claims include causal proof, clinical classification, clinical action guidance, participant-level forecasting, or unsupported claims. Current blocked count: ${blockedClaims.length}.`,
       "What can I safely claim?":
         "You can safely describe the proposed causal design, variables, graph assumptions, adjustment rationale, data limitations, and analysis guidance under stated assumptions.",
       "Show missing sections":
@@ -3294,7 +3294,7 @@ No causal effect is estimated here. Do not make clinical prediction, diagnosis, 
         <div className="panel-heading">
           <div>
             <h2>Causal Design and Analysis Guidance Report</h2>
-            <small>This is a design and analysis guidance report, not a causal results report.</small>
+            <small>This is a design and analysis guidance report, not an effects-results report.</small>
           </div>
           <div className="export-actions">
             <button onClick={handleReport} type="button">Generate Report</button>
@@ -3316,7 +3316,7 @@ No causal effect is estimated here. Do not make clinical prediction, diagnosis, 
           <p>{strategy?.strategy_plan.estimator_rationale ?? "Analysis strategy has not been generated."}</p>
           <h3>What Can and Cannot Be Claimed</h3>
           <p>{report?.what_can_be_claimed ?? "You can describe the design, assumptions, and planned analysis guidance."}</p>
-          <p>{report?.what_cannot_be_claimed ?? "You cannot claim causal proof, clinical prediction, diagnosis, treatment recommendations, or estimated effects from this page."}</p>
+          <p>{report?.what_cannot_be_claimed ?? "You cannot claim causal proof, clinical prediction, clinical classification, action guidance, or estimated effects from this page."}</p>
         </div>
         {approvalMessage && <p className={approvalMessage.startsWith("Design artifact approved") ? "status-strip" : "status-strip status-strip--error"}>{approvalMessage}</p>}
       </article>

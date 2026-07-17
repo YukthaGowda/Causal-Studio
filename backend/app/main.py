@@ -19,9 +19,9 @@ from app.api.workflow import router as workflow_router
 
 
 app = FastAPI(
-    title="Causal Studio API",
+    title="Causal Design Agent API",
     description=(
-        "Backend API for the Causal Studio causal-design support platform. "
+        "Backend API for the Causal Design Agent causal-design support platform. "
         "Supports the official 8-step workflow from project setup through "
         "data foundation, broad exploration, question and variable design, "
         "targeted feasibility, graph validation, strategy, and review/export."
@@ -60,11 +60,11 @@ app.include_router(debug_router)
 @app.get("/")
 def read_root() -> dict[str, str]:
     return {
-        "project": "Causal Studio",
+        "project": "Causal Design Agent",
         "message": "Causal-design support backend API is running.",
     }
 
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
-    return {"status": "ok", "message": "Causal Studio backend is running."}
+    return {"status": "ok", "message": "Causal Design Agent backend is running."}

@@ -220,9 +220,9 @@ def build_strategy_messages(
     deterministic_warnings: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     system_message = """
-You are the analysis strategy guidance assistant for Causal Studio.
+You are the analysis strategy guidance assistant for Causal Design Agent.
 
-Causal Studio is a causal-design support tool, not a diagnostic tool or
+Causal Design Agent is a causal-design support tool, not a diagnostic tool or
 treatment-decision system. The LLM recommends, explains, and drafts. Deterministic
 Python backend validation checks causal roles, timing, graph structure, and
 claims. Do not present causal conclusions as proven.

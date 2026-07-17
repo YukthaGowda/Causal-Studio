@@ -91,7 +91,7 @@ const navItems: Array<{
   { id: "home", label: "Home", icon: "⌂" },
   { id: "data", label: "Data Foundation", icon: "▤" },
   { id: "explore", label: "Explore", icon: "Ⅱ" },
-  { id: "causal", label: "Causal Studio", icon: "⌁" },
+  { id: "causal", label: "Causal Design Agent", icon: "⌁" },
   { id: "temporal", label: "Estimator", icon: "◷" },
   { id: "review", label: "Review & Report", icon: "▣" },
   { id: "clinician", label: "Clinician Reference", icon: "□", disabled: true },
@@ -99,17 +99,16 @@ const navItems: Array<{
 
 const pageCopy: Record<PageId, { title: string; subtitle: string; assistant: string }> = {
   home: {
-    title: "Project Setup",
-    subtitle:
-      "Upload your study documents below — each one has its own purpose, so they’re reviewed separately.",
+    title: "Welcome — I’m your Causal Design Agent",
+    subtitle: "Set up your study, connect your evidence, and begin the guided causal design workflow",
     assistant:
-      "Welcome to your Causal Design workspace. You’re on the Home page. Here’s a quick guide to what you’re looking at. The top timeline shows the workflow: Project Setup → Data Foundation → Explore → Causal Studio → Estimator → Review & Report. The left panel is navigation. The center panel is your active workspace. I’ll help check whether your study materials are complete enough to continue. Let’s start with your Study Dataset — upload the raw CSV, JSON, or TSV file from your study.",
+      "Welcome to your Causal Design workspace. You’re on the Home page. Here’s a quick guide to what you’re looking at. The top timeline shows the workflow: Project Setup → Data Foundation → Explore → Causal Design Agent → Estimator → Review & Report. The left panel is navigation. The center panel is your active workspace. I’ll help check whether your study materials are complete enough to continue. Let’s start with your Study Dataset — upload the raw CSV, JSON, or TSV file from your study.",
   },
   data: {
     title: "Data Foundation",
     subtitle: "Upload datasets, define variables, and establish linking keys",
     assistant:
-      "I see your dataset schema has been loaded. I’m checking ID fields, timestamps, variable types, missingness, and possible proxy variables before you move to broad exploration. Variable labels here are provisional. They help organize the dataset, but causal roles are not final until Causal Studio graph validation.",
+      "I see your dataset schema has been loaded. I’m checking ID fields, timestamps, variable types, missingness, and possible proxy variables before you move to broad exploration. Variable labels here are provisional. They help organize the dataset, but causal roles are not final until Causal Design Agent graph validation.",
   },
   explore: {
     title: "Explore",
@@ -118,7 +117,7 @@ const pageCopy: Record<PageId, { title: string; subtitle: string; assistant: str
       "Explore mode helps you inspect broad patterns, missingness, coverage, temporal structure, and participant-level variation before finalizing a causal question. Select a dataset and run broad exploration. I will summarize data quality issues and possible patterns, but I will not treat them as causal evidence.",
   },
   causal: {
-    title: "Causal Studio",
+    title: "Causal Design Agent",
     subtitle: "Build your causal model — DAG construction, variable roles, assumption checking",
     assistant:
       "Build the causal model by refining the research question, selecting variables, validating roles, and generating a draft DAG.",
@@ -318,17 +317,10 @@ export function HomePage() {
   const [error, setError] = useState("");
   const [assistantQuery, setAssistantQuery] = useState("");
   const [assistantBusy, setAssistantBusy] = useState(false);
-  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([
-    { role: "assistant", text: pageCopy.home.assistant },
-    {
-      role: "user",
-      text: "What if I don’t have a formal data dictionary — can I just write it out in an email or a note?",
-    },
-    {
-      role: "assistant",
-      text: "Yes, that’s fine. A plain text file, Word document, or note is acceptable as long as it explains each column. At minimum, include variable name, meaning, data type, units or range, collection method, and measurement timing.",
-    },
-  ]);
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
+  const [aimType, setAimType] = useState("");
+  const [architectureGuideOpen, setArchitectureGuideOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const selectedVariables = useMemo(() => buildSelectedVariables(schema), [schema]);
   const adjustmentSet = ["time_of_day", "day_of_week", "avg_latitude"].filter((item) =>
@@ -359,10 +351,6 @@ export function HomePage() {
 
   function switchPage(pageId: PageId) {
     setActivePage(pageId);
-    setAssistantMessages((messages) => [
-      ...messages,
-      { role: "assistant", text: pageCopy[pageId].assistant },
-    ]);
   }
 
   async function runAction(label: string, action: () => Promise<void>) {
@@ -380,6 +368,30 @@ export function HomePage() {
 
   function addAssistantMessage(message: AssistantMessage) {
     setAssistantMessages((messages) => [...messages, message]);
+  }
+
+  function handleAimTypeSelection(value: string) {
+    const normalizedAim = value.toLowerCase();
+    setAimType(normalizedAim);
+    setNotice(`Aim type set to ${value}.`);
+    setAssistantMessages((messages) => [
+      ...messages,
+      { role: "user", text: value },
+      {
+        role: "assistant",
+        text:
+          normalizedAim === "causal"
+            ? "Causal aim selected. I will treat this as a design-support workflow: causal language stays provisional until deterministic validation checks timing, roles, graph assumptions, and claims."
+            : normalizedAim === "predictive"
+              ? "Predictive aim selected. I will frame outputs around prediction support and avoid causal claims unless you later switch to a causal design workflow."
+              : "Descriptive aim selected. I will frame outputs as summaries of observed patterns. Exploratory patterns do not establish causality.",
+      },
+    ]);
+  }
+
+  function handleArchitectureGuide() {
+    setArchitectureGuideOpen((open) => !open);
+    setNotice("Architecture guide updated.");
   }
 
   function summarizeSchemaForHome(parsedSchema: DatasetSchemaResponse) {
@@ -715,10 +727,10 @@ export function HomePage() {
     setPromotedPatterns((current) =>
       current.includes(pattern) ? current : [...current, pattern],
     );
-    setNotice("Promoted to Causal Studio as a hypothesis candidate, not as causal evidence.");
+    setNotice("Promoted to Causal Design Agent as a hypothesis candidate, not as causal evidence.");
     addAssistantMessage({
       role: "assistant",
-      text: "Promoted to Causal Studio as a hypothesis candidate, not as causal evidence. This still needs later causal question design, role review, graph validation, and assumption checking.",
+      text: "Promoted to Causal Design Agent as a hypothesis candidate, not as causal evidence. This still needs later causal question design, role review, graph validation, and assumption checking.",
     });
   }
 
@@ -1188,7 +1200,7 @@ export function HomePage() {
     }
     await runAction("Generating report", async () => {
       const result = await generateReport({
-        projectTitle: "Causal Studio Demo",
+        projectTitle: "Causal Design Agent Demo",
         researchObjective,
         confirmedQuestion,
         datasetFilename: selectedDataset,
@@ -1244,30 +1256,23 @@ export function HomePage() {
     }
   }
 
-  const current = pageCopy[activePage];
-
   return (
-    <div className="prototype-shell">
-      <header className="figma-toolbar">
-        <div className="figma-left">
-          <span>⌘</span>
-          <span className="ai-pill">AI</span>
-        </div>
-        <strong>Causal Studio Dashboard Prototype</strong>
-        <div className="figma-right">
-          <span>○</span>
-          <span>⛶</span>
-          <button type="button">Share</button>
-        </div>
-      </header>
-
+    <div className={`prototype-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="prototype-sidebar">
         <div className="brand-block">
           <div className="brand-icon">CS</div>
           <div>
-            <strong>Causal Studio</strong>
+            <strong>Causal Design Agent</strong>
             <span>Research Platform</span>
           </div>
+          <button
+            aria-label="Collapse sidebar"
+            className="sidebar-collapse-button"
+            onClick={() => setSidebarCollapsed(true)}
+            type="button"
+          >
+            ‹
+          </button>
         </div>
 
         <nav className="prototype-nav">
@@ -1286,7 +1291,6 @@ export function HomePage() {
         </nav>
 
         <div className="sidebar-footer">
-          <button type="button">⚙ Settings</button>
           <div className="researcher-card">
             <span>RM</span>
             <div>
@@ -1297,18 +1301,34 @@ export function HomePage() {
         </div>
       </aside>
 
+      {sidebarCollapsed && (
+        <button
+          aria-label="Open sidebar"
+          className="sidebar-open-button"
+          onClick={() => setSidebarCollapsed(false)}
+          type="button"
+        >
+          ›
+        </button>
+      )}
+
       <main className="prototype-workspace">
-        <header className="prototype-topbar">
+        <header className={`prototype-topbar ${activePage !== "home" ? "prototype-topbar--compact" : ""}`}>
           <div>
-            <h1>{current.title}</h1>
-            <p>{current.subtitle}</p>
+            <h1>Welcome — I’m your Causal Design Agent</h1>
+            <p>Set up your study, connect your evidence, and begin the guided causal design workflow</p>
           </div>
           <div className="topbar-actions">
             {error && <span className="status-pill status-pill--danger">Needs review</span>}
-            {notice && <span className="status-pill status-pill--ok">Updated</span>}
             {busy && <span className="status-pill">{busy}</span>}
           </div>
         </header>
+
+        <WorkflowProgress
+          activePage={activePage}
+          compact={activePage !== "home"}
+          onNavigate={switchPage}
+        />
 
         <StatusStrip notice={notice} error={error} />
 
@@ -1345,6 +1365,10 @@ export function HomePage() {
             protocolFile={protocolFile}
             protocolStatus={protocolStatus}
             protocolSummary={protocolSummary}
+            aimType={aimType}
+            architectureGuideOpen={architectureGuideOpen}
+            handleArchitectureGuide={handleArchitectureGuide}
+            handleAimTypeSelection={handleAimTypeSelection}
             setDatasetFile={setDatasetFile}
             setDictionaryFile={setDictionaryFile}
             setPaperFiles={setPaperFiles}
@@ -1455,10 +1479,37 @@ export function HomePage() {
 
       <aside className="prototype-assistant">
         <header>
-          <strong>AI Research Assistant</strong>
-          <span className="online-dot" />
+          <div>
+            <strong>AI Assistant</strong>
+            <span className="online-dot" />
+          </div>
+          <button
+            className="assistant-clear-button"
+            disabled={assistantBusy || assistantMessages.length === 0}
+            onClick={() => {
+              setAssistantMessages([]);
+              setAssistantQuery("");
+            }}
+            type="button"
+          >
+            Clear
+          </button>
         </header>
         <section className="assistant-thread">
+          {activePage === "home" && assistantMessages.length === 0 && !assistantBusy && (
+            <>
+              <article className="assistant-bubble assistant-bubble--assistant">
+                <p>Welcome to Causal Design Agent. Is your analytical aim descriptive, predictive, or causal?</p>
+              </article>
+              <div className="assistant-choice-row">
+                {["Descriptive", "Predictive", "Causal"].map((choice) => (
+                  <button key={choice} onClick={() => handleAimTypeSelection(choice)} type="button">
+                    {choice}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {assistantMessages.slice(-8).map((message, index) => (
             <article className={`assistant-bubble assistant-bubble--${message.role}`} key={`${message.role}-${index}`}>
               <p>{message.text}</p>
@@ -1473,13 +1524,6 @@ export function HomePage() {
             </article>
           )}
         </section>
-        <div className="assistant-prompts">
-          {["What is the exposure?", "What could be a confounder?", "Explain this step"].map((prompt) => (
-            <button key={prompt} onClick={() => setAssistantQuery(prompt)} type="button">
-              {prompt}
-            </button>
-          ))}
-        </div>
         <form className="assistant-compose" onSubmit={handleAssistantSubmit}>
           <input
             onChange={(event) => setAssistantQuery(event.target.value)}
@@ -1490,17 +1534,6 @@ export function HomePage() {
             ↑
           </button>
         </form>
-        <section className="sync-log">
-          <strong>Sync Log</strong>
-          {(activePage === "temporal"
-            ? ["Outcome Window (h) → 29h", "Outcome Window (h) → 28h", "Outcome Window (h) → 27h"]
-            : activePage === "home"
-              ? ["Outcome Window (h) → 31h", "Outcome Window (h) → 30h", "Outcome Window (h) → 29h"]
-              : ["Graph role panel synced", "Evidence panel updated", "Assistant context refreshed"]
-          ).map((item) => (
-            <span key={item}>• {item}</span>
-          ))}
-        </section>
       </aside>
     </div>
   );
@@ -1509,6 +1542,50 @@ export function HomePage() {
 function StatusStrip({ notice, error }: { notice: string; error: string }) {
   if (!notice && !error) return null;
   return <div className={error ? "status-strip status-strip--error" : "status-strip"}>{error || notice}</div>;
+}
+
+function WorkflowProgress({
+  activePage,
+  compact,
+  onNavigate,
+}: {
+  activePage: PageId;
+  compact: boolean;
+  onNavigate: (pageId: PageId) => void;
+}) {
+  const steps: Array<{
+    symbol: string;
+    label: string;
+    pageId: PageId;
+    state: string;
+  }> = [
+    { symbol: "✓", label: "Data Foundation", pageId: "data", state: "complete" },
+    { symbol: "⌁", label: "Explore", pageId: "explore", state: "active" },
+    { symbol: "△", label: "Causal Design Agent", pageId: "causal", state: "warn" },
+    { symbol: "◷", label: "Temporal", pageId: "temporal", state: "temporal" },
+    { symbol: "▣", label: "Review", pageId: "review", state: "review" },
+    { symbol: "▢", label: "Clinician Ref.", pageId: "clinician", state: "disabled" },
+  ];
+
+  return (
+    <section className={`progress-card project-tracker ${compact ? "project-tracker--compact" : ""}`}>
+      <div className="analysis-progress-label">Analysis Progress</div>
+      <div className="six-step-progress home-progress">
+        {steps.map((step) => (
+          <button
+            className={`${step.state} ${activePage === step.pageId ? "current" : ""}`}
+            disabled={step.state === "disabled"}
+            key={step.label}
+            onClick={() => onNavigate(step.pageId)}
+            type="button"
+          >
+            <span>{step.symbol}</span>
+            <small>{step.label}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function HomeStage({
@@ -1529,6 +1606,10 @@ function HomeStage({
   protocolFile,
   protocolStatus,
   protocolSummary,
+  aimType,
+  architectureGuideOpen,
+  handleArchitectureGuide,
+  handleAimTypeSelection,
   setDatasetFile,
   setDictionaryFile,
   setPaperFiles,
@@ -1551,6 +1632,10 @@ function HomeStage({
   protocolFile: File | null;
   protocolStatus: UploadStatus;
   protocolSummary: string;
+  aimType: string;
+  architectureGuideOpen: boolean;
+  handleArchitectureGuide: () => void;
+  handleAimTypeSelection: (value: string) => void;
   setDatasetFile: (file: File | null) => void;
   setDictionaryFile: (file: File | null) => void;
   setPaperFiles: (files: File[]) => void;
@@ -1558,9 +1643,79 @@ function HomeStage({
 }) {
   return (
     <section className="project-setup-page">
+      <section className="architecture-bar">
+        <div>
+          <span className="architecture-icon">↻</span>
+          <strong>Interaction Loop Architecture</strong>
+          <button onClick={handleArchitectureGuide} type="button">Architecture Guide</button>
+        </div>
+        <button className="icon-only-button" onClick={handleArchitectureGuide} type="button">
+          {architectureGuideOpen ? "⌃" : "⌄"}
+        </button>
+      </section>
+      {architectureGuideOpen && (
+        <section className="panel architecture-guide-panel">
+          <strong>Workflow interaction loop</strong>
+          <p>
+            The assistant can recommend, explain, and draft. Deterministic backend checks still validate causal roles,
+            timing, graph structure, assumptions, and claims before later workflow stages.
+          </p>
+        </section>
+      )}
+
+      <section className="home-context-grid">
+        <article className="panel home-context-card">
+          <h2>Project Context</h2>
+          <dl className="home-context-list">
+            <dt>Population</dt>
+            <dd>Adults 18-45 with AUD (n=124, 63% female)</dd>
+            <dt>Dataset</dt>
+            <dd>AWARE-2023 EMA + Passive Sensing</dd>
+            <dt>Research Goal</dt>
+            <dd>Temporal relationships between sleep, stress, and next-day alcohol use</dd>
+            <dt>Aim Type</dt>
+            <dd><em>{aimType ? aimType[0].toUpperCase() + aimType.slice(1) : "Use chatbot -> to select"}</em></dd>
+          </dl>
+        </article>
+
+        <article className="panel home-edit-card">
+          <h2>Edit Project Details</h2>
+          <label>
+            <span>Project Context</span>
+            <input readOnly value="Longitudinal EMA study examining substance-use triggers in adults with AUD." />
+          </label>
+          <label>
+            <span>Population Details</span>
+            <input readOnly value="Adults 18-45, clinical sample, outpatient centers" />
+          </label>
+          <label>
+            <span>Aim Type</span>
+            <select onChange={(event) => handleAimTypeSelection(event.target.value)} value={aimType}>
+              <option value="">Select...</option>
+              <option value="descriptive">Descriptive</option>
+              <option value="predictive">Predictive</option>
+              <option value="causal">Causal</option>
+            </select>
+          </label>
+        </article>
+      </section>
+
+      <section className="analysis-warning-card">
+        <strong>△ 3 Analysis Warnings</strong>
+        <ul>
+          <li>GPS missing for 18-31% of participants (weeks 3-5)</li>
+          <li><strong>phone_screen_time</strong> is a proxy - does not directly measure craving</li>
+          <li>Aim type unconfirmed - causal language may be premature</li>
+        </ul>
+      </section>
+    </section>
+  );
+
+  return (
+    <section className="project-setup-page">
       <section className="progress-card project-tracker">
         <div className="six-step-progress">
-          {["Project Setup", "Data Foundation", "Explore", "Causal Studio", "Estimator", "Review & Report"].map((step, index) => (
+          {["Project Setup", "Data Foundation", "Explore", "Causal Design Agent", "Estimator", "Review & Report"].map((step, index) => (
             <div className={index === 0 ? "complete" : ""} key={step}>
               <span>{index + 1}</span>
               <small>{step}</small>
@@ -2002,7 +2157,7 @@ function ExploreStage({
         <button className="primary-action full-width" onClick={handleBroadExplore} type="button">Run Broad Exploration</button>
       </aside>
       <div className="explore-main">
-        <div className="info-banner">Exploratory mode - patterns are observational only. Use "Promote" to carry findings to Causal Studio.</div>
+        <div className="info-banner">Exploratory mode - patterns are observational only. Use "Promote" to carry findings to Causal Design Agent.</div>
         <div className="structure-strip panel">
           <span><strong>Dataset</strong>{selectedDataset || "Not selected"}</span>
           <span><strong>Rows</strong>{broadExploration?.number_of_rows.toLocaleString() ?? "-"}</span>
@@ -2238,7 +2393,7 @@ function CausalStudioStage({
     : [];
 
   return (
-    <section className="causal-studio-page">
+    <section className="causal-design-agent-page">
       <article className="panel wide causal-question-card">
         <div className="panel-heading">
           <div>
@@ -3089,7 +3244,7 @@ function ReviewStage({
   function buildLocalReportPreview() {
     return {
       report_type: "Causal Design and Analysis Guidance Report",
-      project_summary: "Causal Studio causal-design support artifact",
+      project_summary: "Causal Design Agent causal-design support artifact",
       confirmed_question: confirmedQuestion || demoQuestion,
       dataset_summary: schema
         ? { rows: schema.number_of_rows, columns: schema.number_of_columns }
@@ -3112,7 +3267,7 @@ function ReviewStage({
     return `# Causal Design and Analysis Guidance Report
 
 ## Project Summary
-Causal Studio causal-design support artifact. This is not an effects-results report.
+Causal Design Agent causal-design support artifact. This is not an effects-results report.
 
 ## Confirmed Causal Question
 ${confirmedQuestion || demoQuestion}
@@ -3305,7 +3460,7 @@ No causal effect is estimated here. Do not make clinical prediction, clinical cl
         </div>
         <div className="report-preview">
           <h3>Project Summary</h3>
-          <p>{report?.project_summary ? JSON.stringify(report.project_summary) : "Causal Studio causal-design support artifact."}</p>
+          <p>{report?.project_summary ? JSON.stringify(report.project_summary) : "Causal Design Agent causal-design support artifact."}</p>
           <h3>Confirmed Causal Question</h3>
           <p>{report?.final_research_question ?? confirmedQuestion ?? demoQuestion}</p>
           <h3>Variable Definitions and Roles</h3>

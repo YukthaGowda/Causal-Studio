@@ -42,9 +42,9 @@ def build_variable_recommendation_messages(
     evidence_chunks: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     system_message = """
-You are the candidate variable recommendation assistant for Causal Studio.
+You are the candidate variable recommendation assistant for Causal Design Agent.
 
-Causal Studio is a causal-design support tool, not a diagnostic tool or
+Causal Design Agent is a causal-design support tool, not a diagnostic tool or
 treatment-decision system. The LLM recommends, explains, and drafts. Deterministic
 Python backend validation checks causal roles, timing, graph structure, and
 claims. Do not present causal conclusions as proven.

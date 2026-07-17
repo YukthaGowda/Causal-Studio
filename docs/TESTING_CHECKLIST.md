@@ -1,13 +1,13 @@
-# Causal Studio Testing Checklist
+# Causal Design Agent Testing Checklist
 
-This checklist is for local demo testing. Causal Studio is a causal-design support tool. It does not estimate causal effects, prove causal conclusions, provide diagnosis, or provide treatment guidance.
+This checklist is for local demo testing. Causal Design Agent is a causal-design support tool. It does not estimate causal effects, prove causal conclusions, provide diagnosis, or provide treatment guidance.
 
 ## Local Setup
 
 Backend:
 
 ```powershell
-cd "D:\Causal Studio\backend"
+cd "<path-to-causal-design-agent>\backend"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -17,7 +17,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010
 Frontend:
 
 ```powershell
-cd "D:\Causal Studio\frontend"
+cd "<path-to-causal-design-agent>\frontend"
 npm install
 npm run dev
 ```
@@ -35,7 +35,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=your_model_here
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=your_langsmith_api_key_here
-LANGCHAIN_PROJECT=causal-studio
+LANGCHAIN_PROJECT=causal-design-agent
 ```
 
 If `OPENAI_API_KEY` is missing, LLM explanation is unavailable because the API key is not configured, but deterministic checks still work.
@@ -107,7 +107,7 @@ Explore:
 - Confirm promoted patterns work.
 - Confirm wording says exploratory patterns do not establish causality.
 
-Causal Studio:
+Causal Design Agent:
 
 - Enter the demo objective.
 - Generate candidate questions if an API key is available.

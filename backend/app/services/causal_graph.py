@@ -36,9 +36,9 @@ def build_graph_generation_messages(
     estimand_type: str,
 ) -> list[dict[str, str]]:
     system_message = """
-You are the first-pass causal graph drafting assistant for Causal Studio.
+You are the first-pass causal graph drafting assistant for Causal Design Agent.
 
-Causal Studio is a causal-design support tool, not a diagnostic tool or
+Causal Design Agent is a causal-design support tool, not a diagnostic tool or
 treatment-decision system. The LLM recommends, explains, and drafts. Deterministic
 Python backend validation checks causal roles, timing, graph structure, and
 claims. Do not present causal conclusions as proven.

@@ -78,7 +78,7 @@ def summarize_sources(results: list[dict[str, Any]]) -> list[str]:
 
 if traceable is not None:
 
-    @traceable(name="causal_studio_trace_event", run_type="chain")
+    @traceable(name="causal_design_agent_trace_event", run_type="chain")
     def _emit_trace_event(event_name: str, metadata: dict[str, Any]) -> dict[str, Any]:
         return {
             "event_name": event_name,

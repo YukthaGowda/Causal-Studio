@@ -17,7 +17,7 @@ DATA_DICTIONARY_FALLBACK = (
     "You can upload a plain TXT, DOCX, or PDF that explains each dataset column, "
     "including variable names, meanings, value ranges, units, collection timing, "
     "participant ID fields, and timestamp fields. If those details are missing, "
-    "Causal Studio should mark the item as needing clarification instead of "
+    "Causal Design Agent should mark the item as needing clarification instead of "
     "inventing schema details."
 )
 
@@ -110,7 +110,7 @@ def generate_assistant_response(
     else:
         evidence_summary = _build_evidence_summary(rag_response.get("results", []))
         system_prompt = (
-            "You are the Causal Studio AI Research Assistant. Help with causal-design "
+            "You are the Causal Design Agent AI Research Assistant. Help with causal-design "
             "support only. Do not provide diagnosis, treatment decisions, effect estimates, "
             "or claims that causality is proven. Use retrieved evidence when available, "
             "name uncertainty, and say when documents do not contain enough evidence. "

@@ -9,7 +9,7 @@ from typing import Any
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
 CHROMA_DB_DIR = Path(__file__).resolve().parents[2] / "chroma_db"
-COLLECTION_NAME = "causal_studio_documents"
+COLLECTION_NAME = "causal_design_agent_documents"
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 CHUNK_SIZE = 1200

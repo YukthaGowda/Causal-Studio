@@ -204,7 +204,7 @@ def generate_report(
     )
 
     report = {
-        "report_title": project_title or "Causal Studio Design and Analysis Guidance Report",
+        "report_title": project_title or "Causal Design Agent Analysis Guidance Report",
         "report_type": REPORT_TYPE,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "project_summary": {

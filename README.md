@@ -1,14 +1,14 @@
-# Causal Studio
+# Causal Design Agent
 
-Causal Studio is a React + FastAPI causal-design support dashboard for observational behavioral, clinical, EMA, wearable, smartphone, and passive-sensing data related to substance-use research.
+Causal Design Agent is a React + FastAPI causal-design support dashboard for observational behavioral, clinical, EMA, wearable, smartphone, and passive-sensing data related to substance-use research.
 
 It helps researchers design and review a causal analysis plan before estimation. It is not a diagnostic tool, not a treatment-decision system, and does not claim causal effects are proven.
 
 The app combines a React + Vite frontend, a FastAPI backend, RAG over uploaded documents, a local ChromaDB vector store, LLM-assisted recommendations, deterministic backend validation, and LangGraph workflow orchestration.
 
-## What Causal Studio Does
+## What Causal Design Agent Does
 
-Causal Studio helps researchers:
+Causal Design Agent helps researchers:
 
 - Upload study documents, protocols, papers, guidelines, and data dictionaries.
 - Ingest PDF/DOCX documents into a RAG knowledge base.
@@ -29,9 +29,9 @@ Causal Studio helps researchers:
 - Generate a causal design and analysis guidance report.
 - Coordinate the full process through an 8-step LangGraph workflow.
 
-## What Causal Studio Does Not Do
+## What Causal Design Agent Does Not Do
 
-Causal Studio does not:
+Causal Design Agent does not:
 
 - Diagnose patients.
 - Recommend treatment.
@@ -183,7 +183,7 @@ Planned backend additions:
 ## Repository Structure
 
 ```text
-causal-studio/
+causal-design-agent/
   backend/
     app/
       api/
@@ -230,7 +230,7 @@ These instructions assume Windows PowerShell.
 Open a terminal:
 
 ```powershell
-cd "D:\Causal Studio\backend"
+cd "<path-to-causal-design-agent>\backend"
 python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```
@@ -258,7 +258,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010
 Open a second terminal:
 
 ```powershell
-cd "D:\Causal Studio\frontend"
+cd "<path-to-causal-design-agent>\frontend"
 npm install
 npm.cmd run dev
 ```

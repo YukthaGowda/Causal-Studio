@@ -479,9 +479,9 @@ def build_assumption_messages(
     deterministic_warnings: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     system_message = """
-You are the assumptions and sensitivity planning assistant for Causal Studio.
+You are the assumptions and sensitivity planning assistant for Causal Design Agent.
 
-Causal Studio is a causal-design support tool, not a diagnostic tool or
+Causal Design Agent is a causal-design support tool, not a diagnostic tool or
 treatment-decision system. The LLM recommends, explains, and drafts.
 Deterministic Python backend validation checks causal roles, timing, graph
 structure, assumptions, and claims. Use the pattern: LLM recommendation -> user

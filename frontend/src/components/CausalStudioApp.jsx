@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
+  assistantAction,
   checkBackendHealth,
   getDatasetSchema,
   getIngestionStatus,
@@ -889,6 +890,30 @@ function formatList(values, fallback = "None detected") {
   return values.slice(0, 8).join(", ");
 }
 
+const ASSISTANT_PHASE_MAP = {
+  setup: "phase_1_project_setup",
+  "data-foundation": "phase_2_data_foundation",
+  explore: "phase_3_broad_exploration",
+  question: "phase_4_question_variables",
+  feasibility: "phase_5_feasibility",
+  graph: "phase_6_causal_graph",
+  strategy: "phase_7_analysis_strategy",
+  estimation: "phase_8_estimation",
+  review: "phase_9_review_export",
+};
+
+function assistantActionForPrompt(pageKey, prompt) {
+  const lowered = prompt.toLowerCase();
+  if (lowered.includes("warning") || lowered.includes("quality") || lowered.includes("diagnostic") || lowered.includes("blocked")) return "explain_warning";
+  if (lowered.includes("regenerate")) return "regenerate";
+  if (lowered.includes("alternative")) return "generate_alternative";
+  if (lowered.includes("reprocess")) return "reprocess_with_feedback";
+  if (lowered.includes("revise")) return "revise_using_my_changes";
+  if (lowered.includes("next") || lowered.includes("should i") || lowered.includes("what should")) return "recommend_next_action";
+  if (pageKey === "setup") return "summarize";
+  return "interpret";
+}
+
 function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
@@ -1649,7 +1674,7 @@ function ProjectSetupView({ state, actions }) {
 
 function DataFoundationView({ state, actions }) {
   const { datasets, dictionary } = state;
-  const { lockContent, unlockContent } = actions || {};
+  const { lockContent, unlockContent, runAssistantAction } = actions || {};
   const selectedDataset = firstRealDataset(datasets);
   const selectedSchema = selectedDataset?.schema;
   const parsedRows = schemaRows(selectedSchema, 40);
@@ -1687,6 +1712,14 @@ function DataFoundationView({ state, actions }) {
         <p>Before you explore anything, here's what was found in your data. This page is automated \u2014 it isn't interactive analysis.</p>
         <span className="note"><Info size={12} /> A written summary and any clarifying questions from this check are in the assistant panel, on the right.</span>
         <span className="note"><ShieldAlert size={12} /> Phase 2 explains data structure and quality. It does not assign final causal roles.</span>
+        <div className="button-row" style={{ marginTop: 10 }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Data Structure")}>
+            <Sparkles size={13} /> Interpret Data Structure
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Explain Data Quality Issues")}>
+            <AlertTriangle size={13} /> Explain Data Quality Issues
+          </button>
+        </div>
       </div>
 
       <div className="card">
@@ -1871,7 +1904,7 @@ function RelevanceTag({ level }) {
 
 function ExploreView({ state, actions, onGoNext }) {
   const { datasets, promotedPatterns, actionStatus, broadExploration } = state;
-  const { promotePattern, showToast, pushAssistantNote, handleBroadExploration } = actions;
+  const { promotePattern, showToast, pushAssistantNote, handleBroadExploration, runAssistantAction } = actions;
   // Turn-based guidance: each flag fires its message exactly once per mount
   const windowGuidanceFired = useRef(false);
   const layerGuidanceFired = useRef(false);
@@ -1942,6 +1975,12 @@ function ExploreView({ state, actions, onGoNext }) {
         <div className="button-row">
           <button className="btn btn-primary" onClick={handleBroadExploration} disabled={actionStatus.broadExploration?.kind === "loading"}>
             <RefreshCw size={14} className={actionStatus.broadExploration?.kind === "loading" ? "spin" : ""} /> Run broad exploration
+          </button>
+          <button className="btn btn-secondary" onClick={() => runAssistantAction?.("Interpret Current Exploration")}>
+            <Sparkles size={14} /> Interpret Current Exploration
+          </button>
+          <button className="btn btn-secondary" onClick={() => runAssistantAction?.("Ask AI What to Explore Next")}>
+            <Compass size={14} /> Ask AI What to Explore Next
           </button>
           {firstRealDataset(datasets) && <span className="chip chip-accent">{realDatasetFilename(firstRealDataset(datasets))}</span>}
         </div>
@@ -4899,6 +4938,7 @@ export default function CausalStudioApp() {
     ],
   });
   const [assistantThinking, setAssistantThinking] = useState(false);
+  const [assistantThinkingMessage, setAssistantThinkingMessage] = useState("Thinking...");
   const [assistantInput, setAssistantInput] = useState("");
   const assistantScrollRef = useRef(null);
   const guidanceProgress = useRef({});
@@ -5444,20 +5484,173 @@ export default function CausalStudioApp() {
     else goToPage("data-foundation");
   }
 
+  function buildAssistantPageState(pageKey) {
+    const dataset = firstRealDataset(datasets);
+    const schema = dataset?.schema;
+    const base = {
+      page: pageKey,
+      research_objective: objective,
+      backend_connected: backendStatus.connected,
+    };
+
+    if (pageKey === "setup") {
+      return {
+        ...base,
+        datasets: datasets.map((item) => ({
+          filename: item.savedFilename || item.name,
+          original_filename: item.originalFilename || item.name,
+          rows: item.rows,
+          columns: item.cols,
+          status: item.status,
+          possible_id_columns: item.participantField ? [item.participantField] : [],
+          possible_timestamp_columns: item.timestampFields || [],
+        })),
+        documents: {
+          dictionary_uploaded: Boolean(dictionary),
+          protocol_uploaded: Boolean(protocol),
+          papers_uploaded: papers.length,
+          guidelines_uploaded: guidelines.length,
+          ingestion_status: ingestionInfo,
+          rag_summary: ragSummary,
+        },
+        readiness: checks,
+      };
+    }
+
+    if (pageKey === "data-foundation") {
+      return {
+        ...base,
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        rows: schema?.number_of_rows ?? dataset?.rows,
+        columns: schema?.number_of_columns ?? dataset?.cols,
+        possible_id_columns: schema?.possible_id_columns || (dataset?.participantField ? [dataset.participantField] : []),
+        possible_timestamp_columns: schema?.possible_timestamp_date_columns || dataset?.timestampFields || [],
+        high_missingness: topMissingness(schema, 8)
+          .filter((item) => item.pct >= 30)
+          .map((item) => ({ column: item.name, missing_percent: Number(item.pct.toFixed(2)) })),
+        descriptive_schema_rows: schemaRows(schema, 20).map((item) => ({
+          variable: item.name,
+          type: item.type,
+          source: item.source,
+          descriptive_label: item.tag,
+          missing_percent: item.missingPct,
+        })),
+        data_quality_warnings: schema?.warnings || [],
+      };
+    }
+
+    if (pageKey === "explore") {
+      return {
+        ...base,
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        broad_exploration: broadExploration,
+        promoted_patterns: promotedPatterns,
+        active_filters: {
+          note: "Frontend chart filters are display controls only unless backend output is present.",
+        },
+        exploration_warning: broadExploration?.exploration_warning || "Exploratory patterns can support hypothesis generation, but they do not establish causality.",
+      };
+    }
+
+    return {
+      ...base,
+      dataset_filename: dataset?.savedFilename || dataset?.name,
+      confirmed_question: questionFields?.question,
+      selected_question_id: selectedQuestionId,
+      variable_roles: variableRoles,
+      feasibility,
+      graph_nodes: graphNodes,
+      graph_edges: graphEdges,
+      selected_node_id: selectedNodeId,
+      selected_edge_id: selectedEdgeId,
+      effect_type: effectType,
+      estimator_family: estimatorFamily,
+      repeated_measures_checks: repeatedMeasuresChecks,
+    };
+  }
+
+  function buildAssistantSelectedItem(pageKey, prompt) {
+    if (pageKey === "data-foundation") {
+      const schema = firstRealDataset(datasets)?.schema;
+      return {
+        prompt,
+        high_missingness: topMissingness(schema, 5).filter((item) => item.pct >= 30),
+      };
+    }
+    if (pageKey === "explore") {
+      return {
+        prompt,
+        warnings: broadExploration?.data_quality_warnings || [],
+        correlations: broadExploration?.broad_correlation_summary || null,
+      };
+    }
+    return { prompt };
+  }
+
+  function localAssistantAnswer(q) {
+    return ANSWERS[q] || "This assistant explains setup requirements, but doesn't have a canned answer for that yet in this prototype.";
+  }
+
   function askAssistant(q) {
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: q }] }));
     setAssistantThinking(true);
+    setAssistantThinkingMessage("Thinking...");
     setTimeout(() => {
       setAssistantThinking(false);
-      setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: ANSWERS[q] || "This assistant explains setup requirements, but doesn't have a canned answer for that yet in this prototype." }] }));
+      setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: localAssistantAnswer(q) }] }));
     }, 650);
+  }
+  async function runAssistantAction(prompt) {
+    const phase = ASSISTANT_PHASE_MAP[page];
+    const useBackendAction = ["setup", "data-foundation", "explore"].includes(page);
+    setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
+
+    if (!useBackendAction || !backendStatus.connected) {
+      setAssistantThinking(true);
+      setAssistantThinkingMessage(backendStatus.connected ? "Thinking..." : "Assistant is using local fallback because the backend is unavailable...");
+      setTimeout(() => {
+        setAssistantThinking(false);
+        setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: localAssistantAnswer(prompt) }] }));
+      }, 650);
+      return;
+    }
+
+    setAssistantThinking(true);
+    setAssistantThinkingMessage("Assistant is reviewing the current page state...");
+    try {
+      const response = await assistantAction({
+        phase,
+        action: assistantActionForPrompt(page, prompt),
+        page_state: buildAssistantPageState(page),
+        selected_item: buildAssistantSelectedItem(page, prompt),
+        user_feedback: prompt,
+        rag_evidence: [],
+      });
+      setAssistantThreads((t) => ({
+        ...t,
+        [page]: [...(t[page] || []), { role: "assistant", text: response.assistant_message || localAssistantAnswer(prompt) }],
+      }));
+    } catch (error) {
+      setAssistantThreads((t) => ({
+        ...t,
+        [page]: [
+          ...(t[page] || []),
+          {
+            role: "assistant",
+            text: `I could not complete this assistant action. Please check backend connection.\n\n${localAssistantAnswer(prompt)}`,
+          },
+        ],
+      }));
+    } finally {
+      setAssistantThinking(false);
+    }
   }
   function submitAssistantInput() {
     const q = assistantInput.trim();
     if (!q) return;
     setAssistantInput("");
     const matched = Object.keys(ANSWERS).find((k) => k.toLowerCase() === q.toLowerCase());
-    askAssistant(matched || q);
+    runAssistantAction(matched || q);
   }
 
   const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
@@ -5467,6 +5660,7 @@ export default function CausalStudioApp() {
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern,
     handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
+    runAssistantAction,
     setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
     updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant,
@@ -5530,7 +5724,7 @@ export default function CausalStudioApp() {
           {assistantThread.map((m, i) => (
             <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant text-justify"}`}>{m.text}</div>
           ))}
-          {assistantThinking && <div className="msg msg-assistant">Thinking\u2026</div>}
+          {assistantThinking && <div className="msg msg-assistant">{assistantThinkingMessage}</div>}
         </div>
         <div className="assistant-questions">
           {(
@@ -5544,7 +5738,7 @@ export default function CausalStudioApp() {
             : page === "estimation" ? ESTIMATION_QUESTIONS
             : REVIEW_QUESTIONS
           ).map((q) => (
-            <button key={q} className="assistant-q" onClick={() => askAssistant(q)}>{q}</button>
+            <button key={q} className="assistant-q" onClick={() => runAssistantAction(q)}>{q}</button>
           ))}
         </div>
         {NEXT_PAGE[page] && (

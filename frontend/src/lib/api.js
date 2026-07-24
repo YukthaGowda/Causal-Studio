@@ -99,3 +99,21 @@ export async function assistantAction(payload) {
   });
   return parseJsonResponse(response, "Assistant action failed.");
 }
+
+export async function generateCausalGraph(payload) {
+  const response = await fetch(`${API_BASE_URL}/causal-graph/generate-and-validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Causal graph generation failed.");
+}
+
+export async function validateCausalGraph(payload) {
+  const response = await fetch(`${API_BASE_URL}/causal-graph/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Causal graph validation failed.");
+}

@@ -34,6 +34,7 @@ import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, L
 import {
   assistantAction,
   checkBackendHealth,
+  generateCausalGraph,
   getDatasetSchema,
   getIngestionStatus,
   ingestDocuments,
@@ -41,6 +42,7 @@ import {
   searchRag,
   uploadDataset,
   uploadDocument,
+  validateCausalGraph,
 } from "../lib/api.js";
 
 const CHART_TYPE_OPTIONS = [
@@ -3344,6 +3346,123 @@ const DEFAULT_GRAPH_EDGES = [
   { id: "e5", from: "phone_screen_time", to: "alcohol_use_event", type: "uncertain" },
 ];
 
+const DEMO_GRAPH_VARIABLES = [
+  "pid",
+  "label",
+  "time_stamp",
+  "time_of_day",
+  "day_of_week",
+  "acc_min_magnitude",
+  "acc_max_magnitude",
+  "acc_mean_magnitude",
+  "avg_latitude",
+];
+const DEFAULT_CONFIRMED_QUESTION = "Among adults in the uploaded EMA/passive sensing dataset, what is the effect of sleep-related features during window t on alcohol-use-related label during the next observation window?";
+
+function roleToBackendRole(role) {
+  const map = {
+    Exposure: "exposure",
+    Outcome: "outcome",
+    Confounder: "confounder",
+    Mediator: "mediator",
+    Proxy: "proxy",
+    Unassigned: "unknown",
+  };
+  return map[role] || String(role || "unknown").toLowerCase();
+}
+
+function backendRoleToFrontendRole(role) {
+  const map = {
+    exposure: "Exposure",
+    outcome: "Outcome",
+    confounder: "Confounder",
+    mediator: "Mediator",
+    proxy: "Proxy",
+    unknown: "Unassigned",
+    collider_candidate: "Unassigned",
+  };
+  return map[String(role || "").toLowerCase()] || "Unassigned";
+}
+
+function graphSelectedVariables(datasets) {
+  const schema = firstRealDataset(datasets)?.schema;
+  const columns = schema?.column_names || [];
+  const preferred = DEMO_GRAPH_VARIABLES.filter((name) => columns.includes(name));
+  const names = preferred.length ? preferred : [...new Set([...DEMO_GRAPH_VARIABLES, ...ROLE_TABLE_VARIABLES.map((v) => v.name)])].slice(0, 12);
+  return names.map((name) => ({
+    variable_name: name,
+    missingness_warning: schema?.warnings?.find((warning) => warning.column === name)?.message || "",
+    missing_percent: schema?.missing_value_percentage_per_column?.[name] ?? null,
+  }));
+}
+
+function frontendNodesToBackend(nodes, variableRoles) {
+  return nodes.map((node) => ({
+    id: node.id,
+    label: node.label,
+    role: roleToBackendRole(variableRoles[node.id] || node.role || "Unassigned"),
+    temporal_role: node.temporalRole || node.temporal_role || "unknown",
+    measurement_role: node.measurementRole || node.measurement_role || "unknown",
+    locked: Boolean(node.locked),
+    notes: node.notes || "",
+  }));
+}
+
+function frontendEdgesToBackend(edges) {
+  return edges.map((edge) => ({
+    id: edge.id,
+    source: edge.from,
+    target: edge.to,
+    edge_type: edge.edgeType || (edge.type === "uncertain" ? "uncertain" : "directed"),
+    rationale: edge.rationale || "",
+    supporting_evidence: edge.supportingEvidence || [],
+    confidence: edge.confidence || (edge.type === "uncertain" ? "uncertain" : "medium"),
+    locked: Boolean(edge.locked),
+    user_modified: Boolean(edge.userModified),
+  }));
+}
+
+function backendGraphToFrontend(graphResponse) {
+  const nodes = (graphResponse.nodes || []).map((node, index) => {
+    const columns = 4;
+    const x = 140 + (index % columns) * 210;
+    const y = 120 + Math.floor(index / columns) * 145;
+    return {
+      id: node.id || node.node_id || node.variable_name,
+      label: node.label || node.display_name || node.variable_name || node.id,
+      role: backendRoleToFrontendRole(node.role),
+      temporalRole: node.temporal_role || "unknown",
+      measurementRole: node.measurement_role || "unknown",
+      locked: Boolean(node.locked),
+      notes: node.notes || "",
+      isCore: true,
+      x,
+      y,
+    };
+  }).filter((node) => node.id);
+  const edges = (graphResponse.edges || []).map((edge) => ({
+    id: edge.id || `${edge.source || edge.from}__${edge.target || edge.to}`,
+    from: edge.source || edge.from,
+    to: edge.target || edge.to,
+    type: (edge.edge_type || edge.type) === "uncertain" ? "uncertain" : "supported",
+    edgeType: edge.edge_type || (edge.type === "uncertain" ? "uncertain" : "directed"),
+    rationale: edge.rationale || "",
+    supportingEvidence: edge.supporting_evidence || [],
+    confidence: edge.confidence || "uncertain",
+    locked: Boolean(edge.locked),
+    userModified: Boolean(edge.user_modified),
+  })).filter((edge) => edge.from && edge.to);
+  return { nodes, edges };
+}
+
+function graphValidationBadge(validationResult) {
+  const status = validationResult?.status;
+  if (!status) return { label: "Not validated", className: "chip-muted" };
+  if (status === "valid") return { label: "Valid", className: "chip-success" };
+  if (status === "valid_with_warnings") return { label: "Valid with warnings", className: "chip-warning" };
+  return { label: "Invalid", className: "chip-danger" };
+}
+
 // ── Alternative causal graph structures (GenAI first-pass variants) ────────
 const GRAPH_VARIANTS = [
   {
@@ -3403,8 +3522,44 @@ function computeGraphEdgeDiff(variantA, variantB) {
 }
 
 function GraphView({ state, actions, onGoNext }) {
-  const { graphNodes, graphEdges, variableRoles, selectedNodeId, selectedEdgeId } = state;
-  const { updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant, lockContent, unlockContent } = actions;
+  const {
+    graphNodes,
+    graphEdges,
+    variableRoles,
+    selectedNodeId,
+    selectedEdgeId,
+    graphType,
+    graphVersionLabel,
+    graphValidationResult,
+    graphAlternatives,
+    confirmedGraph,
+    graphActionStatus,
+  } = state;
+  const {
+    updateNodePos,
+    selectNode,
+    selectEdge,
+    addGraphNode,
+    removeGraphNode,
+    renameNode,
+    setNodeRole,
+    addGraphEdge,
+    removeGraphEdge,
+    setEdgeType,
+    resetGraph,
+    loadGraphVariant,
+    setGraphType,
+    generateFirstPassGraph,
+    validateCurrentGraph,
+    generateAlternativeGraph,
+    saveGraphAlternative,
+    confirmGraph,
+    reverseGraphEdge,
+    toggleEdgeLock,
+    runAssistantAction,
+    lockContent,
+    unlockContent,
+  } = actions;
 
   const svgRef = useRef(null);
   const [dragId, setDragId] = useState(null);
@@ -3412,7 +3567,6 @@ function GraphView({ state, actions, onGoNext }) {
   const dragOffset = useRef({ x: 0, y: 0 });
   const [edgeMode, setEdgeMode] = useState(false);
   const [edgeFrom, setEdgeFrom] = useState(null);
-  const [graphType, setGraphType] = useState("DAG");
   const [showAnalysis, setShowAnalysis] = useState(true);
   const analysis = useMemo(() => analyzeGraph(graphNodes, graphEdges, variableRoles), [graphNodes, graphEdges, variableRoles]);
   const graphTypeInfo = GRAPH_TYPE_OPTIONS.find((o) => o.key === graphType);
@@ -3505,6 +3659,7 @@ function GraphView({ state, actions, onGoNext }) {
   const selectedEdge = graphEdges.find((e) => e.id === selectedEdgeId);
   const supportedCount = graphEdges.filter((e) => e.type === "supported").length;
   const uncertainCount = graphEdges.length - supportedCount;
+  const validationBadge = graphValidationBadge(graphValidationResult);
 
   return (
     <div className="graph-page">
@@ -3512,6 +3667,8 @@ function GraphView({ state, actions, onGoNext }) {
         <div className="graph-toolbar-title">
           <GitBranch size={16} color="var(--accent)" /> Causal graph & final role validation
           <span className="chip chip-accent" style={{ marginLeft: 8, fontSize: 10.5, padding: "2px 8px" }}><Sparkles size={10} /> GenAI first-pass</span>
+          <span className={`chip ${validationBadge.className}`} style={{ marginLeft: 4, fontSize: 10.5, padding: "2px 8px" }}>{validationBadge.label}</span>
+          {graphVersionLabel && <span className="chip chip-muted" style={{ fontSize: 10.5, padding: "2px 8px" }}>{graphVersionLabel}</span>}
         </div>
         <div className="graph-legend">
           {Object.entries(ROLE_NODE_COLOR).filter(([r]) => r !== "Unassigned").map(([role, color]) => (
@@ -3523,14 +3680,43 @@ function GraphView({ state, actions, onGoNext }) {
           <select className="select-input" value={graphType} onChange={(e) => setGraphType(e.target.value)} title="Graph type">
             {GRAPH_TYPE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
+          <button className="btn btn-primary btn-sm" onClick={() => generateFirstPassGraph()} disabled={graphActionStatus?.kind === "loading"}>
+            <Wand2 size={13} /> Generate First-Pass Graph
+          </button>
+          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Regenerated Graph")} disabled={graphActionStatus?.kind === "loading"}>
+            <RefreshCw size={13} /> Regenerate Graph
+          </button>
+          <button className="btn btn-sm" onClick={generateAlternativeGraph} disabled={graphActionStatus?.kind === "loading"}>
+            <Sparkles size={13} /> Generate Alternative Graph
+          </button>
+          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Reprocessed User Edits", "Keep my locked/user-edited edges where possible.")} disabled={graphActionStatus?.kind === "loading"}>
+            <Play size={13} /> Reprocess Using My Edits
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={validateCurrentGraph} disabled={graphActionStatus?.kind === "loading"}>
+            <ShieldAlert size={13} /> Validate My Changes
+          </button>
           <button className={`btn btn-sm ${edgeMode ? "btn-secondary" : ""}`} onClick={() => { setEdgeMode((m) => !m); setEdgeFrom(null); }}>
             <Link2 size={13} /> {edgeMode ? (edgeFrom ? "Pick target node\u2026" : "Pick source node\u2026") : "Connect nodes"}
           </button>
           <button className="btn btn-sm" onClick={addGraphNode}><ClipboardList size={13} /> Add node</button>
           <button className="btn btn-sm" onClick={resetGraph}><RefreshCw size={13} /> Reset layout</button>
           <button className="btn btn-sm" onClick={() => setShowAnalysis((s) => !s)}>{showAnalysis ? "Hide analysis" : "Show analysis"}</button>
+          <button className="btn btn-sm" onClick={() => runAssistantAction("Interpret This Graph")}><Info size={13} /> Interpret This Graph</button>
           <button className="btn btn-primary btn-sm" onClick={onGoNext}>Analysis strategy <ArrowRight size={13} /></button>
         </div>
+      </div>
+
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", background: "#F8FAFC", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="helper" style={{ margin: 0 }}>
+          <AlertTriangle size={13} /> Draft only: the graph supports causal-design review, not proven causal conclusions.
+        </span>
+        {graphActionStatus?.message && (
+          <span className={`chip ${graphActionStatus.kind === "error" ? "chip-danger" : graphActionStatus.kind === "success" ? "chip-success" : "chip-muted"}`}>
+            {graphActionStatus.message}
+          </span>
+        )}
+        {confirmedGraph && <span className="chip chip-success">Confirmed graph saved for downstream review</span>}
+        {graphAlternatives?.length > 0 && <span className="chip chip-muted">{graphAlternatives.length} saved alternative{graphAlternatives.length === 1 ? "" : "s"}</span>}
       </div>
 
       {/* ── Graph Regenerate / Version / Lock toolbar ── */}
@@ -3563,6 +3749,12 @@ function GraphView({ state, actions, onGoNext }) {
               </button>
               <button className="btn btn-secondary btn-sm" onClick={handleGraphLock} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <Lock size={11} /> Lock in
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={saveGraphAlternative}>
+                <Save size={11} /> Save Alternative Graph
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={confirmGraph}>
+                <CheckCircle2 size={11} /> Confirm Graph
               </button>
             </>
           )}
@@ -3647,6 +3839,11 @@ function GraphView({ state, actions, onGoNext }) {
               {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
             <p>{ROLE_EXPLANATION[variableRoles[selectedNode.id] || "Unassigned"]}</p>
+            <p>
+              <strong>Temporal:</strong> {selectedNode.temporalRole || "unknown"}<br />
+              <strong>Measurement:</strong> {selectedNode.measurementRole || "unknown"}<br />
+              {selectedNode.locked ? "Locked node. " : ""}{selectedNode.notes || "No node notes recorded yet."}
+            </p>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-sm" onClick={() => selectNode(null)}>Close</button>
               {!selectedNode.isCore && <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeGraphNode(selectedNode.id)}>Remove node</button>}
@@ -3658,16 +3855,52 @@ function GraphView({ state, actions, onGoNext }) {
           <div className="graph-side-panel">
             <h4><span className="mono">{selectedEdge.from}</span> \u2192 <span className="mono">{selectedEdge.to}</span></h4>
             <p>{selectedEdge.type === "uncertain" ? "This edge is unsupported or uncertain \u2014 confirm it with your data or remove it before moving on." : "This is a standard directed relationship in your assumed structure."}</p>
+            <p>
+              <strong>Confidence:</strong> {selectedEdge.confidence || "uncertain"}<br />
+              {selectedEdge.locked ? "Locked edge. " : ""}{selectedEdge.rationale || "No rationale recorded yet."}
+            </p>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-sm" onClick={() => setEdgeType(selectedEdge.id, selectedEdge.type === "supported" ? "uncertain" : "supported")}>
                 Mark as {selectedEdge.type === "supported" ? "uncertain" : "supported"}
               </button>
+              <button className="btn btn-sm" onClick={() => reverseGraphEdge(selectedEdge.id)}>Reverse edge</button>
+              <button className="btn btn-sm" onClick={() => toggleEdgeLock(selectedEdge.id)}>{selectedEdge.locked ? "Unlock" : "Lock"} edge</button>
+              <button className="btn btn-sm" onClick={() => runAssistantAction("Explain Selected Edge")}>Explain Selected Edge</button>
               <button className="btn btn-sm" onClick={() => selectEdge(null)}>Close</button>
               <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeGraphEdge(selectedEdge.id)}>Remove edge</button>
             </div>
           </div>
         )}
+
+        {!selectedNode && !selectedEdge && (
+          <div className="graph-side-panel">
+            <h4>Graph helper</h4>
+            <p>Click a node or edge to inspect role, timing, evidence rationale, confidence, and lock status. Drag nodes to edit layout; use Connect nodes to add arrows.</p>
+          </div>
+        )}
       </div>
+
+      {graphValidationResult && (
+        <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", background: "#fff" }}>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-title">Deterministic graph validation</div>
+              <span className={`chip ${validationBadge.className}`}>{validationBadge.label}</span>
+            </div>
+            <div className="filter-pills">
+              {Object.entries(graphValidationResult.checks || {}).map(([key, value]) => (
+                <span key={key} className={`chip ${value ? "chip-success" : "chip-warning"}`}>{key.replaceAll("_", " ")}: {String(value)}</span>
+              ))}
+            </div>
+            {(graphValidationResult.errors || []).map((error, index) => (
+              <div key={`graph-error-${index}`} className="helper" style={{ color: "var(--danger)", marginTop: 8 }}><XCircle size={13} /> {error}</div>
+            ))}
+            {(graphValidationResult.warnings || []).map((warning, index) => (
+              <div key={`graph-warning-${index}`} className="helper" style={{ marginTop: 8 }}><AlertTriangle size={13} /> {warning}</div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showAnalysis && (
         <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", background: "#fff", maxHeight: "42vh", overflowY: "auto" }}>
@@ -4919,6 +5152,12 @@ export default function CausalStudioApp() {
   const [graphEdges, setGraphEdges] = useState(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+  const [graphType, setGraphType] = useState("DAG");
+  const [graphValidationResult, setGraphValidationResult] = useState(null);
+  const [graphAlternatives, setGraphAlternatives] = useState([]);
+  const [confirmedGraph, setConfirmedGraph] = useState(null);
+  const [graphVersionLabel, setGraphVersionLabel] = useState("Version 0");
+  const [graphActionStatus, setGraphActionStatus] = useState(null);
 
   const [effectType, setEffectType] = useState("total");
   const [estimatorFamily, setEstimatorFamily] = useState("mixed_logistic");
@@ -5314,6 +5553,7 @@ export default function CausalStudioApp() {
   }
   function updateNodePos(id, x, y) {
     setGraphNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, x, y } : n)));
+    setGraphValidationResult(null);
   }
   function selectNode(id) {
     setSelectedNodeId(id);
@@ -5325,9 +5565,10 @@ export default function CausalStudioApp() {
   }
   function addGraphNode() {
     const id = `custom_${Date.now()}`;
-    setGraphNodes((nodes) => [...nodes, { id, label: "New variable", isCore: false, x: 450, y: 460 }]);
+    setGraphNodes((nodes) => [...nodes, { id, label: "New variable", role: "Unassigned", temporalRole: "unknown", measurementRole: "unknown", isCore: false, x: 450, y: 460 }]);
     setSelectedNodeId(id);
     setSelectedEdgeId(null);
+    setGraphValidationResult(null);
     pushAssistantNote("Node added — name it and assign a role in the right panel (Confounder, Mediator, or Proxy). Without a role it won't appear in the adjustment set.");
     advanceGuidance("causal-graph", "first_node_added", "Node added! Now let's connect it — select it as the source and click another node to draw a causal arrow between them.");
   }
@@ -5335,9 +5576,11 @@ export default function CausalStudioApp() {
     setGraphNodes((nodes) => nodes.filter((n) => n.id !== id));
     setGraphEdges((edges) => edges.filter((e) => e.from !== id && e.to !== id));
     setSelectedNodeId(null);
+    setGraphValidationResult(null);
   }
   function renameNode(id, label) {
     setGraphNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, label } : n)));
+    setGraphValidationResult(null);
   }
   function setNodeRole(id, role) {
     setVariableRole(id, role);
@@ -5345,17 +5588,20 @@ export default function CausalStudioApp() {
   function addGraphEdge(from, to) {
     setGraphEdges((edges) => {
       if (edges.some((e) => e.from === from && e.to === to)) return edges;
-      return [...edges, { id: `e_${Date.now()}`, from, to, type: "uncertain" }];
+      return [...edges, { id: `e_${Date.now()}`, from, to, type: "uncertain", edgeType: "uncertain", confidence: "uncertain", userModified: true }];
     });
+    setGraphValidationResult(null);
     pushAssistantNote(`Arrow added: ${from} → ${to} (Uncertain). Click it to mark Supported if you have evidence, or remove it if the relationship is unclear.`);
     advanceGuidance("causal-graph", "first_edge_added", "First arrow drawn — nice! Keep adding the rest of your confounders and mediators, then classify each arrow as Supported or Uncertain. When the graph looks right, check the adjustment set at the bottom — that's your signal to move on.");
   }
   function removeGraphEdge(id) {
     setGraphEdges((edges) => edges.filter((e) => e.id !== id));
     setSelectedEdgeId(null);
+    setGraphValidationResult(null);
   }
   function setEdgeType(id, type) {
-    setGraphEdges((edges) => edges.map((e) => (e.id === id ? { ...e, type } : e)));
+    setGraphEdges((edges) => edges.map((e) => (e.id === id ? { ...e, type, edgeType: type === "uncertain" ? "uncertain" : "directed", userModified: true } : e)));
+    setGraphValidationResult(null);
     const edge = graphEdges.find((e) => e.id === id);
     if (edge) {
       pushAssistantNote(
@@ -5370,12 +5616,116 @@ export default function CausalStudioApp() {
     setGraphEdges(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setGraphValidationResult(null);
+    setGraphVersionLabel("Version 0");
   }
   function loadGraphVariant(nodes, edges) {
     setGraphNodes(nodes.map((n) => ({ ...n })));
     setGraphEdges(edges.map((e) => ({ ...e })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
+    setGraphValidationResult(null);
+  }
+  function graphBackendPayload(extra = {}) {
+    const dataset = firstRealDataset(datasets);
+    const schema = dataset?.schema;
+    const selectedVariables = graphSelectedVariables(datasets);
+    const backendNodes = frontendNodesToBackend(graphNodes, variableRoles);
+    const backendEdges = frontendEdgesToBackend(graphEdges);
+    const exposure = backendNodes.find((node) => node.role === "exposure")?.id || "acc_mean_magnitude";
+    const outcome = backendNodes.find((node) => node.role === "outcome")?.id || "label";
+    const adjustmentSet = backendNodes
+      .filter((node) => ["confounder", "proxy"].includes(node.role) && node.id !== exposure && node.id !== outcome && node.id !== "pid")
+      .map((node) => node.id);
+    return {
+      graph_type: graphType,
+      confirmed_question: questionFields?.question || DEFAULT_CONFIRMED_QUESTION,
+      dataset_filename: dataset?.savedFilename || dataset?.name || "",
+      selected_variables: selectedVariables,
+      provisional_roles: variableRoles,
+      feasibility_result: feasibility,
+      rag_evidence: [],
+      user_feedback: "",
+      preserve_user_locked_edges: true,
+      nodes: backendNodes,
+      edges: backendEdges,
+      exposure,
+      outcome,
+      adjustment_set: adjustmentSet,
+      timestamp_fields: schema?.possible_timestamp_date_columns || ["time_stamp", "time_of_day", "day_of_week"],
+      participant_id: schema?.possible_id_columns?.[0] || "pid",
+      ...extra,
+    };
+  }
+  async function generateFirstPassGraph(versionLabel = "Version 1", userFeedback = "") {
+    if (!backendStatus.connected) {
+      setGraphActionStatus({ kind: "error", message: "Backend unavailable - graph generation needs FastAPI." });
+      pushAssistantNote("Start the FastAPI backend, then generate the first-pass graph. I will keep this as a draft until deterministic validation passes.");
+      return;
+    }
+    setGraphActionStatus({ kind: "loading", message: "Generating graph draft..." });
+    try {
+      const payload = graphBackendPayload({ user_feedback: userFeedback });
+      const response = await generateCausalGraph(payload);
+      const converted = backendGraphToFrontend(response);
+      if (converted.nodes.length) {
+        setGraphNodes(converted.nodes);
+        const rolePatch = {};
+        converted.nodes.forEach((node) => { rolePatch[node.id] = node.role; });
+        setVariableRoles((current) => ({ ...current, ...rolePatch }));
+      }
+      if (converted.edges.length) setGraphEdges(converted.edges);
+      setGraphVersionLabel(response.version_label || versionLabel);
+      setGraphValidationResult(response.validation_result || null);
+      setConfirmedGraph(null);
+      const warningCount = (response.validation_result?.warnings || response.warnings || []).length;
+      setGraphActionStatus({ kind: "success", message: `Draft generated with ${warningCount} warning${warningCount === 1 ? "" : "s"}.` });
+      pushAssistantNote("First-pass causal graph generated. This is a draft for review; deterministic Python validation checks structure, timing, roles, and adjustment risks before continuation.");
+    } catch (error) {
+      setGraphActionStatus({ kind: "error", message: friendlyError(error, "Graph generation failed.") });
+      pushAssistantNote(`Graph generation failed: ${friendlyError(error)}`);
+    }
+  }
+  async function validateCurrentGraph() {
+    if (!backendStatus.connected) {
+      setGraphActionStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
+      return;
+    }
+    setGraphActionStatus({ kind: "loading", message: "Validating graph edits..." });
+    try {
+      const payload = graphBackendPayload();
+      const response = await validateCausalGraph(payload);
+      setGraphValidationResult(response);
+      const problemCount = (response.errors?.length || 0) + (response.warnings?.length || 0);
+      setGraphActionStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Validation ${response.status}; ${problemCount} issue${problemCount === 1 ? "" : "s"}.` });
+      pushAssistantNote(response.safe_to_continue
+        ? "Graph validation completed. Review warnings carefully; warning-level graphs may continue only after user review."
+        : "Graph validation found blocking errors. Fix cycles, self-loops, unknown nodes, or invalid adjustment choices before continuing.");
+    } catch (error) {
+      setGraphActionStatus({ kind: "error", message: friendlyError(error, "Graph validation failed.") });
+      pushAssistantNote(`Graph validation failed: ${friendlyError(error)}`);
+    }
+  }
+  function generateAlternativeGraph() {
+    const next = graphAlternatives.length + 1;
+    setGraphAlternatives((items) => [...items, { label: graphVersionLabel || `Alternative ${next}`, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult }]);
+    generateFirstPassGraph(`Alternative ${next}`, "Generate a defensible alternative structure while preserving locked user edits.");
+  }
+  function saveGraphAlternative() {
+    setGraphAlternatives((items) => [...items, { label: graphVersionLabel || `Alternative ${items.length + 1}`, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult }]);
+    showToast("Alternative graph saved.");
+  }
+  function confirmGraph() {
+    setConfirmedGraph({ graphType, graphVersionLabel, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult });
+    pushAssistantNote("Graph confirmed for downstream planning. This confirms a reviewed design draft, not a proven causal structure.");
+    showToast("Graph confirmed.");
+  }
+  function reverseGraphEdge(id) {
+    setGraphEdges((edges) => edges.map((edge) => edge.id === id ? { ...edge, from: edge.to, to: edge.from, userModified: true, type: "uncertain", edgeType: "uncertain" } : edge));
+    setGraphValidationResult(null);
+  }
+  function toggleEdgeLock(id) {
+    setGraphEdges((edges) => edges.map((edge) => edge.id === id ? { ...edge, locked: !edge.locked, userModified: true } : edge));
   }
   function toggleRepeatedMeasures(id) {
     setRepeatedMeasuresChecks((s) => ({ ...s, [id]: !s[id] }));
@@ -5383,6 +5733,7 @@ export default function CausalStudioApp() {
 
   function setVariableRole(name, role) {
     setVariableRoles((r) => ({ ...r, [name]: role }));
+    setGraphValidationResult(null);
     const schemaVar = ROLE_TABLE_VARIABLES.find((v) => v.name === name);
     if (schemaVar) {
       if (role === schemaVar.roleGuess) {
@@ -5561,6 +5912,11 @@ export default function CausalStudioApp() {
       feasibility,
       graph_nodes: graphNodes,
       graph_edges: graphEdges,
+      graph_type: graphType,
+      graph_version_label: graphVersionLabel,
+      graph_validation_result: graphValidationResult,
+      confirmed_graph: confirmedGraph,
+      graph_alternative_count: graphAlternatives.length,
       selected_node_id: selectedNodeId,
       selected_edge_id: selectedEdgeId,
       effect_type: effectType,
@@ -5602,7 +5958,7 @@ export default function CausalStudioApp() {
   }
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore"].includes(page);
+    const useBackendAction = ["setup", "data-foundation", "explore", "graph"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {
@@ -5664,6 +6020,7 @@ export default function CausalStudioApp() {
     setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
     updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant,
+    setGraphType, generateFirstPassGraph, validateCurrentGraph, generateAlternativeGraph, saveGraphAlternative, confirmGraph, reverseGraphEdge, toggleEdgeLock,
     setEffectType, setEstimatorFamily, toggleRepeatedMeasures,
     pushAssistantNote,
     lockContent, unlockContent, lockedContent,
@@ -5673,7 +6030,7 @@ export default function CausalStudioApp() {
     backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
     variableRoles, selectedQuestionId, questionFields, derivedFeatures,
     lagHours, exposureThreshold, sensitivityChecks, feasibility,
-    graphNodes, graphEdges, selectedNodeId, selectedEdgeId,
+    graphNodes, graphEdges, selectedNodeId, selectedEdgeId, graphType, graphValidationResult, graphAlternatives, confirmedGraph, graphVersionLabel, graphActionStatus,
     effectType, estimatorFamily, repeatedMeasuresChecks,
     lockedContent,
   };

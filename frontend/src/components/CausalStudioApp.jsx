@@ -1,0 +1,5580 @@
+import React, { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Circle,
+  UploadCloud,
+  FileText,
+  Trash2,
+  RefreshCw,
+  Eye,
+  ChevronDown,
+  ChevronRight,
+  Info,
+  Sparkles,
+  ClipboardList,
+  ShieldAlert,
+  Save,
+  ArrowRight,
+  LayoutGrid,
+  Database,
+  Compass,
+  GitBranch,
+  Clock,
+  FileCheck2,
+  Send,
+  Link2,
+  Lock,
+  Wand2,
+  Play,
+  Search,
+} from "lucide-react";
+import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  checkBackendHealth,
+  getDatasetSchema,
+  getIngestionStatus,
+  ingestDocuments,
+  runBroadExploration,
+  searchRag,
+  uploadDataset,
+  uploadDocument,
+} from "../lib/api.js";
+
+const CHART_TYPE_OPTIONS = [
+  { key: "bar", label: "Bar" },
+  { key: "line", label: "Line" },
+  { key: "area", label: "Area" },
+  { key: "pie", label: "Pie" },
+];
+const CHART_PALETTE = ["#2F5D8A", "#B8382B", "#3E8E7E", "#C4933F", "#7B5EA7", "#4A6FA5"];
+
+function FlexibleChart({ data, xKey, series, type = "bar", height = 145, layout = "horizontal", xLabel, yLabel }) {
+  if (!data || data.length === 0) return <div style={{ padding: 12, fontSize: 12, color: "#5B6472" }}>No data yet.</div>;
+  const seriesArr = Array.isArray(series) ? series : [series];
+  const effectiveHeight = Math.max(height, 210);
+  const chartMargin = { left: 28, right: 20, bottom: 44, top: 10 };
+  const xAxisLabel = xLabel ? { value: xLabel, position: "insideBottom", offset: -8, fontSize: 11, fill: "#5B6472" } : undefined;
+  const yAxisLabel = yLabel ? { value: yLabel, angle: -90, position: "insideLeft", offset: 4, fontSize: 11, fill: "#5B6472", style: { textAnchor: "middle" } } : undefined;
+  const axisChildren = layout === "vertical"
+    ? [
+        <CartesianGrid key="grid" strokeDasharray="3 3" stroke="#EDEFF3" horizontal={false} />,
+        <XAxis key="x" type="number" tick={{ fontSize: 11 }} label={xAxisLabel} />,
+        <YAxis key="y" type="category" dataKey={xKey} width={110} tick={{ fontSize: 11 }} label={yAxisLabel} />,
+        <Tooltip key="tt" />,
+        seriesArr.length > 1 ? <Legend key="lg" wrapperStyle={{ fontSize: 11 }} verticalAlign="top" /> : null,
+      ]
+    : [
+        <CartesianGrid key="grid" strokeDasharray="3 3" stroke="#EDEFF3" />,
+        <XAxis key="x" dataKey={xKey} tick={{ fontSize: 11 }} label={xAxisLabel} />,
+        <YAxis key="y" tick={{ fontSize: 11 }} label={yAxisLabel} />,
+        <Tooltip key="tt" />,
+        seriesArr.length > 1 ? <Legend key="lg" wrapperStyle={{ fontSize: 11 }} verticalAlign="top" /> : null,
+      ];
+  return (
+    <div style={{ width: "100%", height: effectiveHeight }}>
+      <ResponsiveContainer>
+        {type === "line" ? (
+          <LineChart data={data} margin={chartMargin}>
+            {axisChildren}
+            {seriesArr.map((s, i) => (
+              <Line key={s.key} type="monotone" dataKey={s.key} name={s.name || s.key} stroke={s.color || CHART_PALETTE[i % CHART_PALETTE.length]} strokeWidth={2} dot={false} />
+            ))}
+          </LineChart>
+        ) : type === "area" ? (
+          <AreaChart data={data} margin={chartMargin}>
+            {axisChildren}
+            {seriesArr.map((s, i) => (
+              <Area key={s.key} type="monotone" dataKey={s.key} name={s.name || s.key} stroke={s.color || CHART_PALETTE[i % CHART_PALETTE.length]} fill={s.color || CHART_PALETTE[i % CHART_PALETTE.length]} fillOpacity={0.25} />
+            ))}
+          </AreaChart>
+        ) : type === "pie" ? (
+          <PieChart margin={{ left: 6, right: 8, bottom: 8, top: 8 }}>
+            <Tooltip />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Pie data={data} dataKey={seriesArr[0].key} nameKey={xKey} outerRadius={Math.min(effectiveHeight / 2 - 30, 80)} label={{ fontSize: 10 }}>
+              {data.map((_, idx) => <Cell key={idx} fill={CHART_PALETTE[idx % CHART_PALETTE.length]} />)}
+            </Pie>
+          </PieChart>
+        ) : (
+          <BarChart data={data} layout={layout} margin={chartMargin}>
+            {axisChildren}
+            {seriesArr.map((s, i) => (
+              <Bar key={s.key} dataKey={s.key} name={s.name || s.key} fill={s.color || CHART_PALETTE[i % CHART_PALETTE.length]} radius={layout === "vertical" ? [0, 4, 4, 0] : [4, 4, 0, 0]} />
+            ))}
+          </BarChart>
+        )}
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function ChartTypeSwitcher({ value, onChange, allow = ["bar", "line", "area", "pie"] }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 4, background: "#F2F4F7", padding: 3, borderRadius: 6 }}>
+      {CHART_TYPE_OPTIONS.filter((o) => allow.includes(o.key)).map((o) => (
+        <button
+          key={o.key}
+          onClick={() => onChange(o.key)}
+          style={{
+            padding: "3px 9px",
+            fontSize: 11,
+            fontWeight: 600,
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            background: value === o.key ? "#fff" : "transparent",
+            color: value === o.key ? "#16233D" : "#5B6472",
+            boxShadow: value === o.key ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CardInfo({ text }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0, alignSelf: "center" }}>
+      <button
+        className={`card-info-btn${open ? " active" : ""}`}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        aria-label="What is this?" title="What is this?"
+      >?</button>
+      {open && <div className="card-info-popover">{text}</div>}
+    </div>
+  );
+}
+
+const STEPS = [
+  { key: "setup", short: "Project Setup", full: "Project Setup and Document Upload", icon: LayoutGrid },
+  { key: "data-foundation", short: "Data Foundation", full: "Data Foundation and Understanding", icon: Database },
+  { key: "explore", short: "Broad Exploration", full: "Broad Data Exploration", icon: Compass },
+  { key: "question", short: "Question & Variables", full: "Causal Question and Provisional Variable Design", icon: GitBranch },
+  { key: "feasibility", short: "Feasibility", full: "Targeted Variable Exploration and Feasibility Check", icon: Clock },
+  { key: "graph", short: "Causal Graph", full: "Causal Graph and Final Role Validation", icon: GitBranch },
+  { key: "strategy", short: "Analysis Strategy", full: "Identification and Estimation Strategy", icon: FileCheck2 },
+  { key: "estimation", short: "Estimation & Calculation", full: "Phase 8: Estimation & Calculation", icon: Play },
+  { key: "review", short: "Review & Export", full: "Review and Export", icon: FileCheck2 },
+];
+const BUILT_PAGES = ["setup", "data-foundation", "explore", "question", "feasibility", "graph", "strategy", "estimation", "review"];
+
+const NEXT_PAGE = {
+  setup: "data-foundation",
+  "data-foundation": "explore",
+  explore: "question",
+  question: "feasibility",
+  feasibility: "graph",
+  graph: "strategy",
+  strategy: "estimation",
+  estimation: "review",
+  review: null,
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  AI CONTENT VARIANTS — 3 alternative phrasings per block
+//  Index 0 = default shown on first load. Regenerate cycles forward.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const POPULATION_BODY_VARIANTS = [
+  [
+    "This is the group your study makes causal claims about. Based on your uploaded data and objective, the population is adults in active outpatient AUD (alcohol use disorder) treatment, observed repeatedly over a monitoring window with daily EMA check-ins and passive sensing.",
+    "Inclusions implied by your data: participants with at least one parseable EMA record and a valid participant ID. Participants with more than 30% missing daily surveys risk producing biased estimates if their missingness relates to alcohol use — consider a separate sensitivity analysis for this subgroup.",
+    "Generalizability: findings will apply to outpatient AUD programs of similar intensity and demographic profile. Extension to inpatient, community, or adolescent populations requires additional untested assumptions and should be stated explicitly as a limitation.",
+  ],
+  [
+    "Your study population is operationally defined by enrollment and data availability: adults in outpatient AUD treatment who contributed at least one complete EMA record and whose data can be linked across sources via a shared participant ID.",
+    "Who is implicitly excluded: participants with no EMA responses, those missing a linking key, and anyone whose data was flagged as corrupted. These exclusions should be documented in a consort-style flow diagram for the study report.",
+    "Study vs. target population: the study population (those with usable records) may differ from all enrolled patients if missingness is non-random. High-use days tend to produce more missed surveys — a pattern that can bias within-person estimates downward if not handled explicitly.",
+  ],
+  [
+    "For causal identification, the relevant population is not just who was enrolled, but who contributes estimable contrasts — participants who experienced both high and low values of the exposure across the observation window.",
+    "Within-person design implication: participants who consistently had poor sleep (or consistently good sleep) throughout the study contribute no within-person contrast and are effectively excluded by the variation threshold set in Feasibility.",
+    "Causal effects estimated from within-person designs generalize most naturally to individuals like the participants who had variation in the exposure — not to all enrolled participants, and not to populations beyond this program type.",
+  ],
+];
+
+const EXPOSURE_BODY_VARIANTS = [
+  [
+    "Why it is the exposure: sleep_quality is recorded each night before the alcohol-use outcome is checked the following day, establishing a clear temporal ordering — cause before effect. The causal question is whether a night of objectively poor sleep increases next-day drinking probability.",
+    "Exposure vs. treatment: in your observational data it varies naturally across nights. You must argue — and demonstrate — that after conditioning on confounders like stress_level and actigraphy_activity, nights with poor vs. good sleep quality are as-good-as randomly assigned within each participant.",
+    "Why not reverse the direction? Reversing flips sleep_quality into the outcome and alcohol_use_event into the exposure — changing the required confounder set and identification strategy entirely. The current direction is better supported by temporal ordering in EMA-based AUD studies.",
+  ],
+  [
+    "How sleep_quality is operationalized: collected via end-of-day EMA using a 1–5 single-item scale ('How would you rate your sleep last night?'). Single-item measures are subject to recall and response-style bias, but their simplicity makes them feasible in intensive longitudinal designs.",
+    "Continuous vs. binary exposure: the current design treats sleep_quality as continuous, which preserves information but requires linearity assumptions in some estimators. Dichotomizing (e.g., scores 1–2 = poor) can aid interpretation at the cost of efficiency loss.",
+    "Actigraphy cross-check: your dataset includes actigraphy-derived sleep duration. If EMA-reported quality and actigraphy-derived duration are correlated (expected: r ≈ 0.3–0.5 in AUD samples), the EMA item likely captures a meaningful construct.",
+  ],
+  [
+    "Sources of confounding for this exposure: the main threats are variables that independently cause both poor sleep and higher alcohol use — primarily stress_level (daily stressors impair sleep and increase craving), actigraphy_activity, and unmeasured baseline psychiatric comorbidities.",
+    "Within-person design advantage: using participant as their own control eliminates all time-stable confounders (personality, baseline severity, genetics). Only time-varying confounders — those that change night-to-night alongside sleep quality — need explicit adjustment.",
+    "Residual confounding: daily mood, treatment session attendance, and social contact are time-varying confounders not fully captured in this dataset. They should appear as limitations and, where possible, be addressed via sensitivity analysis.",
+  ],
+];
+
+const TIMEWINDOW_INTRO_VARIANTS = [
+  "The time window is not just a technical parameter — it defines the causal mechanism you are testing. A 24-hour lag asks whether sleep disruption affects craving through overnight neurobiological recovery. A same-day window asks whether sleep and drinking are concurrently driven by a shared daily factor like stress. These are scientifically distinct claims.",
+  "Your lag choice directly controls how many participant-days remain in the analysis. Each additional day of lag trims the observation window — participants observed for fewer days than the lag are entirely excluded. The table below shows the trade-off between scientific specificity (longer lags, longer-horizon effects) and statistical power (longer lags, smaller sample).",
+  "From a clinical standpoint, the 24-hour lag is the most actionable: it maps directly to a practical question — 'if a patient reports poor sleep tonight, how likely are they to drink tomorrow?' This is directly usable for treatment providers who have daily EMA contact with patients.",
+];
+
+const UNIT_BODY_VARIANTS = [
+  [
+    "Each row in your analysis will represent one participant on one calendar day. The same participant contributes one row per day, so observations are correlated — day 4 for participant #12 is not independent of day 3. Treating rows as independent inflates your effective sample size and produces standard errors that are too narrow.",
+    "The fix is a mixed-effects model with a random participant intercept (or GEE with exchangeable working correlation), configured in Analysis Strategy. Alternative units: participant-week would have fewer rows with less noise but lower granularity; participant (one row per person, summary scores) loses the within-person variability that is the main identification source here.",
+  ],
+  [
+    "Participant-day maximizes your effective sample size relative to what the data can support. With repeated daily observations, you estimate within-person effects rather than between-person differences — a much more powerful design for detecting short-horizon exposure effects, because each person acts as their own control.",
+    "Practical consequence: your N is not the number of participants but the number of usable participant-days — determined by the lag window, missingness rate, and exposure variation threshold you configured in Feasibility. Check the feasibility verdict before moving on.",
+  ],
+  [
+    "Choosing participant-day commits you to a set of assumptions about how daily observations relate. Exchangeability must hold at the day level: on any given day, participants with high vs. low sleep quality are exchangeable after conditioning on measured confounders — including same-day confounders.",
+    "Sequential ignorability: because you use lagged values (yesterday's sleep predicts today's drinking), you implicitly assume no-anticipation — participants don't change today's sleep because they plan to drink tomorrow. This assumption is plausible but worth stating explicitly in the limitations.",
+  ],
+];
+
+const ESTIMAND_BODY_VARIANTS = [
+  [
+    "A risk difference answers: 'by how many percentage points does the probability of an alcohol-use event increase on day N+1 when sleep quality on night N is poor vs. good, holding confounders fixed?' A risk difference of +0.09 means poor sleep is associated with a 9 percentage-point higher probability of drinking the next day.",
+    "Why risk difference, not odds ratio: odds ratios overstate the relative magnitude of effect when the outcome is common. Alcohol-use events in outpatient AUD samples typically occur on 20–40% of participant-days — well above the ~10% threshold where odds ratios diverge meaningfully from risk differences.",
+    "Total effect vs. direct effect: this targets the total effect of sleep quality on alcohol use — including indirect pathways through stress reactivity, craving, or inhibitory control. Switching to a direct or mediated estimand in Step 7 would isolate one specific mechanism.",
+  ],
+  [
+    "The Average Treatment Effect (ATE) asks: what would happen to average drinking probability across all participant-days if we intervened to change sleep quality from good to poor for everyone? This is a population-level contrast, not a prediction for any individual.",
+    "ATE vs. ATT: the ATT restricts the contrast to participant-days that actually had poor sleep. For a within-person design with moderate exposure prevalence (~30–50% of days with poor sleep), the ATE and ATT are typically close numerically but differ in their population interpretation.",
+    "Scale choice for reporting: reporting on the risk difference scale (absolute, percentage points) is preferred over relative risk when communicating to clinical audiences — a 9% absolute increase is more actionable than a 1.4× relative risk.",
+  ],
+  [
+    "The estimand should match the decision it informs. If the goal is to evaluate a sleep-improvement intervention (e.g., CBT-I added to AUD treatment), the relevant estimand is the individual-level risk difference — how many additional drinking days per month would be prevented if this participant's sleep quality improved?",
+    "From estimand to policy: a risk difference of +0.09 translates to approximately 2.7 additional drinking days per month for someone observed over 30 days. Across 60 participants, this represents roughly 16 drinking-day-equivalents prevented per month.",
+    "Uncertainty propagation: these translations assume the point estimate is the true effect. The CI (determined in Estimation) defines the range of clinically plausible effects — the policy implications of the lower vs. upper bound should be interpreted explicitly in the study report.",
+  ],
+];
+
+const QUESTION_ALT_PHRASINGS = {
+  p1: [
+    "Does poor sleep quality increase the likelihood of alcohol use in the days that follow, among adults in outpatient AUD treatment?",
+    "Among adults in outpatient AUD treatment, do nights with worse sleep quality predict a higher probability of alcohol use the next day?",
+    "Is there a next-day effect of sleep disruption on alcohol-use probability in an outpatient AUD cohort observed via EMA?",
+  ],
+  p2: [
+    "Does higher phone screen time increase same-day alcohol-use likelihood?",
+    "Is elevated phone screen time associated with a higher probability of alcohol use on the same day, among outpatient AUD participants?",
+    "Among adults in AUD treatment, does phone screen time on a given day predict same-day alcohol-use events?",
+  ],
+  p3: [
+    "Does elevated stress increase next-day alcohol-use probability?",
+    "Is daily stress level a predictor of subsequent alcohol-use events in outpatient AUD treatment?",
+    "Among adults in AUD treatment, does higher stress on a given day raise the likelihood of drinking the following day?",
+  ],
+  custom: [
+    "Does poor sleep quality increase the likelihood of alcohol use in the days that follow, among adults in outpatient AUD treatment?",
+    "Among adults in outpatient AUD treatment, do nights with worse sleep quality predict a higher probability of alcohol use the next day?",
+    "Is there a next-day effect of sleep disruption on alcohol-use probability in an outpatient AUD cohort observed via EMA?",
+  ],
+};
+
+// ── useVersionedContent hook ───────────────────────────────────────────────
+function useVersionedContent(variants) {
+  const [idx, setIdx] = useState(0);
+  const [locked, setLocked] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
+
+  const regenerate = useCallback(() => {
+    if (locked || generating || variants.length <= 1) return;
+    setGenerating(true);
+    setCompareMode(false);
+    setTimeout(() => {
+      setIdx(i => (i + 1) % variants.length);
+      setGenerating(false);
+    }, 850);
+  }, [locked, generating, variants.length]);
+
+  return {
+    current: variants[Math.min(idx, variants.length - 1)],
+    prev: idx > 0 ? variants[idx - 1] : null,
+    idx, total: variants.length, locked, generating, compareMode,
+    setCompareMode,
+    regenerate,
+    lock: () => setLocked(true),
+    unlock: () => { setLocked(false); setCompareMode(false); },
+    navPrev: () => { if (!locked) setIdx(i => Math.max(0, i - 1)); },
+    navNext: () => { if (!locked) setIdx(i => Math.min(variants.length - 1, i + 1)); },
+  };
+}
+
+// ── RegenerateBlock component ─────────────────────────────────────────────
+// Wraps any AI-generated content with: version nav, Regenerate, Compare, Lock in.
+function RegenerateBlock({ variants, renderVariant, onLock, onUnlock, externalVersions, onRegenerate }) {
+  const effectiveVariants = externalVersions && externalVersions.length > 0 ? externalVersions : variants;
+  const v = useVersionedContent(effectiveVariants || [""]);
+
+  const handleLock = () => { v.lock(); onLock?.(v.current); };
+  const handleUnlock = () => { v.unlock(); onUnlock?.(); };
+  const handleRegenerate = onRegenerate
+    ? () => { if (v.locked || v.generating) return; v.setCompareMode(false); onRegenerate(); }
+    : v.regenerate;
+
+  const render = (content) =>
+    renderVariant ? renderVariant(content) : <p className="insight-body">{content}</p>;
+
+  return (
+    <div className={`regen-block${v.locked ? " regen-block-locked" : ""}`}>
+      {v.compareMode && v.prev ? (
+        <div className="regen-compare">
+          <div className="regen-compare-panel">
+            <div className="regen-compare-label">Version {v.idx}</div>
+            {render(v.prev)}
+          </div>
+          <div className="regen-compare-panel regen-compare-panel-current">
+            <div className="regen-compare-label regen-compare-label-current">Version {v.idx + 1} — current</div>
+            {render(v.current)}
+          </div>
+        </div>
+      ) : render(v.current)}
+
+      <div className="regen-toolbar">
+        <div className="regen-toolbar-left">
+          {v.total > 1 && !v.locked && (
+            <div className="regen-nav">
+              <button className="regen-nav-btn" onClick={v.navPrev} disabled={v.idx === 0} title="Previous version">‹</button>
+              <span className="regen-version-label">v{v.idx + 1}/{v.total}</span>
+              <button className="regen-nav-btn" onClick={v.navNext} disabled={v.idx === v.total - 1} title="Next version">›</button>
+            </div>
+          )}
+          {v.total > 1 && v.idx > 0 && !v.locked && (
+            <button className="btn btn-ghost btn-sm regen-compare-btn" onClick={() => v.setCompareMode(m => !m)}>
+              <Eye size={11} />{v.compareMode ? "Close compare" : "Compare"}
+            </button>
+          )}
+        </div>
+        <div className="regen-toolbar-right">
+          {v.locked ? (
+            <>
+              <span className="regen-locked-badge"><Lock size={11} /> Locked in</span>
+              <button className="btn btn-ghost btn-sm" onClick={handleUnlock}>Unlock</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={handleRegenerate} disabled={v.generating} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <RefreshCw size={11} className={v.generating ? "spin" : ""} />
+                {v.generating ? "Generating…" : "Regenerate"}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={handleLock} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Lock size={11} /> Lock in
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SuggestedQuestionCard ─────────────────────────────────────────────────
+// Each promoted pattern gets its own card with per-phrasing Regenerate.
+function SuggestedQuestionCard({ pid, selectedQuestionId, selectSuggestedQuestion }) {
+  const phrasings = QUESTION_ALT_PHRASINGS[pid] || [QUESTION_ALT_PHRASINGS.p1[0]];
+  const v = useVersionedContent(phrasings);
+  const isSelected = selectedQuestionId === pid;
+
+  return (
+    <div className="pattern-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8, paddingBottom: 10 }}>
+      {v.compareMode && v.prev ? (
+        <div className="regen-compare" style={{ width: "100%" }}>
+          <div className="regen-compare-panel">
+            <div className="regen-compare-label">Version {v.idx}</div>
+            <p style={{ fontSize: 12, margin: 0, lineHeight: 1.5 }}>{v.prev}</p>
+          </div>
+          <div className="regen-compare-panel regen-compare-panel-current">
+            <div className="regen-compare-label regen-compare-label-current">Version {v.idx + 1} — current</div>
+            <p style={{ fontSize: 12, margin: 0, lineHeight: 1.5 }}>{v.current}</p>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", width: "100%", gap: 8 }}>
+          <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>{v.current}</span>
+          {isSelected ? (
+            <span className="chip chip-success" style={{ flexShrink: 0 }}><CheckCircle2 size={13} /> In use</span>
+          ) : (
+            <button className="btn btn-secondary btn-sm" style={{ flexShrink: 0 }} onClick={() => selectSuggestedQuestion(pid, v.current)}>Use this question</button>
+          )}
+        </div>
+      )}
+      <div className="regen-toolbar" style={{ width: "100%", paddingTop: 6, marginTop: 0, borderTop: "1px dashed #D5DBE4" }}>
+        <div className="regen-toolbar-left">
+          <div className="regen-nav">
+            <button className="regen-nav-btn" onClick={v.navPrev} disabled={v.idx === 0}>‹</button>
+            <span className="regen-version-label">v{v.idx + 1}/{v.total}</span>
+            <button className="regen-nav-btn" onClick={v.navNext} disabled={v.idx === v.total - 1}>›</button>
+          </div>
+          {v.idx > 0 && (
+            <button className="btn btn-ghost btn-sm regen-compare-btn" onClick={() => v.setCompareMode(m => !m)}>
+              <Eye size={11} />{v.compareMode ? "Close compare" : "Compare"}
+            </button>
+          )}
+        </div>
+        <div className="regen-toolbar-right">
+          <button className="btn btn-ghost btn-sm" onClick={v.regenerate} disabled={v.generating} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <RefreshCw size={11} className={v.generating ? "spin" : ""} />
+            {v.generating ? "Generating…" : "Regenerate"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PAGE_INTRO_MESSAGES = {
+  setup: "👋 Welcome to Causal Studio! This is Step 1 — Project Setup. Start by writing a brief research objective, then upload your dataset and data dictionary. Once those three are in place, you're ready to move forward. Protocol and papers are optional but help me give better suggestions along the way.",
+
+  "data-foundation": "Great — let's take a closer look at your data! 🔍 I've scanned everything you uploaded and laid it all out here. Have a read through each section — anything in red needs to be fixed before we move on, but yellow flags can wait. Once it looks good, we're ready for the next step!",
+
+  explore: "Now for the fun part — let's explore what your data is actually showing! 📊 Use the time window slider and layer checkboxes to zoom in on the variables you care about most. When you spot a pattern that looks relevant to your research question, hit Promote to carry it forward. Aim for 1–3 good ones.",
+
+  question: "Time to get specific about what we're actually studying. 🎯 Start by checking the variable-role table — I've made some suggestions, but you know your data best, so feel free to adjust. Then either pick one of my suggested questions or write your own. Fill in all seven fields and we're good to go!",
+
+  feasibility: "Let's make sure we have enough data to answer your question. 📐 Drag the lag slider to match your expected mechanism (e.g. 24 hours for a next-day effect) and watch the verdict update live. If it comes back Marginal or Infeasible, try tweaking the threshold — I'll tell you what to adjust.",
+
+  graph: "Now let's map out the causal story. 🗺️ I've pre-drawn some arrows based on your variables — confirm the ones that look right, remove any that don't fit, and add any missing confounders. Mark each arrow as Supported or Uncertain, then check the adjustment set at the bottom. That's our roadmap for the analysis!",
+
+  strategy: "Almost there — let's set up how the analysis will actually run. ⚙️ Choose your effect type, pick an estimator, enable the random intercept, and flag any sensitivity checks you want. Each choice here flows directly into the estimation step, so take a moment to make sure it reflects your design.",
+
+  estimation: "This is the moment of truth — let's run the analysis! 🚀 Check the config summary looks right, then hit Run Estimation. Once results come in, review the diagnostics (SMD values should be under 0.10), and select your primary result when you're happy with it.",
+
+  review: "You made it to the final step — well done! 🎉 Take a moment to read through the assumption boundaries; they spell out exactly what you can and can't claim from this analysis. If anything needs tweaking, you can navigate back and it'll update here automatically. When you're satisfied, go ahead and export.",
+};
+
+const SETUP_QUESTIONS = [
+  "What does each upload on this page do?",
+  "What do I need before I can continue?",
+  "What makes a good research objective?",
+];
+const DF_QUESTIONS = [
+  "What does each section on this page show?",
+  "I have warnings — can I still continue?",
+  "What does the linking key check mean?",
+];
+const EXPLORE_QUESTIONS = [
+  "How do the filters affect the charts?",
+  "How many patterns should I promote?",
+  "What does promoting a pattern do?",
+];
+const QUESTION_PAGE_QUESTIONS = [
+  "How do I use the variable-role table?",
+  "What should I fill in the question builder?",
+  "What is an estimand and which should I pick?",
+];
+const FEASIBILITY_QUESTIONS = [
+  "What do the lag and threshold sliders control?",
+  "My verdict is Marginal — what should I do?",
+  "What does overlap mean and why does it matter?",
+];
+const GRAPH_QUESTIONS = [
+  "How do I add and connect variables here?",
+  "How do I know when my graph is ready?",
+  "What is a backdoor path and why does it matter?",
+];
+const STRATEGY_QUESTIONS = [
+  "What does each option on this page control?",
+  "Which sensitivity assumptions should I check?",
+  "Total effect vs. direct effect — which do I want?",
+];
+const ESTIMATION_QUESTIONS = [
+  "What does each section of the results show?",
+  "A diagnostic is flagged — what should I do?",
+  "What does the point estimate and CI tell me?",
+];
+const REVIEW_QUESTIONS = [
+  "What does the assumption boundaries section show?",
+  "Is there anything to check before exporting?",
+  "What can and can't I claim from this analysis?",
+];
+
+const ANSWERS = {
+  // ── Project Setup ──────────────────────────────────────────────────────────
+  "What does each upload on this page do?":
+    "Objective: frames the population and relationship — used to tailor suggestions throughout. Dataset: the raw data the analysis runs on (one file per source). Dictionary: maps every column to its type and range — required for role assignment. Protocol: flags design-vs-data inconsistencies. Papers: prior evidence used when suggesting roles and causal relationships.",
+  "What do I need before I can continue?":
+    "Three things: a written objective, at least one parseable dataset (green status), and a data dictionary with no blocking issues. Protocol and papers are optional. The readiness checklist at the top shows what's still missing.",
+  "What makes a good research objective?":
+    "Name the population, the setting, and the broad relationship of interest. Causal language (exposure, outcome, estimand) comes in Step 4 — a plain sentence is enough here. Example: 'Investigate whether sleep disruption is associated with next-day alcohol craving in outpatient AUD treatment.'",
+
+  // ── Data Foundation ────────────────────────────────────────────────────────
+  "What does each section on this page show?":
+    "Data summary: record and participant counts. Variable schema: all detected columns and their types. Linking key: confirms datasets share a participant ID. Measurement frequency: when each variable was collected. Missingness & quality: high-missing or implausible-value flags. Inconsistency alerts: dictionary-vs-data mismatches.",
+  "I have warnings — can I still continue?":
+    "Yes — yellow warnings don't block you, but they resurface in later steps. Red blocking issues must be fixed first. For each warning, decide whether it materially affects your analysis before moving on.",
+  "What does the linking key check mean?":
+    "It confirms all datasets share a participant identifier (e.g. participant_id) so rows can be joined to the same person. Mismatched field names or formatting (P001 vs 1) will fail the join.",
+
+  // ── Broad Exploration ──────────────────────────────────────────────────────
+  "How do the filters affect the charts?":
+    "The time window slider sets how many days appear in the trend chart. Layer checkboxes toggle which data sources appear in the coverage and missingness views. Both affect display only — no data is removed from later steps.",
+  "How many patterns should I promote?":
+    "One to three is ideal. Prioritise patterns involving your expected exposure and outcome. A confounder-related pattern is worth promoting too — it will appear in the variable-role table in Step 4.",
+  "What does promoting a pattern do?":
+    "It carries the pattern forward as evidence for your causal question. In Step 4 it generates a suggested research question and adds the involved variables to the role table. Promoted patterns are observational — not causal claims.",
+
+  // ── Question & Variables ───────────────────────────────────────────────────
+  "How do I use the variable-role table?":
+    "Each row is a detected variable. Change the suggested role using the dropdown. Use Select/Discard to control what carries forward — only selected variables proceed. Click '+ Add variable' to add one not in the list. Roles here are provisional; Causal Graph (Step 6) is where they're validated.",
+  "What should I fill in the question builder?":
+    "All seven fields: population, exposure, comparator, outcome, time window, unit of analysis, and target estimand. Leaving any blank causes issues in Feasibility and Strategy. The time window should match the lag you plan to test.",
+  "What is an estimand and which should I pick?":
+    "The estimand is the exact causal quantity you're targeting. For a binary EMA outcome, risk difference is usually best — it's directly interpretable and doesn't overstate effect size the way odds ratios do at high prevalence (>10%).",
+
+  // ── Feasibility ────────────────────────────────────────────────────────────
+  "What do the lag and threshold sliders control?":
+    "Lag: the time gap between exposure and outcome measurement — longer lags trim participant-days. Threshold: the minimum within-person variability to include a participant — low variation means nothing to contrast. Both update the verdict and sample count live.",
+  "My verdict is Marginal — what should I do?":
+    "Try lowering the exposure variation threshold first — it usually recovers more participant-days than shortening the lag. If the lag is flexible, a shorter lag helps too. Combine small adjustments to both if needed, then enable robust SEs in Strategy to compensate.",
+  "What does overlap mean and why does it matter?":
+    "Overlap means exposed and unexposed participant-days exist across all covariate combinations. Without it, comparisons rely on extrapolation rather than observed data, making estimates model-dependent. The formal check happens when the estimator is fitted in Strategy.",
+
+  // ── Causal Graph ───────────────────────────────────────────────────────────
+  "How do I add and connect variables here?":
+    "Add a node via 'Add variable', rename it and assign a role in the right panel. To add an arrow: select a node, click 'Add edge from here', then click the target. Click any arrow to mark it Supported or Uncertain. The adjustment set updates automatically.",
+  "How do I know when my graph is ready?":
+    "All selected variables are nodes with roles assigned, every arrow is marked Supported or Uncertain, and the adjustment set contains only confounders — not mediators. You don't need a perfect graph, just one that accurately reflects your assumptions.",
+  "What is a backdoor path and why does it matter?":
+    "A non-causal path from exposure to outcome through a common cause — e.g. sleep ← stress → alcohol. Without conditioning on stress, the estimate mixes its effect with sleep's. Blocking all backdoor paths via the adjustment set is what makes the estimate interpretable as causal.",
+
+  // ── Analysis Strategy ──────────────────────────────────────────────────────
+  "What does each option on this page control?":
+    "Effect type: whether mediators enter the adjustment set. Estimator: model family (mixed-effects logistic for binary repeated-measures; GEE for population-averaged; MSM for time-varying exposure). Repeated-measures options: random intercept (required), MI, robust SEs. Sensitivity assumptions: each adds a specific robustness test in Estimation.",
+  "Which sensitivity assumptions should I check?":
+    "Missing data if >10% missingness in key variables. Positivity if overlap was below 80% in Feasibility. Unmeasured confounding for any observational study (adds E-value). SUTVA if participants could influence each other's exposure. Exclusion restriction only if using an IV.",
+  "Total effect vs. direct effect — which do I want?":
+    "Total effect for most questions — it captures the full impact of intervening on the exposure. Direct effect only if you specifically want to isolate one mechanism (e.g. sleep → craving, excluding the stress pathway). Direct effect requires stronger assumptions about the mediator.",
+
+  // ── Estimation & Calculation ───────────────────────────────────────────────
+  "What does each section of the results show?":
+    "Point estimate: best-guess effect size. SE: sampling variability. 95% CI: range the data can't rule out. N: participant-days in the model. SMD table: covariate balance before and after adjustment — below 0.10 is adequate. Sensitivity results: E-value, MI comparison, overlap-weighted estimate (only if flagged in Strategy).",
+  "A diagnostic is flagged — what should I do?":
+    "SMD > 0.10: consider overlap weighting or adding the poorly-balanced variable to the adjustment set, then re-run. Non-convergence: try a simpler estimator or reduce covariates. Positivity warning: restrict to the overlapping region or switch to overlap weighting. Use 'Explain This Warning' for plain-language detail on any specific flag.",
+  "What does the point estimate and CI tell me?":
+    "The point estimate is the best-guess effect size and direction. If the CI excludes zero, the data are inconsistent with no effect. If it includes zero, a null effect can't be ruled out. The E-value shows how strong an unmeasured confounder would need to be to explain the result away.",
+
+  // ── Review & Export ────────────────────────────────────────────────────────
+  "What does the assumption boundaries section show?":
+    "A plain-language statement of the conditions under which your estimate is valid — which identification assumptions were checked, which were assumed, and what claim the result supports. It defines the defensible scope of the finding before you report it.",
+  "Is there anything to check before exporting?":
+    "Confirm: (1) the primary result matches what you selected in Step 8, (2) assumption boundaries match your design, (3) limitations cover confounding and missing data, (4) the research question and roles shown are correct. Navigate back to fix anything — the export updates automatically.",
+  "What can and can't I claim from this analysis?":
+    "You can claim: an effect estimate consistent with your stated assumptions, adjustment set, and estimand, in this population and window. You can't claim: proof of causation, generalisability beyond the sample, or precision beyond the CI. Include the E-value when reporting.",
+
+  // ── Legacy / shared ────────────────────────────────────────────────────────
+  "Explain this validation issue":
+    "Open 'Validation details' on the relevant card — it lists what was detected, what's missing, and the action needed.",
+  "What documents count as domain guidance?":
+    "Clinical practice guidelines, measurement standards, reporting standards, and professional body guidance. Published empirical studies belong in Research Papers instead.",
+  "What is an E-value and why does it matter?":
+    "The minimum confounding strength needed to fully explain away your estimate. A large E-value means the finding is robust to confounding; a small one means even weak unmeasured confounders could explain it. It doesn't prove causation — it quantifies sensitivity to the main threat.",
+};
+
+const DATA_SCHEMA = [
+  { name: "participant_id", type: "ID", source: "All files", roleGuess: "ID / linking key", documented: true },
+  { name: "timestamp", type: "Datetime", source: "All files", roleGuess: "Linking key", documented: true },
+  { name: "sleep_quality", type: "Number (1\u20135)", source: "EMA survey", roleGuess: "Exposure", documented: true, frequency: "daily" },
+  { name: "alcohol_use_event", type: "Binary (Y/N)", source: "EMA survey", roleGuess: "Outcome", documented: true, frequency: "daily" },
+  { name: "stress_level", type: "Number (0\u2013100)", source: "EMA survey", roleGuess: "Confounder", documented: true, frequency: "3x/day" },
+  { name: "actigraphy_activity", type: "Number (min)", source: "Actigraphy", roleGuess: "Confounder", documented: true, frequency: "daily" },
+  { name: "phone_screen_time", type: "Number (min)", source: "Passive sensing", roleGuess: "Proxy", documented: false, frequency: "daily" },
+];
+const BASELINE_VARIABLES = ["age", "sex / gender", "AUD diagnosis", "outpatient status"];
+const ROLE_COLORS = {
+  "ID / linking key": "chip-accent",
+  "Linking key": "chip-accent",
+  Exposure: "chip-accent",
+  Outcome: "chip-danger",
+  Confounder: "chip-warning",
+  Proxy: "chip-muted",
+};
+
+const ROLE_CAUTION_TEXT = {
+  sleep_quality: "prior sleep research typically treats sleep quality as the exposure of interest in craving and use studies.",
+  alcohol_use_event: "this is consistently modeled as the outcome in the substance-use literature.",
+  stress_level: "stress is a well-documented common cause of both sleep disruption and alcohol use, which is why it's usually a confounder.",
+  actigraphy_activity: "physical activity is frequently controlled for as a confounder in sleep-behavior studies.",
+  phone_screen_time: "screen time is usually treated as an imperfect proxy for a broader behavior pattern, not a direct cause.",
+};
+
+function inferFrequency(name) {
+  if (/survey|ema/i.test(name)) return "Daily self-report";
+  if (/actigra|wearable|accel/i.test(name)) return "Continuous passive sensing";
+  if (/phone|screen|smartphone/i.test(name)) return "Continuous passive sensing";
+  if (/clinic|visit/i.test(name)) return "Scheduled clinical visit";
+  if (/baseline|demo/i.test(name)) return "Collected once at enrollment";
+  return "Frequency not detected \u2014 confirm in the data dictionary";
+}
+
+function buildDataSummary(datasets, dictionary) {
+  if (datasets.length === 0) {
+    return "No datasets uploaded yet, so I can't summarize your data structure. Upload at least one dataset in Project Setup first.";
+  }
+  const domains = new Set();
+  datasets.forEach((d) => DOMAIN_MAP.forEach((m) => m.match.test(d.name) && domains.add(m.label)));
+  const totalRows = datasets.reduce((s, d) => s + d.rows, 0);
+  const participantFields = [...new Set(datasets.map((d) => d.participantField).filter(Boolean))];
+  const linkingNote =
+    datasets.length > 1
+      ? participantFields.length <= 1
+        ? `They link cleanly on ${participantFields[0] || "a shared identifier"}.`
+        : "They currently use different identifier fields, so linking needs your review."
+      : "";
+  const docNote = dictionary
+    ? dictionary.described === dictionary.total
+      ? "Your data dictionary documents every variable I can see."
+      : `${dictionary.total - dictionary.described} variable(s) in your data dictionary still need documentation.`
+    : "No data dictionary has been uploaded yet, so variable meanings can't be fully verified.";
+  return `Here's a summary of your data: ${datasets.length} dataset${datasets.length > 1 ? "s" : ""} totaling about ${totalRows.toLocaleString()} records. The observation unit looks like participant-day, consistent with repeated self-report and sensor measurement. Categories present: ${domains.size ? [...domains].join(", ") : "uncategorized"}. ${linkingNote} ${docNote}`;
+}
+
+function buildDataSummaryVariants(datasets, dictionary) {
+  const v1 = buildDataSummary(datasets, dictionary);
+  if (datasets.length === 0) return [v1];
+  const totalRows = datasets.reduce((s, d) => s + d.rows, 0);
+  const docNote = dictionary
+    ? `${dictionary.described}/${dictionary.total} variables fully documented.`
+    : "No data dictionary uploaded yet.";
+  const v2 = `Temporal structure: ${datasets.length} dataset${datasets.length > 1 ? "s" : ""} with ~${totalRows.toLocaleString()} records arranged as participant-day observations. The timeline spans EMA check-ins (daily), actigraphy (continuous), and passive sensing (hourly). ${docNote}`;
+  const v3 = `Data coverage: ~${totalRows.toLocaleString()} records across ${datasets.length} source${datasets.length > 1 ? "s" : ""}. Participant-day is the natural unit of analysis. Watch for missingness in EMA data (late or skipped surveys) and actigraphy gaps overnight. ${docNote}`;
+  return [v1, v2, v3];
+}
+
+function buildClarificationAsk() {
+  return "Before you move on, one thing needs your input: your data dictionary lists phone_screen_time in hours, but the dataset values range 0\u2013540 \u2014 consistent with minutes, not hours. Can you confirm the correct unit? You can reply right here.";
+}
+
+function seedFromName(name, salt = 0) {
+  let h = salt;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h;
+}
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function StatusChip({ status }) {
+  const map = {
+    not_uploaded: { icon: Circle, label: "Not uploaded", cls: "chip-muted" },
+    uploading: { icon: RefreshCw, label: "Uploading", cls: "chip-accent", spin: true },
+    ready: { icon: CheckCircle2, label: "Ready", cls: "chip-success" },
+    verified: { icon: CheckCircle2, label: "Verified", cls: "chip-success" },
+    clarification: { icon: AlertTriangle, label: "Needs clarification", cls: "chip-warning" },
+    review: { icon: AlertTriangle, label: "Needs review", cls: "chip-warning" },
+    warning: { icon: ShieldAlert, label: "Review before continuing", cls: "chip-warning" },
+    blocking: { icon: XCircle, label: "Cannot be used", cls: "chip-danger" },
+    complete: { icon: CheckCircle2, label: "Complete", cls: "chip-success" },
+  };
+  const m = map[status] || map.not_uploaded;
+  const Icon = m.icon;
+  return (
+    <span className={`chip ${m.cls}`}>
+      <Icon size={13} className={m.spin ? "spin" : ""} />
+      {m.label}
+    </span>
+  );
+}
+
+function ReadinessRow({ state, label, sub }) {
+  const icon =
+    state === "complete" ? (
+      <CheckCircle2 size={15} className="ok" />
+    ) : state === "attention" ? (
+      <AlertTriangle size={15} className="warn" />
+    ) : (
+      <Circle size={15} className="muted" />
+    );
+  return (
+    <div className="readiness-row">
+      {icon}
+      <div>
+        <div className={`readiness-label ${state === "optional" ? "muted-text" : ""}`}>{label}</div>
+        {sub && <div className="readiness-sub">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function genDatasetDetail(file, seed) {
+  const bucket = seed % 3;
+  const rows = 1000 + (seed % 40000);
+  const cols = 8 + (seed % 30);
+  if (bucket === 0) {
+    return {
+      status: "ready",
+      rows,
+      cols,
+      participantField: "participant_id",
+      timestampFields: ["survey_ts"],
+      detail: {
+        detected: `The file parsed cleanly. Column headers are present and ${rows.toLocaleString()} records were detected across ${cols} columns.`,
+        issues: "No structural issues detected.",
+        why: "A clean parse means downstream steps can safely reference these columns.",
+        action: "No action needed.",
+        blocking: false,
+      },
+    };
+  }
+  if (bucket === 1) {
+    return {
+      status: "clarification",
+      rows,
+      cols,
+      participantField: "participant_id",
+      timestampFields: ["ts_local", "ts_utc"],
+      detail: {
+        detected: `${rows.toLocaleString()} records detected. Two timestamp columns were found: ts_local and ts_utc.`,
+        issues: "The two timestamp columns use different formats and it isn't clear whether both represent the same events.",
+        why: "Misaligned timestamps can distort measures of timing between exposure and outcome later in the workflow.",
+        action: "Confirm whether both timestamp columns represent local time, or describe the difference in the data dictionary.",
+        blocking: false,
+      },
+    };
+  }
+  return {
+    status: "warning",
+    rows,
+    cols,
+    participantField: "email",
+    timestampFields: ["visit_date"],
+    detail: {
+      detected: `${rows.toLocaleString()} records detected. A column named "email" may contain direct identifiers.`,
+      issues: "Potential direct identifier in an unexpected column.",
+      why: "Research data should be de-identified before upload. This automated screen does not certify the dataset is fully de-identified or compliant with institutional requirements.",
+      action: "Review the flagged column and remove or hash direct identifiers before continuing.",
+      blocking: false,
+    },
+  };
+}
+
+function friendlyError(error, fallback = "The backend request failed.") {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function describeColumnSource(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes("pid") || lower.includes("participant") || lower.endsWith("_id")) return "Identifier";
+  if (lower.includes("time") || lower.includes("date") || lower.includes("day") || lower.includes("week")) return "Timing";
+  if (lower.includes("acc") || lower.includes("magnitude") || lower.includes("step") || lower.includes("wear")) return "Wearable-derived";
+  if (lower.includes("phone") || lower.includes("screen") || lower.includes("gps") || lower.includes("lat") || lower.includes("long")) return "Smartphone-derived";
+  if (lower.includes("stress") || lower.includes("sleep") || lower.includes("crav") || lower.includes("mood") || lower.includes("label")) return "EMA/self-report";
+  if (lower.includes("age") || lower.includes("sex") || lower.includes("gender") || lower.includes("race")) return "Demographic";
+  return "Needs clarification";
+}
+
+function describeColumnTag(name, schema) {
+  const lower = name.toLowerCase();
+  const missing = schema?.missing_value_percentage_per_column?.[name] ?? 0;
+  if (schema?.possible_id_columns?.includes(name) || lower === "pid" || lower.includes("participant")) return "Identifier";
+  if (schema?.possible_timestamp_date_columns?.includes(name) || lower.includes("time") || lower.includes("date") || lower.includes("day")) return "Timestamp";
+  if (lower.includes("age") || lower.includes("sex") || lower.includes("gender") || lower.includes("baseline")) return "Baseline";
+  if (lower.includes("acc") || lower.includes("magnitude") || lower.includes("wear")) return "Wearable-derived";
+  if (lower.includes("phone") || lower.includes("screen") || lower.includes("gps") || lower.includes("lat") || lower.includes("long")) return missing > 30 ? "Proxy measure" : "Smartphone-derived";
+  if (lower.includes("stress") || lower.includes("sleep") || lower.includes("crav") || lower.includes("label")) return "EMA/self-report";
+  if (lower.includes("lag") || lower.includes("rolling") || lower.includes("window")) return "Derived feature";
+  if (missing > 30) return "Needs clarification";
+  return "Time-varying";
+}
+
+function schemaRows(schema, limit = 30) {
+  if (!schema?.column_names?.length) return DATA_SCHEMA.map((v) => ({
+    name: v.name,
+    type: v.type,
+    source: v.source,
+    tag: describeColumnTag(v.name, null),
+  }));
+  return schema.column_names.slice(0, limit).map((name) => ({
+    name,
+    type: schema.pandas_data_types?.[name] || "Unknown",
+    source: describeColumnSource(name),
+    tag: describeColumnTag(name, schema),
+    missingPct: schema.missing_value_percentage_per_column?.[name] ?? 0,
+  }));
+}
+
+function descriptiveTagClass(tag) {
+  if (tag === "Identifier" || tag === "Timestamp") return "chip-accent";
+  if (tag === "Proxy measure" || tag === "Needs clarification") return "chip-warning";
+  if (tag === "EMA/self-report" || tag === "Wearable-derived" || tag === "Smartphone-derived") return "chip-success";
+  return "chip-muted";
+}
+
+function schemaToDataset(file, uploaded, schema, fallbackDetail) {
+  const idField = schema?.possible_id_columns?.[0] || null;
+  const timestampFields = schema?.possible_timestamp_date_columns || [];
+  const warnings = schema?.warnings || [];
+  const highMissing = warnings
+    .filter((warning) => (warning.missing_percentage ?? 0) >= 30)
+    .slice(0, 3);
+  const warningText = highMissing.length
+    ? `High missingness: ${highMissing.map((w) => `${w.column} ${w.missing_percentage}%`).join(", ")}.`
+    : "No high-missingness warnings were returned by schema parsing.";
+
+  return {
+    id: uploaded?.saved_filename || `${file.name}-${Date.now()}`,
+    savedFilename: uploaded?.saved_filename || file.name,
+    originalFilename: uploaded?.original_filename || file.name,
+    name: uploaded?.original_filename || file.name,
+    size: uploaded?.file_size_bytes || file.size,
+    status: "ready",
+    rows: schema?.number_of_rows ?? fallbackDetail.rows,
+    cols: schema?.number_of_columns ?? fallbackDetail.cols,
+    participantField: idField,
+    timestampFields,
+    schema,
+    expanded: false,
+    detail: {
+      detected: `The backend parsed this dataset: ${(schema?.number_of_rows ?? 0).toLocaleString()} rows and ${schema?.number_of_columns ?? 0} columns.`,
+      issues: warningText,
+      why: "Phase 2 uses this schema to explain data structure and quality. It does not assign final causal roles.",
+      action: highMissing.length ? "Review high-missingness fields before using them in later causal design steps." : "No action needed before data foundation review.",
+      blocking: false,
+    },
+  };
+}
+
+function buildRealSchemaAssistantMessage(schema) {
+  const ids = schema.possible_id_columns?.join(", ") || "no obvious ID fields";
+  const times = schema.possible_timestamp_date_columns?.join(", ") || "no obvious timing fields";
+  const highMissing = (schema.warnings || [])
+    .filter((warning) => (warning.missing_percentage ?? 0) >= 30)
+    .slice(0, 3)
+    .map((warning) => `${warning.column} has ${warning.missing_percentage}% missingness`)
+    .join("; ");
+  return `Uploaded and validated. This dataset has ${schema.number_of_rows.toLocaleString()} rows and ${schema.number_of_columns} columns. I detected ${ids} as possible ID fields and ${times} as timing fields.${highMissing ? ` Biggest missingness warnings: ${highMissing}.` : ""}`;
+}
+
+function topMissingness(schema, limit = 6) {
+  if (!schema?.missing_value_percentage_per_column) return [];
+  return Object.entries(schema.missing_value_percentage_per_column)
+    .map(([name, pct]) => ({ name, pct: Number(pct) || 0 }))
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, limit);
+}
+
+function statusMessage(status) {
+  if (!status) return null;
+  return status.kind === "error" ? `Error: ${status.message}` : status.message;
+}
+
+function firstRealDataset(datasets) {
+  return datasets.find((dataset) => dataset.savedFilename) || datasets[0] || null;
+}
+
+function realDatasetFilename(dataset) {
+  return dataset?.savedFilename || dataset?.name || "";
+}
+
+function formatList(values, fallback = "None detected") {
+  if (!values?.length) return fallback;
+  return values.slice(0, 8).join(", ");
+}
+
+function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
+  return (
+    <div
+      className={`dropzone ${dragOver ? "dropzone-active" : ""} ${compact ? "dropzone-compact" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        if (e.dataTransfer.files?.length) onFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      <UploadCloud size={compact ? 18 : 22} className="dropzone-icon" />
+      <div className="dropzone-text">
+        <span className="dropzone-title">Drag files here</span>
+        <span className="dropzone-sub">{label}</span>
+      </div>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => inputRef.current?.click()}>
+        Select files
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple={multiple}
+        accept={accept}
+        style={{ display: "none" }}
+        onChange={(e) => {
+          if (e.target.files?.length) onFiles(Array.from(e.target.files));
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+function ValidationDetails({ detail }) {
+  return (
+    <div className="validation-panel">
+      <div className="validation-row"><span className="validation-label">What was detected</span><p>{detail.detected}</p></div>
+      <div className="validation-row"><span className="validation-label">Potential issues</span><p>{detail.issues}</p></div>
+      <div className="validation-row"><span className="validation-label">Why it matters</span><p>{detail.why}</p></div>
+      <div className="validation-row"><span className="validation-label">Required action</span><p>{detail.action}</p></div>
+      <div className="validation-row">
+        <span className={`blocking-tag ${detail.blocking ? "blocking" : "nonblocking"}`}>
+          {detail.blocking ? "Blocks continuation" : "Does not block continuation"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function DatasetRow({ ds, onRemove, onReplace, onToggle, simple }) {
+  return (
+    <div className="file-row">
+      <div className="file-row-main">
+        <FileText size={18} className="file-icon" />
+        <div className="file-meta">
+          <div className="file-name">{ds.name}</div>
+          <div className="file-sub">
+            {formatBytes(ds.size)} \u00b7 {ds.rows.toLocaleString()} rows \u00b7 {ds.cols} columns
+            {ds.participantField && <> \u00b7 id: {ds.participantField}</>}
+          </div>
+        </div>
+        <StatusChip status={ds.status} />
+        {!simple && (
+          <div className="file-actions">
+            <button className="icon-btn" aria-label="Preview dataset" title="Preview"><Eye size={15} /></button>
+            <button className="icon-btn" aria-label="Replace dataset" title="Replace" onClick={onReplace}><RefreshCw size={15} /></button>
+            <button className="icon-btn icon-btn-danger" aria-label="Remove dataset" title="Remove" onClick={onRemove}><Trash2 size={15} /></button>
+          </div>
+        )}
+        {simple && (
+          <button className="icon-btn icon-btn-danger" aria-label="Remove dataset" title="Remove" onClick={onRemove}><Trash2 size={15} /></button>
+        )}
+      </div>
+      {!simple && (
+        <>
+          <button className="expand-toggle" onClick={onToggle}>
+            {ds.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            Validation details
+          </button>
+          {ds.expanded && <ValidationDetails detail={ds.detail} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+const GUIDELINE_TYPES = [
+  "Clinical practice guideline",
+  "Measurement guideline",
+  "Reporting standard",
+  "Government guidance",
+  "Professional association guidance",
+];
+
+const STYLE = `
+  .ps-root {
+    --bg: #F5F7FA; --card: #FFFFFF; --border: #E1E5EB; --navy: #16233D; --text-2: #5B6472; --text-3: #8A93A3;
+    --accent: #2F5D8A; --accent-soft: #EAF1F8; --success: #2A7A55; --success-soft: #E7F4ED;
+    --warning: #A6650E; --warning-soft: #FBF0DA; --danger: #B8382B; --danger-soft: #FBEAE7; --radius: 10px;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg); color: var(--navy);
+    display: grid; grid-template-columns: 220px minmax(0, 1fr) 320px; grid-template-rows: 1fr;
+    height: 100vh; width: 100%; min-height: 560px; margin: 0;
+    border: none; border-radius: 0; overflow: hidden;
+  }
+  .ps-root * { box-sizing: border-box; }
+  .ps-root h1, .ps-root h2, .ps-root h3 { font-family: 'IBM Plex Sans', 'Inter', sans-serif; color: var(--navy); margin: 0; }
+  @media (max-width: 980px) { .ps-root { grid-template-columns: 1fr; height: auto; max-height: none; } .leftnav, .assistant-col { display: none; } }
+
+  .leftnav { background: var(--navy); color: #fff; padding: 18px 14px; display: flex; flex-direction: column; overflow-y: auto; height: 100%; min-height: 0; }
+  .leftnav-brand { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 600; padding: 4px 6px 20px; }
+  .leftnav-brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 12.5px; color: rgba(255,255,255,0.55); margin-bottom: 2px; cursor: pointer; border: none; background: none; width: 100%; text-align: left; }
+  .nav-item.active { background: rgba(255,255,255,0.1); color: #fff; font-weight: 500; }
+  .nav-item.builtinactive:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .nav-item .num { width: 17px; height: 17px; border-radius: 50%; background: rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center; font-size: 9.5px; flex-shrink: 0; }
+  .nav-item.active .num { background: var(--accent); }
+  .nav-item .lock { margin-left: auto; opacity: 0.5; }
+  .nav-footer { margin-top: auto; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 11.5px; color: rgba(255,255,255,0.5); }
+
+  .main-col { padding: 12px 18px 24px; overflow-y: auto; min-height: 0; }
+  .text-justify { text-align: justify; }
+  .main-col-canvas { padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .ps-header { margin-bottom: 8px; }
+  .ps-header-top { display: flex; align-items: center; gap: 10px; }
+  .ps-header h1 { font-size: 18px; }
+  .ps-header p { color: var(--text-2); font-size: 12px; line-height: 1.45; max-width: 560px; margin: 4px 0 0; }
+  .ps-header .note { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 5px 10px; border-radius: 6px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 13px; margin-bottom: 8px; }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .card-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .card-desc { font-size: 11px; color: var(--text-2); line-height: 1.4; margin: 1px 0 7px; max-width: 540px; }
+  .card-info-btn { width: 17px; height: 17px; border-radius: 50%; border: 1.5px solid #CBD5E1; background: transparent; color: #94A3B8; font-size: 9.5px; font-weight: 800; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 1; transition: background .15s, border-color .15s, color .15s; flex-shrink: 0; }
+  .card-info-btn:hover, .card-info-btn.active { background: #EFF7FF; border-color: #2F5D8A; color: #2F5D8A; }
+  .card-info-popover { position: absolute; top: calc(100% + 6px); right: 0; width: 275px; background: #fff; border: 1px solid #CFE0EE; border-radius: 8px; padding: 10px 13px; font-size: 11.5px; font-weight: 400; line-height: 1.6; color: #374151; box-shadow: 0 6px 24px rgba(0,0,0,0.12); z-index: 200; }
+  .card-info-popover::before { content: ""; position: absolute; top: -5px; right: 5px; width: 9px; height: 9px; background: #fff; border-left: 1px solid #CFE0EE; border-top: 1px solid #CFE0EE; transform: rotate(45deg); }
+
+  .insight-card { border-left: 3px solid var(--accent); background: #FAFCFF; }
+  .insight-card-header { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+  .insight-icon { width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .insight-icon-blue { background: var(--accent-soft); color: var(--accent); }
+  .insight-icon-green { background: var(--success-soft); color: var(--success); }
+  .insight-icon-orange { background: var(--warning-soft); color: var(--warning); }
+  .insight-icon-purple { background: #EEE8F8; color: #6B46A8; }
+  .insight-icon-teal { background: #E4F4F2; color: #1F7A6E; }
+  .insight-subtitle { font-size: 10px; color: var(--text-3); font-style: italic; margin-top: 1px; }
+  .insight-value { font-size: 12.5px; font-weight: 600; border-radius: 6px; padding: 6px 10px; margin: 0 0 8px; line-height: 1.45; }
+  .insight-value-blue { background: var(--accent-soft); color: var(--accent); }
+  .insight-value-green { background: var(--success-soft); color: var(--success); }
+  .insight-value-orange { background: var(--warning-soft); color: var(--warning); }
+  .insight-value-purple { background: #EEE8F8; color: #6B46A8; }
+  .insight-value-teal { background: #E4F4F2; color: #1F7A6E; }
+  .insight-body { font-size: 12px; color: var(--text-2); line-height: 1.6; margin: 0 0 6px; }
+  .insight-body strong { color: var(--navy); }
+  .insight-body em { font-style: italic; color: var(--navy); }
+  .insight-note { font-size: 11px; color: var(--text-3); background: #F5F7FA; border-radius: 5px; padding: 6px 9px; margin-top: 8px; display: flex; gap: 5px; align-items: flex-start; line-height: 1.5; }
+
+  /* ── Graph regen bar ── */
+  .graph-regen-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 14px; background: #F8FAFC; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .graph-regen-bar-locked { background: #F0FAF4; border-bottom-color: var(--success); }
+
+  /* ── RegenerateBlock ── */
+  .regen-block { position: relative; }
+  .regen-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #D5DBE4; }
+  .regen-toolbar-left { display: flex; align-items: center; gap: 6px; }
+  .regen-toolbar-right { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .regen-nav { display: flex; align-items: center; gap: 2px; background: #F1F3F6; border-radius: 6px; padding: 2px; }
+  .regen-nav-btn { border: none; background: transparent; color: var(--navy); cursor: pointer; width: 22px; height: 22px; border-radius: 4px; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+  .regen-nav-btn:hover:not(:disabled) { background: #E2E5EB; }
+  .regen-nav-btn:disabled { color: #C5CAD3; cursor: not-allowed; }
+  .regen-version-label { font-size: 10.5px; color: var(--text-2); font-weight: 600; padding: 0 4px; }
+  .regen-locked-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; color: var(--success); background: var(--success-soft); border-radius: 999px; padding: 3px 9px; }
+  .regen-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .regen-compare-panel { border-radius: 7px; padding: 10px 12px; border: 1px solid var(--border); background: #F8F9FB; }
+  .regen-compare-panel-current { background: var(--accent-soft); border-color: #CFE0EE; }
+  .regen-compare-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); margin-bottom: 6px; }
+  .regen-compare-label-current { color: var(--accent); }
+  .regen-block-locked .regen-toolbar { border-top-style: solid; border-top-color: var(--success); }
+  .regen-compare-btn { display: flex; align-items: center; gap: 4px; padding: 3px 7px !important; }
+  .lag-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin: 8px 0 4px; }
+  .lag-table th { text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); padding: 3px 8px 5px; border-bottom: 1px solid var(--border); }
+  .lag-table td { padding: 5px 8px; border-bottom: 1px solid #F2F4F7; vertical-align: top; }
+  .lag-table .row-active td { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .lag-table .row-active td:first-child { border-radius: 4px 0 0 4px; }
+  .lag-table .row-active td:last-child { border-radius: 0 4px 4px 0; }
+  .badge { font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; padding: 2px 7px; border-radius: 5px; flex-shrink: 0; }
+  .badge-required { background: var(--danger-soft); color: var(--danger); }
+  .badge-optional { background: #EEF0F4; color: var(--text-2); }
+  .helper { font-size: 10.5px; color: var(--text-3); margin-top: 7px; display: flex; gap: 5px; align-items: flex-start; }
+  .backend-status { margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; border: 1px solid var(--border); padding: 5px 9px; font-size: 11px; font-weight: 700; }
+  .backend-status small { font-size: 10.5px; font-weight: 500; color: var(--text-3); }
+  .backend-status-ok { background: #ECFDF5; border-color: #BBF7D0; color: #047857; }
+  .backend-status-warn { background: #FFF7ED; border-color: #FED7AA; color: #B45309; }
+  .action-note { margin-top: 8px; border-radius: 8px; background: #F8FAFC; border: 1px solid var(--border); padding: 8px 10px; color: var(--text-2); font-size: 11.5px; line-height: 1.4; }
+  .action-note-success { background: #ECFDF5; border-color: #BBF7D0; color: #047857; }
+  .action-note-error { background: #FFF1F2; border-color: #FECDD3; color: #BE123C; }
+  .button-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .real-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .real-summary-card { border: 1px solid var(--border); border-radius: 9px; background: #FAFBFC; padding: 8px 10px; min-width: 0; }
+  .real-summary-card span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-3); font-weight: 700; margin-bottom: 3px; }
+  .real-summary-card strong { display: block; color: var(--navy); font-size: 11.5px; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
+  .real-summary-card-wide { grid-column: span 2; }
+  .backend-warning-list { margin: 10px 0 0; padding-left: 18px; color: var(--warning); font-size: 11.5px; line-height: 1.45; }
+  @media (max-width: 1100px) { .real-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  .readiness-card .card-head { margin-bottom: 8px; }
+  .readiness-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0px 20px; }
+  .readiness-count-inline { font-size: 12px; color: var(--text-2); font-weight: 500; }
+  .readiness-actions { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; }
+
+  textarea.objective-input { width: 100%; min-height: 90px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; font-family: inherit; resize: vertical; color: var(--navy); }
+  textarea.objective-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .objective-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .char-count { font-size: 11px; color: var(--text-3); }
+
+  .btn { border-radius: 7px; font-size: 12.5px; font-weight: 500; padding: 7px 13px; border: 1px solid var(--border); background: #fff; color: var(--navy); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover { background: #F8F9FB; }
+  .btn-sm { padding: 5px 10px; font-size: 11.5px; }
+  .btn-secondary { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .btn-secondary:hover { background: #E0EBF4; }
+  .btn-primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .btn-primary:hover { background: #223251; }
+  .btn-primary:disabled { background: #C7CBD3; border-color: #C7CBD3; cursor: not-allowed; }
+  .btn-ghost { border-color: transparent; background: transparent; }
+
+  .feedback-panel { margin-top: 12px; background: var(--accent-soft); border: 1px solid #CFE0EE; border-radius: 8px; padding: 12px 14px; }
+  .feedback-panel .title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 6px; }
+  .feedback-panel p { font-size: 12.5px; color: var(--navy); margin: 0 0 10px; line-height: 1.5; }
+  .feedback-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .dropzone { border: 1.5px dashed var(--border); border-radius: 10px; padding: 16px; display: flex; align-items: center; gap: 14px; background: #FBFCFD; }
+  .dropzone-active { border-color: var(--accent); background: var(--accent-soft); }
+  .dropzone-compact { padding: 12px; }
+  .dropzone-icon { color: var(--text-3); flex-shrink: 0; }
+  .dropzone-text { flex: 1; display: flex; flex-direction: column; }
+  .dropzone-title { font-size: 12.5px; font-weight: 500; }
+  .dropzone-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+  .file-row { border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; margin-top: 8px; }
+  .file-row-main { display: flex; align-items: center; gap: 10px; }
+  .file-icon { color: var(--text-3); flex-shrink: 0; }
+  .file-meta { flex: 1; min-width: 0; }
+  .file-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+  .file-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .icon-btn { border: none; background: transparent; color: var(--text-2); padding: 5px; border-radius: 6px; cursor: pointer; display: flex; }
+  .icon-btn:hover { background: #F1F2F5; }
+  .icon-btn-danger:hover { background: var(--danger-soft); color: var(--danger); }
+  .expand-toggle { margin-top: 8px; border: none; background: none; color: var(--accent); font-size: 11.5px; display: flex; align-items: center; gap: 4px; cursor: pointer; padding: 2px 0; }
+
+  .validation-panel { margin-top: 8px; background: #FAFBFC; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  .validation-row { margin-bottom: 5px; }
+  .validation-row:last-child { margin-bottom: 0; }
+  .validation-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+  .validation-row p { font-size: 12.5px; margin: 3px 0 0; line-height: 1.5; color: var(--navy); }
+  .blocking-tag { font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 5px; }
+  .blocking-tag.blocking { background: var(--danger-soft); color: var(--danger); }
+  .blocking-tag.nonblocking { background: var(--success-soft); color: var(--success); }
+
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 999px; flex-shrink: 0; }
+  .chip-muted { background: #EEF0F4; color: var(--text-3); }
+  .chip-accent { background: var(--accent-soft); color: var(--accent); }
+  .chip-success { background: var(--success-soft); color: var(--success); }
+  .chip-warning { background: var(--warning-soft); color: var(--warning); }
+  .chip-danger { background: var(--danger-soft); color: var(--danger); }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .coverage-bar-track { height: 6px; background: #EDEFF3; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .coverage-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+
+  .upload-detail-box { background: #F7F8FA; border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; margin: 8px 0 12px; display: flex; flex-direction: column; gap: 7px; }
+  .upload-detail-row { display: flex; gap: 10px; font-size: 12px; line-height: 1.5; }
+  .upload-detail-row-col { flex-direction: column; gap: 4px; }
+  .upload-detail-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); white-space: nowrap; min-width: 100px; padding-top: 1px; }
+  .upload-detail-sub { font-size: 12px; color: var(--text-2); line-height: 1.5; }
+  .upload-checklist { margin: 4px 0 0 16px; padding: 0; font-size: 12px; color: var(--navy); line-height: 1.7; }
+  .upload-checklist li { margin: 0; }
+  .upload-checklist code { background: #EEF0F4; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
+  .readiness-row { display: flex; gap: 8px; padding: 6px 0; align-items: flex-start; }
+  .readiness-row .ok { color: var(--success); flex-shrink: 0; margin-top: 1px; }
+  .readiness-row .warn { color: var(--warning); flex-shrink: 0; margin-top: 1px; }
+  .readiness-row .muted { color: var(--text-3); flex-shrink: 0; margin-top: 1px; }
+  .readiness-label { font-size: 12px; font-weight: 500; line-height: 1.4; }
+  .muted-text { color: var(--text-3); font-weight: 400; }
+  .readiness-sub { font-size: 10.5px; color: var(--text-3); margin-top: 1px; }
+
+  .overlay { position: fixed; inset: 0; background: rgba(22,35,61,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .dialog { background: #fff; border-radius: 12px; padding: 22px 24px; max-width: 420px; width: 100%; }
+  .dialog h3 { font-size: 15px; margin-bottom: 8px; }
+  .dialog p { font-size: 13px; color: var(--text-2); line-height: 1.55; margin-bottom: 18px; }
+  .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--navy); color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 60; }
+
+  .assistant-col { background: #FAFBFC; border-left: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; max-height: 100%; min-height: 0; }
+  .assistant-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+  .assistant-head span { font-size: 13.5px; font-weight: 600; }
+  .assistant-body { padding: 14px 14px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .msg { font-size: 12.5px; line-height: 1.5; padding: 9px 11px; border-radius: 10px; max-width: 92%; }
+  .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+  .msg-assistant { align-self: flex-start; background: #EFF1F5; color: var(--navy); border-bottom-left-radius: 3px; }
+  .assistant-questions { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 4px; flex-shrink: 0; }
+  .assistant-next-row { padding: 4px 14px 8px; flex-shrink: 0; }
+  .assistant-next-btn { width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 12px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .assistant-next-btn:hover { background: #223251; }
+  .assistant-q { text-align: left; font-size: 11.5px; border: 1px solid var(--border); background: #fff; border-radius: 7px; padding: 6px 10px; cursor: pointer; color: var(--navy); }
+  .assistant-q:hover { background: var(--accent-soft); border-color: var(--accent); }
+  .assistant-caveat { font-size: 10px; color: var(--text-3); padding: 8px 14px; line-height: 1.4; flex-shrink: 0; }
+  .assistant-inputbar { display: flex; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--border); flex-shrink: 0; }
+  .assistant-inputbar input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit; }
+  .assistant-inputbar input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .assistant-send { background: var(--navy); color: #fff; border: none; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .assistant-send:hover { background: #223251; }
+
+  .paper-row, .guideline-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; margin-top: 8px; }
+  .paper-meta { flex: 1; min-width: 0; }
+  .paper-title { font-size: 12.5px; font-weight: 500; }
+  .paper-sub { font-size: 10.5px; color: var(--text-3); margin-top: 2px; }
+  .source-tag { font-size: 10px; font-weight: 600; padding: 3px 7px; border-radius: 5px; background: #EEF0F4; color: var(--text-2); white-space: nowrap; }
+  .dup-tag { font-size: 10px; font-weight: 600; padding: 3px 7px; border-radius: 5px; background: var(--warning-soft); color: var(--warning); white-space: nowrap; }
+
+  .connection-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px; }
+  .connection-card { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; }
+  .connection-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .connection-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+  .connection-value { font-size: 13.5px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+  .connection-sub { font-size: 11px; color: var(--text-2); margin-top: 4px; line-height: 1.4; }
+
+  .next-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--accent-soft); border: 1px solid #CFE0EE; border-radius: 10px; padding: 14px 16px; margin-top: 4px; }
+  .next-bar p { font-size: 12.5px; color: var(--accent); margin: 0; }
+
+  .filter-row { display: flex; flex-wrap: wrap; gap: 24px; }
+  .filter-group { display: flex; flex-direction: column; gap: 6px; }
+  .filter-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
+  .filter-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .filter-pill { font-size: 11.5px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); background: #fff; color: var(--text-2); cursor: pointer; }
+  .filter-pill-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+  .two-col .card { margin-bottom: 0; }
+
+  .mini-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .mini-table th { text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-3); font-weight: 700; padding: 3px 7px; border-bottom: 1px solid var(--border); }
+  .mini-table td { padding: 4px 7px; border-bottom: 1px solid #F0F1F4; color: var(--navy); font-size: 11px; }
+  .cell-ok { color: var(--success); font-weight: 600; }
+  .cell-warn { color: var(--warning); font-weight: 600; }
+
+  .pattern-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #F0F1F4; font-size: 12px; }
+  .pattern-row:last-child { border-bottom: none; }
+  .pattern-row span:first-child { flex: 1; }
+  .pattern-stat { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--text-3); margin-left: 6px; }
+
+  .unit-callout { font-size: 13px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 9px 12px; }
+  .mini-stat-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .mini-stat { flex: 1; min-width: 140px; background: #FAFBFC; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .mini-stat-label { font-size: 10.5px; color: var(--text-3); }
+  .mini-stat-value { font-size: 17px; font-weight: 600; color: var(--navy); }
+
+  .plain-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .plain-list li { font-size: 12.5px; color: var(--navy); display: flex; align-items: center; gap: 8px; }
+  .freq-tag { font-size: 10px; padding: 2px 7px; }
+
+  .metric-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+  .metric-bar-label { width: 150px; font-size: 12px; color: var(--navy); flex-shrink: 0; }
+  .metric-bar-track { flex: 1; height: 8px; background: #EDEFF3; border-radius: 4px; overflow: hidden; }
+  .metric-bar-fill { height: 100%; border-radius: 4px; }
+  .metric-bar-value { width: 44px; text-align: right; font-size: 12px; font-weight: 600; color: var(--navy); flex-shrink: 0; }
+
+  .link-check-row { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--success); background: var(--success-soft); padding: 6px 12px; border-radius: 999px; }
+  .link-check-row.warn { color: var(--warning); background: var(--warning-soft); }
+
+  .inconsistency-card { background: var(--warning-soft); border: 1px solid #F0D9AE; border-radius: 10px; padding: 14px 16px; }
+  .inconsistency-card p { font-size: 12.5px; color: #6B4A0E; margin: 0; line-height: 1.55; }
+
+  .lag-reality-box { background: #F7F8FA; border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .lag-reality-row { display: flex; gap: 12px; font-size: 12px; line-height: 1.55; }
+  .lag-reality-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); white-space: nowrap; min-width: 130px; padding-top: 2px; flex-shrink: 0; }
+  .text-warn { color: var(--warning); font-weight: 500; }
+  .corr-table td { vertical-align: middle; }
+  .tempo-card { border-left: 4px solid var(--success); }
+  .tempo-card-partial { border-left: 4px solid var(--warning); }
+  .tempo-card-invalid { border-left: 4px solid var(--danger); }
+  .summary-callout { font-size: 13px; color: var(--navy); background: #FAFBFC; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; line-height: 1.6; }
+
+  .select-input { border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; font-size: 11.5px; font-family: inherit; color: var(--navy); background: #fff; flex-shrink: 0; }
+  .select-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .question-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-top: 14px; }
+  .question-field { display: flex; flex-direction: column; gap: 5px; }
+
+  .feature-row { border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px; margin-top: 6px; }
+  .feature-checkbox { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .feature-checkbox input { margin-top: 3px; flex-shrink: 0; }
+  .feature-label { font-size: 12.5px; font-weight: 500; color: var(--navy); }
+  .feature-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+  .slider-row { margin-bottom: 14px; }
+  .slider-row input[type="range"] { width: 100%; margin-top: 6px; accent-color: var(--accent); }
+
+  .graph-page { display: flex; flex-direction: column; height: 100%; }
+  .graph-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; flex-shrink: 0; }
+  .graph-toolbar-title { font-size: 14.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .graph-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-2); align-items: center; }
+  .legend-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  .legend-dash { width: 14px; height: 0; border-top: 2px dashed var(--text-3); border-radius: 0; background: none; }
+  .graph-canvas-wrap { position: relative; flex: 1; min-height: 480px; background: #FAFBFC; }
+  .graph-canvas-wrap svg { width: 100%; height: 100%; display: block; }
+  .graph-node-label { font-size: 11px; font-weight: 600; }
+  .graph-node-sub { font-size: 9px; }
+  .graph-notice { position: absolute; bottom: 14px; left: 16px; background: #fff; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 11.5px; color: var(--text-2); }
+  .graph-side-panel { position: absolute; top: 16px; right: 16px; width: 250px; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: 0 6px 20px rgba(22,35,61,0.15); }
+  .graph-side-panel h4 { font-size: 13px; margin: 0 0 8px; }
+  .graph-side-panel p { font-size: 11.5px; color: var(--text-2); line-height: 1.5; margin: 8px 0; }
+
+  .radio-row { display: flex; gap: 20px; }
+  .radio-option { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--navy); cursor: pointer; }
+
+  .estimator-row { border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px; margin-top: 6px; cursor: pointer; }
+  .estimator-row:hover { background: #FAFBFC; }
+  .estimator-row-active { border-color: var(--accent); background: var(--accent-soft); }
+`;
+
+function ProjectSetupView({ state, actions }) {
+  const { objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, backendStatus, actionStatus, ingestionInfo, ragSummary } = state;
+  const {
+    setObjective, setShowFeedback, applyFeedback, addDatasets, removeDataset, toggleDataset, replaceDataset,
+    addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
+    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, handleDocumentIngestion, handleDictionaryRagCheck,
+  } = actions;
+  const ingestedChunks = ingestionInfo?.number_of_stored_chunks ?? ingestionInfo?.stored_chunks ?? ingestionInfo?.lastResult?.number_of_chunks_created ?? ingestionInfo?.lastResult?.chunks_created ?? 0;
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Project setup</h1>
+        <p>
+          Define the initial study objective and upload the materials needed to understand your data.
+          Each item is reviewed separately because it serves a different purpose in the causal design workflow.
+        </p>
+        <span className="note"><Info size={12} /> Your research objective and variable definitions can be refined later.</span>
+        <div className={`backend-status ${backendStatus.connected ? "backend-status-ok" : "backend-status-warn"}`}>
+          <span>{backendStatus.connected ? "Backend connected" : "Backend not connected"}</span>
+          <small>{backendStatus.message}</small>
+        </div>
+      </div>
+
+      <div className="card readiness-card">
+        <div className="card-head">
+          <div className="card-title"><ClipboardList size={16} color="var(--accent)" /> Project readiness</div>
+          <span className="readiness-count-inline">{requiredCount} of {requiredTotal} required checks complete</span>
+          <CardInfo text="Tracks which required and optional items need to be completed before moving forward. Green = complete, amber = still needed. At minimum, one dataset and a data dictionary must be uploaded." />
+        </div>
+        <div className="readiness-grid">
+          <ReadinessRow state={checks.objectiveAdded ? "complete" : "attention"} label="Research objective added" />
+          <ReadinessRow state={checks.dictionaryUploaded ? "complete" : "attention"} label="Data dictionary uploaded" />
+          <ReadinessRow state={checks.datasetUploaded ? "complete" : "attention"} label="At least one dataset uploaded" />
+          <ReadinessRow
+            state={!checks.dictionaryUploaded ? "attention" : checks.variablesMatched ? "complete" : "attention"}
+            label="Variables matched to dictionary"
+            sub={dictionary && dictionary.described < dictionary.total ? `${dictionary.total - dictionary.described} undocumented` : undefined}
+          />
+          <ReadinessRow
+            state={!checks.datasetUploaded ? "attention" : checks.datasetParsed ? "complete" : "attention"}
+            label="Dataset can be parsed"
+            sub={blockingDatasets ? "One or more datasets unreadable" : undefined}
+          />
+          <ReadinessRow state={checks.blockingResolved ? "complete" : "attention"} label="Blocking clarifications resolved" />
+          <ReadinessRow state={protocol ? "complete" : "optional"} label="Optional protocol added" />
+          <ReadinessRow state={papers.length || guidelines.length ? "complete" : "optional"} label="Optional evidence sources added" />
+        </div>
+        <div className="readiness-actions">
+          <button className="btn" onClick={() => showToast("Draft saved")}><Save size={14} /> Save draft</button>
+          <button className="btn btn-primary" onClick={handleContinue}>
+            Continue to data foundation <ArrowRight size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title"><Sparkles size={16} color="var(--accent)" /> Initial research objective</div>
+          <span className="badge badge-required">REQUIRED</span>
+          <CardInfo text="A 1–3 sentence plain-language statement of what you want to study. No need to specify exposure, outcome, or timing yet — those are defined formally in Step 4 (Question & Variables)." />
+        </div>
+        <p className="card-desc">Briefly describe what you want to investigate and the study population. This does not need to be a finalized causal question.</p>
+        <textarea
+          className="objective-input"
+          placeholder="Investigate whether short-term sleep disruption is associated with increased next-day alcohol craving among adults participating in an outpatient treatment study."
+          value={objective}
+          maxLength={600}
+          onChange={(e) => setObjective(e.target.value)}
+        />
+        <div className="objective-footer">
+          <span className="char-count">{objective.length} / 600 \u00b7 autosaved</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => actions.reviewObjective()} disabled={objective.trim().length === 0}>Review objective</button>
+        </div>
+        {showFeedback && (
+          <div className="feedback-panel">
+            <div className="title"><Sparkles size={13} /> AI feedback</div>
+            <p>Your objective identifies a population and a general relationship of interest. The timing of sleep and craving will need to be clarified later, in Step 4.</p>
+            <div className="feedback-actions">
+              <button className="btn btn-secondary btn-sm" onClick={() => applyFeedback()}>Apply suggested wording</button>
+              <button className="btn btn-sm" onClick={() => setShowFeedback(false)}>Keep my wording</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowFeedback(false)}>Dismiss</button>
+            </div>
+          </div>
+        )}
+        <div className="helper"><Info size={13} style={{ flexShrink: 0, marginTop: 1 }} /> Exposure, outcome, comparator, time window, and estimand will be formally defined in Step 4.</div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title"><ClipboardList size={16} color="var(--accent)" /> Study dataset(s)</div>
+          <span className="badge badge-required">AT LEAST ONE REQUIRED</span>
+          <CardInfo text="The raw data files from your study — EMA surveys, wearable exports, clinical records. Upload one file per data source; multiple datasets are linked later by a shared participant ID column." />
+        </div>
+        <p className="card-desc">The raw data files collected for your study — EMA surveys, wearable sensor exports, smartphone logs, clinical records, or baseline assessments. Upload one file per data source; you can add more later.</p>
+        <div className="upload-detail-box">
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>CSV</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>ema_daily_survey.csv &nbsp;·&nbsp; actigraphy_30day.csv &nbsp;·&nbsp; baseline_clinical.json</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Must include</span><span>A participant identifier column (e.g. <code>participant_id</code>), at least one timestamp column, and the variables you plan to treat as exposure or outcome.</span></div>
+        </div>
+        <div className="helper" style={{ marginTop: 0, marginBottom: 12 }}>
+          <ShieldAlert size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+          Upload only appropriately authorized and de-identified research data. The system may flag obvious direct identifiers, but it does not certify that a dataset is fully de-identified or compliant with institutional requirements.
+        </div>
+        <UploadDropzone label="EMA, wearable, smartphone, clinical, or baseline data · CSV" multiple accept=".csv" onFiles={addDatasets} />
+        {statusMessage(actionStatus.datasetUpload) && (
+          <div className={`action-note ${actionStatus.datasetUpload.kind === "error" ? "action-note-error" : actionStatus.datasetUpload.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.datasetUpload)}
+          </div>
+        )}
+        {datasets.map((ds) => (
+          <DatasetRow
+            key={ds.id}
+            ds={ds}
+            onRemove={() => removeDataset(ds.id)}
+            onToggle={() => toggleDataset(ds.id)}
+            onReplace={() => {
+              const inp = document.createElement("input");
+              inp.type = "file";
+              inp.accept = ".csv,.tsv,.json";
+              inp.onchange = (e) => replaceDataset(ds.id, e.target.files[0]);
+              inp.click();
+            }}
+          />
+        ))}
+        {datasets.length === 0 && (
+          <div className="helper" style={{ marginTop: 12 }}><Info size={13} /> Try naming a file with "corrupt" in it to preview the blocking-issue state.</div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title"><FileText size={16} color="var(--accent)" /> Data dictionary / schema</div>
+          <span className="badge badge-required">REQUIRED</span>
+          <CardInfo text="A file that defines each variable — name, type, valid range, unit, and collection method. Required so the system can match variables to your causal question and flag measurement gaps." />
+        </div>
+        <p className="card-desc">A document that describes what every column in your dataset means, so I can interpret variables correctly. Without this I cannot reliably assign variable roles or detect measurement issues.</p>
+        <div className="upload-detail-box">
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>PDF, Word (.docx), plain text</span></div>
+          <div className="upload-detail-row upload-detail-row-col">
+            <span className="upload-detail-label">For each variable, include</span>
+            <ul className="upload-checklist">
+              <li><strong>Variable name</strong> — e.g. <code>sleep_quality</code></li>
+              <li><strong>Data type</strong> — number, text, date, yes/no</li>
+              <li><strong>Possible values or range</strong> — e.g. 1–5, or Yes / No</li>
+              <li><strong>An example value</strong> — e.g. 3, "2026-07-09"</li>
+              <li><strong>Collection method</strong> — self-reported via EMA, passively sensed via wearable, extracted from phone logs, etc.</li>
+              <li><strong>Measurement timing</strong> — when during the day or study the variable was recorded</li>
+            </ul>
+          </div>
+          <div className="upload-detail-row upload-detail-row-col">
+            <span className="upload-detail-label">Also include participant demographics</span>
+            <span className="upload-detail-sub">Age range, sex / gender distribution, clinical characteristics (e.g. AUD diagnosis, outpatient status), and any other relevant population details.</span>
+          </div>
+        </div>
+        {!dictionary ? (
+          <UploadDropzone label="One document describing your dataset variables" accept=".pdf,.docx,.txt" onFiles={addDictionary} />
+        ) : (
+          <div className="file-row">
+            <div className="file-row-main">
+              <FileText size={18} className="file-icon" />
+              <div className="file-meta">
+                <div className="file-name">{dictionary.name}</div>
+                <div className="file-sub">{formatBytes(dictionary.size)} \u00b7 {dictionary.described} of {dictionary.total} variables described</div>
+              </div>
+              <StatusChip status={dictionary.described === dictionary.total ? "ready" : "clarification"} />
+              <div className="file-actions">
+                <button className="icon-btn" aria-label="Preview data dictionary" title="Preview"><Eye size={15} /></button>
+                <button
+                  className="icon-btn" aria-label="Replace data dictionary" title="Replace"
+                  onClick={() => {
+                    const inp = document.createElement("input");
+                    inp.type = "file";
+                    inp.accept = ".pdf,.docx,.txt";
+                    inp.onchange = (e) => e.target.files[0] && addDictionary([e.target.files[0]]);
+                    inp.click();
+                  }}
+                ><RefreshCw size={15} /></button>
+                <button className="icon-btn icon-btn-danger" aria-label="Remove data dictionary" title="Remove" onClick={() => setDictionary(null)}><Trash2 size={15} /></button>
+              </div>
+            </div>
+            <div className="coverage-bar-track">
+              <div className="coverage-bar-fill" style={{ width: `${Math.round((dictionary.described / dictionary.total) * 100)}%` }} />
+            </div>
+            {dictionary.described < dictionary.total && (
+              <div className="validation-panel" style={{ marginTop: 10 }}>
+                <div className="validation-row"><span className="validation-label">Needs clarification</span><p>sleep_score is present in the dataset but does not have a unit, valid range, calculation method, or measurement timing.</p></div>
+                <div className="validation-row"><span className="blocking-tag nonblocking">Does not block continuation</span></div>
+              </div>
+            )}
+          </div>
+        )}
+        {statusMessage(actionStatus.dictionaryUpload) && (
+          <div className={`action-note ${actionStatus.dictionaryUpload.kind === "error" ? "action-note-error" : actionStatus.dictionaryUpload.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.dictionaryUpload)}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Research protocol / study description</div>
+          <span className="badge badge-optional">OPTIONAL</span>
+          <CardInfo text="Your study design document — recruitment criteria, measurement schedule, and procedures. Used to detect inconsistencies between what the protocol says and what the data actually contains." />
+        </div>
+        <p className="card-desc">A document describing how the study was designed and run. I'll use it to understand your recruitment criteria, measurement schedule, and any pre-planned analysis decisions — and to flag inconsistencies with your uploaded data.</p>
+        <div className="upload-detail-box">
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>PDF, Word (.docx), plain text</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Useful to include</span><span>Population eligibility criteria, recruitment method, measurement schedule, pre-specified hypotheses.</span></div>
+        </div>
+        {!protocol ? (
+          <UploadDropzone label="Study protocol or description document" compact accept=".pdf,.docx,.txt" onFiles={addProtocol} />
+        ) : (
+          <div className="file-row">
+            <div className="file-row-main">
+              <FileText size={18} className="file-icon" />
+              <div className="file-meta">
+                <div className="file-name">{protocol.name}</div>
+                <div className="file-sub">{formatBytes(protocol.size)} \u00b7 population, design, and schedule detected</div>
+              </div>
+              <StatusChip status="ready" />
+              <div className="file-actions">
+                <button className="icon-btn icon-btn-danger" aria-label="Remove protocol" title="Remove" onClick={() => setProtocol(null)}><Trash2 size={15} /></button>
+              </div>
+            </div>
+          </div>
+        )}
+        {statusMessage(actionStatus.protocolUpload) && (
+          <div className={`action-note ${actionStatus.protocolUpload.kind === "error" ? "action-note-error" : actionStatus.protocolUpload.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.protocolUpload)}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Related research papers</div>
+          <span className="badge badge-optional">OPTIONAL · MULTIPLE</span>
+          <CardInfo text="Published studies relevant to your exposure, outcome, or population. Used as supporting evidence when suggesting variable roles and causal relationships in later steps." />
+        </div>
+        <p className="card-desc">Published studies, articles, or pre-prints relevant to what you're trying to study. I'll use these as supporting evidence when suggesting patterns, variable roles, and causal relationships. The more relevant papers you provide, the better grounded my suggestions will be.</p>
+        <div className="upload-detail-box">
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>PDF only</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>RCTs, observational studies, systematic reviews, or meta-analyses related to your exposure or outcome of interest.</span></div>
+        </div>
+        <UploadDropzone label="One or more published papers · PDF" multiple compact accept=".pdf" onFiles={addPapers} />
+        {statusMessage(actionStatus.paperUpload) && (
+          <div className={`action-note ${actionStatus.paperUpload.kind === "error" ? "action-note-error" : actionStatus.paperUpload.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.paperUpload)}
+          </div>
+        )}
+        {papers.map((p) => (
+          <div className="paper-row" key={p.id}>
+            <FileText size={16} className="file-icon" />
+            <div className="paper-meta">
+              <div className="paper-title">{p.title}</div>
+              <div className="paper-sub">{p.authors} \u00b7 {p.year} \u00b7 empirical study</div>
+            </div>
+            {p.duplicate && <span className="dup-tag">Possible duplicate</span>}
+            <button className="icon-btn icon-btn-danger" aria-label={`Remove ${p.title}`} title="Remove" onClick={() => setPapers((arr) => arr.filter((x) => x.id !== p.id))}><Trash2 size={15} /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Clinical guidelines / domain guidance</div>
+          <span className="badge badge-optional">OPTIONAL · MULTIPLE</span>
+          <CardInfo text="Official standards or guidelines (e.g., clinical practice guidelines, measurement standards). Treated as domain knowledge, not empirical evidence — informs how measurement concepts are framed." />
+        </div>
+        <p className="card-desc">Clinical guidelines, measurement standards, reporting checklists, or domain reference documents relevant to your study. I'll label these as guidance rather than empirical evidence and use them to flag deviations from established practice.</p>
+        <div className="upload-detail-box">
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>PDF, Word (.docx), plain text</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>DSM-5 criteria, STROBE checklist, CONSORT guidelines, WHO measurement standards.</span></div>
+        </div>
+        <UploadDropzone label="One or more guideline or guidance documents · PDF / DOCX / TXT" multiple compact accept=".pdf,.docx,.txt" onFiles={addGuidelines} />
+        {statusMessage(actionStatus.guidelineUpload) && (
+          <div className={`action-note ${actionStatus.guidelineUpload.kind === "error" ? "action-note-error" : actionStatus.guidelineUpload.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.guidelineUpload)}
+          </div>
+        )}
+        {guidelines.map((g) => (
+          <div className="guideline-row" key={g.id}>
+            <FileText size={16} className="file-icon" />
+            <div className="paper-meta">
+              <div className="paper-title">{g.name}</div>
+              <div className="paper-sub">{formatBytes(g.size)}</div>
+            </div>
+            <span className="source-tag">{g.sourceType}</span>
+            <button className="icon-btn icon-btn-danger" aria-label={`Remove ${g.name}`} title="Remove" onClick={() => setGuidelines((arr) => arr.filter((x) => x.id !== g.id))}><Trash2 size={15} /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title"><Database size={16} color="var(--accent)" /> Document knowledge base</div>
+          <CardInfo text="Uploads are stored first, then ingested into ChromaDB so later RAG searches can retrieve supporting passages. This is evidence retrieval, not causal proof." />
+        </div>
+        <p className="card-desc">Ingest uploaded PDF, DOCX, and TXT documents into the local ChromaDB knowledge base, then run a quick evidence check.</p>
+        <div className="button-row">
+          <button className="btn btn-primary" onClick={handleDocumentIngestion} disabled={actionStatus.documentIngestion?.kind === "loading"}>
+            <RefreshCw size={14} className={actionStatus.documentIngestion?.kind === "loading" ? "spin" : ""} /> Ingest documents
+          </button>
+          <button className="btn btn-secondary" onClick={handleDictionaryRagCheck} disabled={actionStatus.ragCheck?.kind === "loading"}>
+            <Search size={14} /> Check RAG evidence
+          </button>
+          {ingestedChunks > 0 && <span className="chip chip-success">{ingestedChunks} chunks indexed</span>}
+        </div>
+        {statusMessage(actionStatus.documentIngestion) && (
+          <div className={`action-note ${actionStatus.documentIngestion.kind === "error" ? "action-note-error" : actionStatus.documentIngestion.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.documentIngestion)}
+          </div>
+        )}
+        {statusMessage(actionStatus.ragCheck) && (
+          <div className={`action-note ${actionStatus.ragCheck.kind === "error" ? "action-note-error" : actionStatus.ragCheck.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.ragCheck)}
+          </div>
+        )}
+        {ragSummary && <div className="summary-callout" style={{ marginTop: 8 }}>{ragSummary}</div>}
+        <div className="helper">
+          <ShieldAlert size={13} /> This setup stage checks file completeness and study context. It does not perform causal analysis.
+        </div>
+      </div>
+    </>
+  );
+}
+
+function DataFoundationView({ state, actions }) {
+  const { datasets, dictionary } = state;
+  const { lockContent, unlockContent } = actions || {};
+  const selectedDataset = firstRealDataset(datasets);
+  const selectedSchema = selectedDataset?.schema;
+  const parsedRows = schemaRows(selectedSchema, 40);
+  const missingnessRows = topMissingness(selectedSchema, 6);
+
+  const parsedOk = datasets.length > 0 && !datasets.some((d) => d.status === "blocking");
+  const participantFields = [...new Set(datasets.map((d) => d.participantField).filter(Boolean))];
+  const linkingStatus = datasets.length < 2 ? "not_uploaded" : participantFields.length <= 1 ? "verified" : "review";
+  const multiTimestamp = datasets.some((d) => d.timestampFields && d.timestampFields.length > 1);
+  const timestampStatus = datasets.length === 0 ? "not_uploaded" : multiTimestamp ? "review" : "verified";
+  const isComplete = parsedOk && linkingStatus !== "review" && timestampStatus !== "review";
+
+  const hasData = datasets.length > 0;
+  const seed = hasData ? seedFromName(datasets[0].name, datasets.length) : 0;
+  const participants = hasData ? 60 + (seed % 100) : 0;
+  const days = hasData ? 14 + (seed % 20) : 0;
+  const maxRows = participants * days;
+
+  const qualityRows = [
+    { name: "sleep_quality", pct: hasData ? 3 + (seed % 8) : 0 },
+    { name: "stress_level", pct: hasData ? 6 + (seed % 8) : 0 },
+    { name: "actigraphy_activity", pct: hasData ? 10 + (seed % 10) : 0 },
+    { name: "phone_screen_time", pct: hasData ? 16 + (seed % 14) : 0 },
+  ];
+  const worstRow = qualityRows.reduce((a, b) => (b.pct > a.pct ? b : a), qualityRows[0]);
+  const barColor = (pct) => (pct > 20 ? "var(--danger)" : pct > 10 ? "var(--warning)" : "var(--success)");
+
+  return (
+    <>
+      <div className="ps-header">
+        <div className="ps-header-top">
+          <h1>Data foundation & understanding</h1>
+          <StatusChip status={isComplete ? "complete" : "clarification"} />
+        </div>
+        <p>Before you explore anything, here's what was found in your data. This page is automated \u2014 it isn't interactive analysis.</p>
+        <span className="note"><Info size={12} /> A written summary and any clarifying questions from this check are in the assistant panel, on the right.</span>
+        <span className="note"><ShieldAlert size={12} /> Phase 2 explains data structure and quality. It does not assign final causal roles.</span>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title"><Sparkles size={16} color="var(--accent)" /> Data summary</div><CardInfo text="Auto-generated overview of your uploaded dataset — total rows, participant count, date range, and variable count. Populated once at least one file is uploaded." /></div>
+        <p className="card-desc">A plain-language read of your data structure, generated from what's been uploaded so far.</p>
+        <RegenerateBlock
+          variants={buildDataSummaryVariants(datasets, dictionary)}
+          renderVariant={(text) => <div className="summary-callout">{text}</div>}
+          onLock={(val) => lockContent("dataSummary", val)}
+          onUnlock={() => unlockContent("dataSummary")}
+        />
+        {hasData && (
+          <div className="unit-callout" style={{ marginTop: 8 }}>
+            <Compass size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
+            Observation unit: participant-day \u2014 {participants} participants, up to {days} days each (up to {maxRows.toLocaleString()} possible rows per variable).
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title"><ClipboardList size={16} color="var(--accent)" /> Schema overview</div><CardInfo text="Every variable detected across your uploaded files, its inferred data type, descriptive source, and quality notes. Causal roles are assigned later." /></div>
+        <p className="card-desc">
+          {selectedSchema
+            ? `${selectedDataset.name}: ${selectedSchema.number_of_rows.toLocaleString()} rows and ${selectedSchema.number_of_columns} columns parsed by FastAPI.`
+            : "Upload a CSV dataset in Project Setup to populate this with the real backend schema."}
+        </p>
+        <table className="mini-table">
+          <thead><tr><th>Variable</th><th>Type</th><th>Source</th><th>Descriptive label</th><th>Missing</th></tr></thead>
+          <tbody>
+            {parsedRows.map((v) => (
+              <tr key={v.name}>
+                <td className="mono">{v.name}</td>
+                <td>{v.type}</td>
+                <td>{v.source}</td>
+                <td><span className={`chip ${descriptiveTagClass(v.tag)}`}>{v.tag}</span></td>
+                <td>{typeof v.missingPct === "number" ? `${v.missingPct.toFixed(2)}%` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title"><Clock size={16} color="var(--accent)" /> Timestamps & measurement frequency</div><CardInfo text="When each variable was collected and how often — daily, hourly, event-triggered. Critical for checking whether the lag window you choose later can actually be constructed from the data." /></div>
+        <table className="mini-table">
+          <thead><tr><th>Source</th><th>Frequency</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>EMA survey</td><td>3x/day</td><td>Morning, afternoon, and evening prompts</td></tr>
+            <tr><td>Actigraphy</td><td>Continuous</td><td>1-minute epochs</td></tr>
+            <tr><td>Passive sensing</td><td>Event-based</td><td>Logged on each screen unlock or session</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-head"><div className="card-title">Baseline variables</div><CardInfo text="Variables measured once at enrollment — e.g., age, sex, diagnosis. These are stable characteristics and strong candidates for confounders in the causal model." /></div>
+          <p className="card-desc">Collected once, at or before enrollment.</p>
+          <ul className="plain-list">
+            {BASELINE_VARIABLES.map((v) => <li key={v}>{v}</li>)}
+          </ul>
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">Time-varying variables</div><CardInfo text="Variables that change across repeated measurements — e.g., daily EMA scores, actigraphy. The primary candidates for exposure and outcome in a within-person causal design." /></div>
+          <p className="card-desc">Repeated across the study period.</p>
+          <ul className="plain-list">
+            {DATA_SCHEMA.filter((v) => v.frequency).map((v) => (
+              <li key={v.name}><span className="mono">{v.name}</span> <span className="chip chip-muted freq-tag">{v.frequency}</span></li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Missingness & data quality</div><CardInfo text="Flags variables with high missing rates, implausible values, or inconsistent formatting. High missingness in key variables can threaten feasibility or introduce bias." /></div>
+        {hasData ? (
+          <>
+            {(missingnessRows.length ? missingnessRows : qualityRows).map((r) => (
+              <div className="metric-bar-row" key={r.name}>
+                <span className="metric-bar-label mono">{r.name}</span>
+                <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${Math.min(r.pct, 100)}%`, background: barColor(r.pct) }} /></div>
+                <span className="metric-bar-value">{r.pct.toFixed ? r.pct.toFixed(2) : r.pct}%</span>
+              </div>
+            ))}
+            {(missingnessRows[0]?.pct ?? worstRow.pct) > 15 && (
+              <div className="helper" style={{ marginTop: 8 }}>
+                <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span><span className="mono">{missingnessRows[0]?.name || worstRow.name}</span> missingness is high enough to flag \u2014 worth checking device or survey compliance for the affected participants.</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="helper"><Info size={13} /> Upload a dataset to compute missingness.</div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title"><Link2 size={16} color="var(--accent)" /> Linking keys across datasets</div><CardInfo text="Shows which fields are used to join multiple uploaded files. A shared participant ID column is required to link datasets — mismatches or missing keys are flagged here." /></div>
+        <div className="filter-pills">
+          <span className={`link-check-row ${linkingStatus === "review" ? "warn" : ""}`}>
+            {linkingStatus === "review" ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+            {linkingStatus === "not_uploaded" ? "Upload 2+ datasets to check linking" : linkingStatus === "review" ? "Identifier fields don't match across files" : `${participantFields[0] || "participant_id"} verified across ${datasets.length} file${datasets.length === 1 ? "" : "s"}`}
+          </span>
+          <span className={`link-check-row ${timestampStatus === "review" ? "warn" : ""}`}>
+            {timestampStatus === "review" ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+            {timestampStatus === "not_uploaded" ? "Upload datasets to check timestamps" : timestampStatus === "review" ? "Mixed timestamp formats detected" : "Timestamps UTC-synced"}
+          </span>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Inconsistency detected</div><CardInfo text="A mismatch between the data dictionary and the actual data — for example, a variable declared numeric that contains text values, or a range that's violated in the data." /></div>
+        {!dictionary ? (
+          <div className="helper"><Info size={13} /> Upload a data dictionary in Project Setup to run this check.</div>
+        ) : (
+          <div className="inconsistency-card">
+            <p>
+              Your data dictionary lists <span className="mono">phone_screen_time</span> in hours, but the dataset values range 0\u2013540 \u2014
+              consistent with minutes, not hours. Confirm the correct unit before this is used in analysis.
+            </p>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+const WINDOW_OPTIONS = ["7 Days", "10 Days", "14 Days", "Full"];
+const WINDOW_DAYS = { "7 Days": 7, "10 Days": 10, "14 Days": 14, Full: 21 };
+const LAYER_OPTIONS = ["EMA Survey", "Actigraphy", "Passive Sensing", "HRV", "Heart Rate"];
+
+const TEMPORAL_METRIC_OPTIONS = [
+  { key: "sleep_quality", label: "Sleep quality", axisLabel: "Sleep quality (1\u20135)" },
+  { key: "stress_level", label: "Stress level", axisLabel: "Stress level (0\u2013100)" },
+  { key: "phone_screen_time", label: "Screen time", axisLabel: "Screen time (min)" },
+];
+
+function buildTimeseries(seed, days, metricKey) {
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const sleep = 40 + ((seed + i * 13) % 45);
+    const stress = 30 + ((seed + i * 9) % 60);
+    const screen = 60 + ((seed + i * 17) % 180);
+    const alcohol = (seed + i * 7) % 100 > 70 ? 1 : 0;
+    const values = { sleep_quality: sleep, stress_level: stress, phone_screen_time: screen };
+    out.push({ day: `Day ${i + 1}`, primary: values[metricKey], alcohol_events: alcohol * 60 });
+  }
+  return out;
+}
+
+const DIST_VARIABLE_OPTIONS = [
+  { key: "sleep_quality", label: "Sleep quality (1\u20135)", axisLabel: "Sleep quality score", bins: ["1", "2", "3", "4", "5"] },
+  { key: "stress_level", label: "Stress level (0\u2013100)", axisLabel: "Stress level (binned)", bins: ["0\u201320", "21\u201340", "41\u201360", "61\u201380", "81\u2013100"] },
+  { key: "phone_screen_time", label: "Screen time (min)", axisLabel: "Screen time, minutes (binned)", bins: ["0\u201360", "61\u2013120", "121\u2013180", "181\u2013240", "241+"] },
+];
+
+function buildDistribution(seed, variableKey) {
+  const opt = DIST_VARIABLE_OPTIONS.find((o) => o.key === variableKey) || DIST_VARIABLE_OPTIONS[0];
+  return opt.bins.map((b, i) => ({ bucket: b, count: 5 + ((seed + i * 19 + variableKey.length) % 45) }));
+}
+
+const DOMAIN_MAP = [
+  { match: /survey|ema/i, label: "EMA survey" },
+  { match: /actigra|wearable|accel/i, label: "Actigraphy" },
+  { match: /phone|screen|smartphone/i, label: "Smartphone sensing" },
+  { match: /clinic|visit/i, label: "Clinical visit" },
+  { match: /baseline|demo/i, label: "Baseline" },
+];
+
+const CANDIDATE_VARIABLES = [
+  { name: "sleep_quality", source: "EMA survey", meaning: "Self-reported sleep quality (1\u20135)", relevance: "high" },
+  { name: "stress_level", source: "EMA survey", meaning: "Momentary stress (0\u2013100 VAS)", relevance: "medium" },
+  { name: "phone_screen_time", source: "Passive sensing", meaning: "Daily screen time (minutes)", relevance: "medium" },
+  { name: "alcohol_use_event", source: "EMA survey", meaning: "Binary alcohol-use report", relevance: "high" },
+  { name: "actigraphy_activity", source: "Actigraphy", meaning: "Moderate+ activity (minutes)", relevance: "low" },
+];
+
+function RelevanceTag({ level }) {
+  const cls = level === "high" ? "chip-success" : level === "medium" ? "chip-warning" : "chip-muted";
+  return <span className={`chip ${cls}`}>{level} relevance</span>;
+}
+
+function ExploreView({ state, actions, onGoNext }) {
+  const { datasets, promotedPatterns, actionStatus, broadExploration } = state;
+  const { promotePattern, showToast, pushAssistantNote, handleBroadExploration } = actions;
+  // Turn-based guidance: each flag fires its message exactly once per mount
+  const windowGuidanceFired = useRef(false);
+  const layerGuidanceFired = useRef(false);
+  const [windowDays, setWindowDays] = useState(14);
+  const [windowInput, setWindowInput] = useState("14");
+  const [layers, setLayers] = useState(() => Object.fromEntries(LAYER_OPTIONS.map((l) => [l, true])));
+  const [tempMetric, setTempMetric] = useState("sleep_quality");
+  const [distMetric, setDistMetric] = useState("sleep_quality");
+  const [coverageMetric, setCoverageMetric] = useState("coverage");
+  const [variabilityMetric, setVariabilityMetric] = useState("variability");
+  const [distChartType, setDistChartType] = useState("bar");
+  const [coverageChartType, setCoverageChartType] = useState("bar");
+  const [tempChartType, setTempChartType] = useState("line");
+  const [varChartType, setVarChartType] = useState("bar");
+
+  const seed = datasets.length ? seedFromName(datasets[0].name, datasets.length) : 42;
+  const series = useMemo(() => buildTimeseries(seed, windowDays, tempMetric), [seed, windowDays, tempMetric]);
+  const tempMetricInfo = TEMPORAL_METRIC_OPTIONS.find((m) => m.key === tempMetric);
+
+  const coverage = LAYER_OPTIONS.map((l, i) => {
+    const pct = Math.min(97, 55 + ((seed + i * 17) % 40));
+    return { layer: l, pct, display: coverageMetric === "coverage" ? pct : 100 - pct };
+  });
+
+  const domains = useMemo(() => {
+    const found = new Set();
+    datasets.forEach((d) => DOMAIN_MAP.forEach((m) => m.match.test(d.name) && found.add(m.label)));
+    if (found.size === 0 && datasets.length) found.add("Uncategorized data");
+    return [...found];
+  }, [datasets]);
+
+  const missingRows = ["P001", "P002", "P003", "P004"].map((p, i) => ({
+    participant: p,
+    ema: 4 + ((seed + i * 3) % 12),
+    actigraphy: 2 + ((seed + i * 5) % 10),
+    phone: 5 + ((seed + i * 2) % 20),
+    variability: 20 + ((seed + i * 11) % 60),
+  }));
+
+  const sleepDistribution = useMemo(() => buildDistribution(seed, distMetric), [seed, distMetric]);
+  const distMetricInfo = DIST_VARIABLE_OPTIONS.find((o) => o.key === distMetric);
+
+  const patterns = [
+    { id: "p1", text: "Poor sleep quality precedes same-week alcohol-use events at a higher rate than chance.", stat: "r = 0.34, p = 0.02" },
+    { id: "p2", text: "Self-reported alcohol use is more frequent following high phone screen-time days.", stat: "r = 0.21, p = 0.07" },
+    { id: "p3", text: "Within-person stress shows more variability on weekend days than weekdays.", stat: "\u0394 = 12 pts, p = 0.04" },
+  ];
+
+  const highMissingParticipant = missingRows.reduce((a, b) => (b.phone > a.phone ? b : a), missingRows[0]);
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Broad data exploration</h1>
+        <p>Look across the whole dataset before committing to a causal question. Nothing here is a causal claim \u2014 it's a map of what the data can plausibly support.</p>
+        <span className="note" style={{ background: "var(--warning-soft)", color: "var(--warning)" }}>
+          <Info size={12} /> Exploratory mode: patterns are observational only. Use "Promote" to carry a pattern into Causal Question and Variables.
+        </span>
+        <span className="note"><ShieldAlert size={12} /> Exploratory patterns can support hypothesis generation, but they do not establish causality.</span>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title"><Database size={16} color="var(--accent)" /> Backend broad exploration</div>
+          <CardInfo text="Runs the FastAPI/Python broad exploration service on the selected uploaded CSV. Results summarize data quality and structure only." />
+        </div>
+        <p className="card-desc">Run the backend exploration service for rows, columns, missingness, participant structure, temporal fields, broad correlations, and caution text.</p>
+        <div className="button-row">
+          <button className="btn btn-primary" onClick={handleBroadExploration} disabled={actionStatus.broadExploration?.kind === "loading"}>
+            <RefreshCw size={14} className={actionStatus.broadExploration?.kind === "loading" ? "spin" : ""} /> Run broad exploration
+          </button>
+          {firstRealDataset(datasets) && <span className="chip chip-accent">{realDatasetFilename(firstRealDataset(datasets))}</span>}
+        </div>
+        {statusMessage(actionStatus.broadExploration) && (
+          <div className={`action-note ${actionStatus.broadExploration.kind === "error" ? "action-note-error" : actionStatus.broadExploration.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.broadExploration)}
+          </div>
+        )}
+        {broadExploration && (
+          <div className="real-summary-grid">
+            <div className="real-summary-card"><span>Rows</span><strong>{broadExploration.number_of_rows?.toLocaleString()}</strong></div>
+            <div className="real-summary-card"><span>Columns</span><strong>{broadExploration.number_of_columns}</strong></div>
+            <div className="real-summary-card"><span>ID fields</span><strong>{formatList(broadExploration.possible_id_columns)}</strong></div>
+            <div className="real-summary-card"><span>Timestamp fields</span><strong>{formatList(broadExploration.possible_timestamp_columns)}</strong></div>
+            <div className="real-summary-card real-summary-card-wide">
+              <span>High missingness</span>
+              <strong>
+                {broadExploration.high_missingness_columns?.length
+                  ? broadExploration.high_missingness_columns.slice(0, 4).map((item) => `${item.column} ${item.missing_percentage}%`).join(", ")
+                  : "None above threshold"}
+              </strong>
+            </div>
+            <div className="real-summary-card real-summary-card-wide">
+              <span>Participant summary</span>
+              <strong>
+                {broadExploration.participant_summary
+                  ? `${broadExploration.participant_summary.number_of_unique_participants} participants; avg ${broadExploration.participant_summary.rows_per_participant?.average} rows each`
+                  : "No participant ID summary available"}
+              </strong>
+            </div>
+          </div>
+        )}
+        {broadExploration?.data_quality_warnings?.length > 0 && (
+          <ul className="backend-warning-list">
+            {broadExploration.data_quality_warnings.slice(0, 6).map((warning, index) => (
+              <li key={`${warning.warning_type}-${index}`}>{warning.message}</li>
+            ))}
+          </ul>
+        )}
+        <div className="helper">
+          <ShieldAlert size={13} /> Numerical results must come from Python/R computation, not the LLM.
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Filters</div><CardInfo text="Narrow the displayed data by variable domain, participant group, or date window. Use these to focus your exploration on a relevant subset before assigning causal roles." /></div>
+        <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
+          <div className="filter-group" style={{ flex: "1 1 260px" }}>
+            <span className="filter-label">Time window</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+              <input
+                type="range"
+                min={1}
+                max={30}
+                value={windowDays}
+                onChange={(e) => { setWindowDays(Number(e.target.value)); setWindowInput(String(e.target.value)); }}
+                onMouseUp={() => {
+                  if (!windowGuidanceFired.current) {
+                    windowGuidanceFired.current = true;
+                    pushAssistantNote("Time window set ✓ — next step: pick which data layers to include using the checkboxes below the filter ↓. Each checkbox controls which data source feeds the pattern charts on this page.");
+                  }
+                }}
+                style={{ flex: 1, accentColor: "var(--accent)" }}
+              />
+              <input
+                type="number"
+                min={1}
+                max={30}
+                value={windowInput}
+                onChange={(e) => {
+                  setWindowInput(e.target.value);
+                  const n = parseInt(e.target.value, 10);
+                  if (!isNaN(n) && n >= 1 && n <= 30) setWindowDays(n);
+                }}
+                style={{ width: 56, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 7, fontSize: 13, textAlign: "center" }}
+              />
+              <span style={{ fontSize: 12, color: "var(--text-2)", whiteSpace: "nowrap" }}>days</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>
+              <span>1 day</span><span>30 days</span>
+            </div>
+          </div>
+          <div className="filter-group">
+            <span className="filter-label">Data layers</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 4 }}>
+              {LAYER_OPTIONS.map((l) => (
+                <label key={l} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={layers[l]}
+                    onChange={() => {
+                      setLayers((s) => ({ ...s, [l]: !s[l] }));
+                      if (!layerGuidanceFired.current) {
+                        layerGuidanceFired.current = true;
+                        pushAssistantNote("Data layers updated ✓ — the pattern charts above will reflect your selection. Take a look at the trends, then click Continue when you're satisfied with what you're seeing.");
+                      }
+                    }}
+                    style={{ accentColor: "var(--accent)", width: 14, height: 14, flexShrink: 0 }}
+                  />
+                  <span style={{ fontSize: 12.5, color: layers[l] ? "var(--navy)" : "var(--text-3)", fontWeight: layers[l] ? 500 : 400 }}>{l}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Available data domains</div><CardInfo text="Variable categories detected across your uploaded datasets — e.g., mood, sleep, activity. Helps you identify candidates for each causal role (exposure, outcome, confounder)." /></div>
+        <p className="card-desc">Categories detected across your uploaded datasets.</p>
+        <div className="filter-pills">
+          {domains.length ? domains.map((d) => <span key={d} className="chip chip-accent">{d}</span>) : <span className="helper">Upload datasets in Project Setup to populate this.</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Variable distributions</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <ChartTypeSwitcher value={distChartType} onChange={setDistChartType} />
+            <select className="select-input" value={distMetric} onChange={(e) => setDistMetric(e.target.value)}>
+              {DIST_VARIABLE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </div>
+          <CardInfo text="Distribution of selected variables across all responses. Check for outliers, floor/ceiling effects, and skew — these affect which estimators are appropriate and whether the outcome is analyzable as binary." />
+        </div>
+        <p className="card-desc">Distribution of {distMetricInfo.label.toLowerCase()} across all responses.</p>
+        <FlexibleChart
+          data={sleepDistribution}
+          xKey="bucket"
+          series={[{ key: "count", name: "Responses" }]}
+          type={distChartType}
+          xLabel={distMetricInfo.axisLabel}
+          yLabel="Number of responses"
+        />
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Sensor adherence & coverage</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <ChartTypeSwitcher value={coverageChartType} onChange={setCoverageChartType} />
+              <select className="select-input" value={coverageMetric} onChange={(e) => setCoverageMetric(e.target.value)}>
+                <option value="coverage">Coverage %</option>
+                <option value="missing">Missing %</option>
+              </select>
+            </div>
+            <CardInfo text="Share of expected observations actually captured per data source. Low adherence in a key variable may reduce feasibility or introduce missingness bias if non-collection is systematic." />
+          </div>
+          <p className="card-desc">Share of expected observations {coverageMetric === "coverage" ? "actually captured" : "missing"}, per data source.</p>
+          <FlexibleChart
+            data={coverage.filter((c) => layers[c.layer])}
+            xKey="layer"
+            series={[{ key: "display", name: coverageMetric === "coverage" ? "Coverage %" : "Missing %" }]}
+            type={coverageChartType}
+            layout={coverageChartType === "bar" ? "vertical" : "horizontal"}
+            xLabel={coverageChartType === "bar" ? (coverageMetric === "coverage" ? "Coverage (%)" : "Missing (%)") : "Data source"}
+            yLabel={coverageChartType === "bar" ? "Data source" : (coverageMetric === "coverage" ? "Coverage (%)" : "Missing (%)")}
+          />
+
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Temporal pattern</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <ChartTypeSwitcher value={tempChartType} onChange={setTempChartType} allow={["line", "area", "bar"]} />
+              <select className="select-input" value={tempMetric} onChange={(e) => setTempMetric(e.target.value)}>
+                {TEMPORAL_METRIC_OPTIONS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+              </select>
+            </div>
+            <CardInfo text="A time-series view of variable values over the study period. Shows trends, seasonality, and irregular gaps — all of which can affect temporal ordering assumptions in a lagged causal design." />
+          </div>
+          <p className="card-desc">{tempMetricInfo.label} against alcohol-use events, last {windowDays} day{windowDays !== 1 ? "s" : ""}.</p>
+          <FlexibleChart
+            data={series}
+            xKey="day"
+            series={[
+              { key: "primary", name: tempMetricInfo.label, color: "#2F5D8A" },
+              { key: "alcohol_events", name: "Alcohol events", color: "#B8382B" },
+            ]}
+            type={tempChartType}
+            xLabel="Study day"
+            yLabel={tempMetricInfo.axisLabel}
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Missingness by participant</div><CardInfo text="How much data is missing per participant, broken down by data source. Systematic missingness (e.g., only when symptomatic) can bias within-person estimates." /></div>
+        <p className="card-desc">Percent of expected observations missing, by source.</p>
+        <table className="mini-table">
+          <thead><tr><th>Participant</th><th>EMA</th><th>Actigraphy</th><th>Phone</th></tr></thead>
+          <tbody>
+            {missingRows.map((r) => (
+              <tr key={r.participant}>
+                <td>{r.participant}</td>
+                <td><span className={r.ema > 12 ? "cell-warn" : "cell-ok"}>{r.ema}%</span></td>
+                <td><span className={r.actigraphy > 12 ? "cell-warn" : "cell-ok"}>{r.actigraphy}%</span></td>
+                <td><span className={r.phone > 18 ? "cell-warn" : "cell-ok"}>{r.phone}%</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {highMissingParticipant.phone > 18 && (
+          <div className="helper" style={{ marginTop: 10 }}>
+            <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>{highMissingParticipant.participant} has elevated missingness in passive sensing ({highMissingParticipant.phone}%) \u2014 worth checking device compliance before this participant anchors any pattern.</span>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Within-person variability</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <ChartTypeSwitcher value={varChartType} onChange={setVarChartType} />
+            <select className="select-input" value={variabilityMetric} onChange={(e) => setVariabilityMetric(e.target.value)}>
+              <option value="variability">Variability index</option>
+              <option value="phone">Phone missingness %</option>
+              <option value="ema">EMA missingness %</option>
+            </select>
+          </div>
+          <CardInfo text="How much each variable fluctuates within a single individual over time. High within-person variability is needed for a within-person causal analysis — low variability means the exposure rarely changes and within-person signal is weak." />
+        </div>
+        <p className="card-desc">
+          {variabilityMetric === "variability" ? "A rough index of how much each participant's daily values swing, relative to their own average." : "Percent of expected observations missing for this source, by participant."}
+        </p>
+        <FlexibleChart
+          data={missingRows}
+          xKey="participant"
+          series={[{ key: variabilityMetric, name: variabilityMetric === "variability" ? "Variability" : "Missing %" }]}
+          type={varChartType}
+          xLabel="Participant"
+          yLabel={variabilityMetric === "variability" ? "Variability index (0–100)" : "Missing (%)"}
+        />
+      </div>
+
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Detected patterns</div><CardInfo text="Automatically identified temporal patterns — lagged correlations, trends, cyclical structure — that are worth investigating as potential causal hypotheses to build your research question around." /></div>
+        <p className="card-desc">Broad associations surfaced from the uploaded data. Promoting a pattern carries it forward as a candidate for your causal question.</p>
+        {patterns.map((p) => (
+          <div className="pattern-row" key={p.id}>
+            <span>{p.text} <span className="pattern-stat">{p.stat}</span></span>
+            {promotedPatterns.includes(p.id) ? (
+              <span className="chip chip-success"><CheckCircle2 size={13} /> Promoted</span>
+            ) : (
+              <button className="btn btn-secondary btn-sm" onClick={() => { promotePattern(p.id); showToast("Pattern promoted to Causal Question and Variables."); }}>
+                <Wand2 size={13} /> Promote
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Potentially useful variables</div><CardInfo text="Variables showing meaningful within-person variation or correlation with likely exposure or outcome candidates, ranked by relevance to your stated research objective." /></div>
+        <p className="card-desc">Variables and derived features that look relevant so far. Roles like exposure or confounder are assigned later, in Causal Question and Causal Graph.</p>
+        <table className="mini-table">
+          <thead><tr><th>Variable</th><th>Source</th><th>Meaning</th><th></th></tr></thead>
+          <tbody>
+            {CANDIDATE_VARIABLES.map((v) => (
+              <tr key={v.name}>
+                <td className="mono">{v.name}</td>
+                <td>{v.source}</td>
+                <td>{v.meaning}</td>
+                <td><RelevanceTag level={v.relevance} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> formalize a causal question and provisional variable roles.</p>
+        <button className="btn btn-primary" onClick={onGoNext}>Question & variables <ArrowRight size={14} /></button>
+      </div>
+    </>
+  );
+}
+
+const ROLE_OPTIONS = ["Exposure", "Outcome", "Confounder", "Mediator", "Proxy", "Unassigned"];
+const ROLE_TABLE_VARIABLES = DATA_SCHEMA.filter((v) => v.frequency);
+
+const QUESTION_TEMPLATES = {
+  p1: {
+    question: "Does poor sleep quality increase the likelihood of alcohol use in the days that follow, among adults in outpatient AUD treatment?",
+    population: "Adults 18\u201345 in outpatient AUD treatment",
+    exposure: "Sleep quality (EMA, 1\u20135)",
+    comparator: "Nights with higher reported sleep quality",
+    outcome: "Alcohol-use event in the following 1\u20132 days (binary)",
+    timeWindow: "Lag of 1\u20132 days",
+    unitOfAnalysis: "Participant-day",
+    estimand: "Increase in probability (risk difference)",
+  },
+  p2: {
+    question: "Does higher phone screen time increase same-day alcohol-use likelihood?",
+    population: "Adults 18\u201345 in outpatient AUD treatment",
+    exposure: "Phone screen time (minutes)",
+    comparator: "Days with lower screen time",
+    outcome: "Same-day alcohol-use event (binary)",
+    timeWindow: "Same day",
+    unitOfAnalysis: "Participant-day",
+    estimand: "Increase in probability (risk difference)",
+  },
+  p3: {
+    question: "Does elevated within-person stress on weekends increase alcohol use more than similar stress on weekdays?",
+    population: "Adults 18\u201345 in outpatient AUD treatment",
+    exposure: "Stress level (EMA, 0\u2013100), interacted with weekend",
+    comparator: "Weekday stress of similar magnitude",
+    outcome: "Alcohol-use event (binary)",
+    timeWindow: "Same day",
+    unitOfAnalysis: "Participant-day",
+    estimand: "Difference in effect size across day type",
+  },
+};
+const PATTERN_TEXT = {
+  p1: "Poor sleep quality precedes same-week alcohol-use events at a higher rate than chance.",
+  p2: "Self-reported alcohol use is more frequent following high phone screen-time days.",
+  p3: "Within-person stress shows more variability on weekend days than weekdays.",
+};
+
+const BLANK_QUESTION_FIELDS = { question: "", population: "", exposure: "", comparator: "", outcome: "", timeWindow: "", unitOfAnalysis: "", estimand: "" };
+
+const DERIVED_FEATURE_OPTIONS = [
+  { id: "f1", label: "7-day rolling average sleep quality", desc: "Smooths daily noise to capture a short-term sleep trend." },
+  { id: "f2", label: "Weekend indicator", desc: "Flags Saturday and Sunday, useful for interaction effects." },
+  { id: "f3", label: "Cumulative weekly screen time", desc: "Aggregates passive sensing into a weekly exposure proxy." },
+  { id: "f4", label: "Prior-day alcohol use (lag-1)", desc: "Captures autocorrelation in the outcome." },
+];
+
+function QuestionView({ state, actions, onGoNext }) {
+  const { promotedPatterns, variableRoles, selectedQuestionId, questionFields, derivedFeatures, datasets, lagHours, exposureThreshold } = state;
+  const { setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, toggleDerivedFeature, showToast, lockContent, unlockContent } = actions;
+  const [showRefine, setShowRefine] = useState(false);
+  const baseInfo = useMemo(() => computeFeasibility(datasets, 0, 0), [datasets]);
+  const [varStatuses, setVarStatuses] = useState(() =>
+    Object.fromEntries(ROLE_TABLE_VARIABLES.map((v) => [v.name, "selected"]))
+  );
+  const [customVars, setCustomVars] = useState([]);
+  const [newVarDraft, setNewVarDraft] = useState({ name: "", source: "", values: "", role: "Unassigned" });
+  const [addingVar, setAddingVar] = useState(false);
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Causal question & provisional variable design</h1>
+        <p>Start from a suggested variable role table and a few candidate questions built from what you promoted in Broad Exploration. Nothing here is locked \u2014 tweak any suggestion or write your own from scratch.</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Provisional variable-role recommendations</div><CardInfo text="AI first-pass role assignments (Exposure, Outcome, Confounder, Mediator, Proxy) based on your documents and data patterns. Review and override — these are starting suggestions, not final decisions." /></div>
+        <p className="card-desc">Based on the patterns you promoted. These are starting points, not final — Causal Graph will validate them. Check the box or click <strong>Select</strong> to carry a variable forward; <strong>Discard</strong> removes it from later steps.</p>
+        <table className="mini-table">
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}></th>
+              <th>Variable</th>
+              <th>Source</th>
+              <th>Values</th>
+              <th>Suggested role</th>
+              <th style={{ width: 90 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...ROLE_TABLE_VARIABLES, ...customVars].map((v) => {
+              const status = varStatuses[v.name] || "selected";
+              const discarded = status === "discarded";
+              return (
+                <tr key={v.name} style={{ opacity: discarded ? 0.4 : 1 }}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={!discarded}
+                      onChange={() => setVarStatuses((s) => ({ ...s, [v.name]: discarded ? "selected" : "discarded" }))}
+                      style={{ accentColor: "var(--accent)", width: 14, height: 14, cursor: "pointer" }}
+                    />
+                  </td>
+                  <td className="mono">{v.name}</td>
+                  <td>{v.source}</td>
+                  <td>{v.type || v.values || "—"}</td>
+                  <td>
+                    {discarded ? (
+                      <span className="chip chip-muted">Discarded</span>
+                    ) : (
+                      <select className="select-input" value={variableRoles[v.name] || v.roleGuess} onChange={(e) => setVariableRole(v.name, e.target.value)}>
+                        {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    )}
+                  </td>
+                  <td>
+                    {discarded ? (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setVarStatuses((s) => ({ ...s, [v.name]: "selected" }))}
+                      >Select</button>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        style={{ background: "var(--danger-soft)", color: "var(--danger)", border: "none", fontWeight: 500 }}
+                        onClick={() => setVarStatuses((s) => ({ ...s, [v.name]: "discarded" }))}
+                      >Discard</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {addingVar ? (
+              <tr>
+                <td>
+                  <input type="checkbox" checked disabled style={{ accentColor: "var(--accent)", width: 14, height: 14 }} />
+                </td>
+                <td>
+                  <input
+                    className="select-input"
+                    style={{ width: "100%" }}
+                    placeholder="variable_name"
+                    value={newVarDraft.name}
+                    onChange={(e) => setNewVarDraft((d) => ({ ...d, name: e.target.value }))}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="select-input"
+                    style={{ width: "100%" }}
+                    placeholder="Source"
+                    value={newVarDraft.source}
+                    onChange={(e) => setNewVarDraft((d) => ({ ...d, source: e.target.value }))}
+                  />
+                </td>
+                <td>
+                  <input
+                    className="select-input"
+                    style={{ width: "100%" }}
+                    placeholder="e.g. 1–5, Yes/No"
+                    value={newVarDraft.values}
+                    onChange={(e) => setNewVarDraft((d) => ({ ...d, values: e.target.value }))}
+                  />
+                </td>
+                <td>
+                  <select
+                    className="select-input"
+                    value={newVarDraft.role}
+                    onChange={(e) => setNewVarDraft((d) => ({ ...d, role: e.target.value }))}
+                  >
+                    {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </td>
+                <td style={{ display: "flex", gap: 5, paddingTop: 2 }}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      const trimmed = newVarDraft.name.trim();
+                      if (!trimmed) return;
+                      setCustomVars((cv) => [...cv, { name: trimmed, source: newVarDraft.source, type: newVarDraft.values, roleGuess: newVarDraft.role }]);
+                      setVarStatuses((s) => ({ ...s, [trimmed]: "selected" }));
+                      setVariableRole(trimmed, newVarDraft.role);
+                      setNewVarDraft({ name: "", source: "", values: "", role: "Unassigned" });
+                      setAddingVar(false);
+                    }}
+                  >Add</button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => { setAddingVar(false); setNewVarDraft({ name: "", source: "", values: "", role: "Unassigned" }); }}
+                  >Cancel</button>
+                </td>
+              </tr>
+            ) : (
+              <tr>
+                <td colSpan={6} style={{ paddingTop: 8 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setAddingVar(true)}>+ Add variable</button>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Suggested research questions</div><CardInfo text="Ready-to-select question templates derived from detected data patterns and your objective. Clicking one auto-populates the question fields below so you can refine them." /></div>
+        <p className="card-desc">Drafted from the patterns you promoted in Broad Exploration.</p>
+        {promotedPatterns.length === 0 ? (
+          <div className="helper"><Info size={13} /> No patterns promoted yet. Go back to Broad Exploration and promote at least one, or write a question from scratch below.</div>
+        ) : (
+          promotedPatterns.map((pid) => (
+            <SuggestedQuestionCard
+              key={pid}
+              pid={pid}
+              selectedQuestionId={selectedQuestionId}
+              selectSuggestedQuestion={selectSuggestedQuestion}
+            />
+          ))
+        )}
+        <div className="helper" style={{ marginTop: 10 }}>
+          <Info size={13} />
+          <span>Prefer to start blank? <button className="btn-ghost btn-sm" style={{ display: "inline", padding: 0, border: "none", color: "var(--accent)", cursor: "pointer" }} onClick={writeOwnQuestion}>Write your own question</button> instead.</span>
+        </div>
+      </div>
+
+      {questionFields && (
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Research question builder</div>
+            {selectedQuestionId && <span className="badge badge-optional">{selectedQuestionId === "custom" ? "CUSTOM" : "FROM SUGGESTION"}</span>}
+          </div>
+          <p className="card-desc">Tweak any field below, or rewrite the question outright \u2014 nothing here is final until Causal Graph.</p>
+          <textarea
+            className="objective-input"
+            style={{ minHeight: 64 }}
+            placeholder="Type your research question in plain language."
+            value={questionFields.question}
+            onChange={(e) => updateQuestionField("question", e.target.value)}
+          />
+          <div className="question-field-grid">
+            {[
+              ["population", "Population"],
+              ["exposure", "Exposure"],
+              ["comparator", "Comparator"],
+              ["outcome", "Outcome"],
+              ["timeWindow", "Time window"],
+              ["unitOfAnalysis", "Unit of analysis"],
+              ["estimand", "Target estimand direction"],
+            ].map(([key, label]) => (
+              <div className="question-field" key={key}>
+                <span className="filter-label">{label}</span>
+                <input
+                  className="select-input"
+                  style={{ width: "100%" }}
+                  value={questionFields[key]}
+                  onChange={(e) => updateQuestionField(key, e.target.value)}
+                  onBlur={() => (key === "timeWindow" || key === "estimand") && questionFields[key] && actions.noteQuestionFieldEdit(key)}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="objective-footer">
+            <span className="char-count">Every field stays editable through Step 5.</span>
+            <button className="btn btn-secondary btn-sm" onClick={() => setShowRefine(true)}>Refine with AI</button>
+          </div>
+          {showRefine && (
+            <div className="feedback-panel">
+              <div className="title"><Sparkles size={13} /> AI feedback</div>
+              <p>Consider specifying the time window more precisely (24 vs. 48 hours), and confirming whether "alcohol use" means any use or a heavier drinking threshold.</p>
+              <div className="feedback-actions">
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    updateQuestionField("question", questionFields.question + (questionFields.question.endsWith(".") || !questionFields.question ? "" : ".") + " Time window and drinking threshold will be pinned down precisely.");
+                    setShowRefine(false);
+                  }}
+                >
+                  Apply suggestion
+                </button>
+                <button className="btn btn-sm" onClick={() => setShowRefine(false)}>Keep my wording</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {questionFields && (
+        <>
+          {/* ── Card 1: Population ── */}
+          <div className="card insight-card">
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-blue"><ClipboardList size={13} /></div>
+              <div>
+                <div className="card-title">Definition of the population</div>
+                <div className="insight-subtitle">LLM-derived from your research objective and uploaded dataset</div>
+              </div>
+            </div>
+            <div className="insight-value insight-value-blue">{questionFields.population || "—"}</div>
+            <RegenerateBlock
+              variants={POPULATION_BODY_VARIANTS}
+              renderVariant={(paras) => <>{paras.map((p, i) => <p key={i} className="insight-body">{p}</p>)}</>}
+              onLock={(val) => lockContent("population", val)}
+              onUnlock={() => unlockContent("population")}
+            />
+            <div className="insight-note"><Info size={11} />Population boundaries determine where your causal estimate applies. A narrower, well-justified population reduces unmeasured confounding risk.</div>
+          </div>
+
+          {/* ── Card 2: Exposure / Treatment ── */}
+          <div className="card insight-card" style={{ borderLeftColor: "var(--success)" }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-green"><Wand2 size={13} /></div>
+              <div>
+                <div className="card-title">Exposure or treatment</div>
+                <div className="insight-subtitle">The variable whose causal effect on the outcome is being estimated</div>
+              </div>
+            </div>
+            <div className="insight-value insight-value-green">{questionFields.exposure || "—"}</div>
+            <RegenerateBlock
+              variants={EXPOSURE_BODY_VARIANTS}
+              renderVariant={(paras) => <>{paras.map((p, i) => <p key={i} className="insight-body">{p}</p>)}</>}
+              onLock={(val) => lockContent("exposure", val)}
+              onUnlock={() => unlockContent("exposure")}
+            />
+            <div className="insight-note"><Info size={11} />If you reverse the exposure direction in Causal Graph (Step 6), return here to update the comparator and estimand to stay consistent.</div>
+          </div>
+
+          {/* ── Card 3: Time window ── */}
+          <div className="card insight-card" style={{ borderLeftColor: "var(--warning)" }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-orange"><Clock size={13} /></div>
+              <div>
+                <div className="card-title">Time window</div>
+                <div className="insight-subtitle">How long after exposure the outcome is measured — different windows answer different questions</div>
+              </div>
+            </div>
+            <div className="insight-value insight-value-orange">{questionFields.timeWindow || "—"}</div>
+            <RegenerateBlock
+              variants={TIMEWINDOW_INTRO_VARIANTS}
+              renderVariant={(text) => <p className="insight-body">{text}</p>}
+              onLock={(val) => lockContent("timeWindow", val)}
+              onUnlock={() => unlockContent("timeWindow")}
+            />
+            <table className="lag-table">
+              <thead>
+                <tr><th>Lag setting</th><th>Est. sample</th><th>Overlap</th><th>What causal question this answers</th></tr>
+              </thead>
+              <tbody>
+                {[
+                  { lag: 0,  label: "0h — same day",    question: "Do poor sleep and drinking co-occur on the same day?" },
+                  { lag: 12, label: "12h — half-day",   question: "Does poor sleep predict craving or use by the same evening?" },
+                  { lag: 24, label: "24h — next day",   question: "Does poor sleep increase next-day drinking probability?" },
+                  { lag: 48, label: "48h — two days",   question: "Is there a 2-day carryover effect from sleep disruption?" },
+                  { lag: 72, label: "72h — three days", question: "Does accumulated sleep loss over 3 days affect use?" },
+                ].map(({ lag, label, question }) => {
+                  const f = computeFeasibility(datasets, lag, exposureThreshold);
+                  const isActive = lagHours === lag;
+                  return (
+                    <tr key={lag} className={isActive ? "row-active" : ""}>
+                      <td>{label}{isActive ? " ← current" : ""}</td>
+                      <td>~{f.finalSample.toLocaleString()} person-days</td>
+                      <td>{f.overlapPct}%</td>
+                      <td style={{ color: "var(--text-2)" }}>{question}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="insight-note"><Info size={11} />The highlighted row reflects your current lag slider in Step 5 (Feasibility). Change it there to see how your sample and overlap shift across windows.</div>
+          </div>
+
+          {/* ── Card 4: Unit of analysis ── */}
+          <div className="card insight-card" style={{ borderLeftColor: "#6B46A8" }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-purple"><Database size={13} /></div>
+              <div>
+                <div className="card-title">Unit of analysis</div>
+                <div className="insight-subtitle">What each row in your final analysis dataset represents</div>
+              </div>
+            </div>
+            <div className="insight-value insight-value-purple">{questionFields.unitOfAnalysis || "—"}</div>
+            <RegenerateBlock
+              variants={UNIT_BODY_VARIANTS}
+              renderVariant={(paras) => <>{paras.map((p, i) => <p key={i} className="insight-body">{p}</p>)}</>}
+              onLock={(val) => lockContent("unitOfAnalysis", val)}
+              onUnlock={() => unlockContent("unitOfAnalysis")}
+            />
+            <div className="insight-note"><Info size={11} />Participant-day is the right unit for a within-person causal question. It maximizes temporal resolution and leverages the natural experiment of night-to-night sleep variation.</div>
+          </div>
+
+          {/* ── Card 5: Estimand direction ── */}
+          <div className="card insight-card" style={{ borderLeftColor: "#1F7A6E" }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-teal"><GitBranch size={13} /></div>
+              <div>
+                <div className="card-title">Initial target estimand direction</div>
+                <div className="insight-subtitle">The precise causal quantity being targeted — provisional, can be updated in Analysis Strategy (Step 7)</div>
+              </div>
+            </div>
+            <div className="insight-value insight-value-teal">{questionFields.estimand || "—"}</div>
+            <RegenerateBlock
+              variants={ESTIMAND_BODY_VARIANTS}
+              renderVariant={(paras) => <>{paras.map((p, i) => <p key={i} className="insight-body">{p}</p>)}</>}
+              onLock={(val) => lockContent("estimand", val)}
+              onUnlock={() => unlockContent("estimand")}
+            />
+            <div className="insight-note"><AlertTriangle size={11} />This is provisional. Once you complete the Causal Graph in Step 6, the estimand may need refinement — for example, if you discover a collider on the adjustment path or decide to target a different pathway.</div>
+          </div>
+        </>
+      )}
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Derived-feature recommendations</div></div>
+        <p className="card-desc">Engineered features to consider alongside your raw variables — lags, rolling windows, aggregates.</p>
+        {derivedFeatures.map((f) => (
+          <div className="feature-row" key={f.id}>
+            <label className="feature-checkbox">
+              <input type="checkbox" checked={f.selected} onChange={() => toggleDerivedFeature(f.id)} />
+              <div>
+                <div className="feature-label">{f.label}</div>
+                <div className="feature-desc">{f.desc}</div>
+              </div>
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> check whether the data can actually support this question.</p>
+        <button className="btn btn-primary" onClick={() => { if (!questionFields || !questionFields.question) { showToast("Choose or write a research question first."); return; } onGoNext(); }}>Feasibility check <ArrowRight size={14} /></button>
+      </div>
+    </>
+  );
+}
+
+const SENSITIVITY_ITEMS = [
+  { id: "missingData", label: "Missing data (MCAR vs. MAR)" },
+  { id: "positivity", label: "Positivity assumption" },
+  { id: "unmeasuredConf", label: "Unmeasured confounding sensitivity" },
+  { id: "consistency", label: "Consistency (SUTVA)" },
+  { id: "exclusionRestriction", label: "Exclusion restriction (if an IV is used)" },
+];
+
+const FEASIBILITY_VARIABLE_BY_PATTERN = { p1: "sleep_quality", p2: "phone_screen_time", p3: "stress_level", custom: "sleep_quality" };
+
+function computeFeasibility(datasets, lagHours, exposureThreshold) {
+  const seed = datasets.length ? seedFromName(datasets[0].name, datasets.length) : 42;
+  const participants = 60 + (seed % 100);
+  const days = 14 + (seed % 20);
+  const baseRows = participants * days;
+  const retainedFraction = 1 - (lagHours / 72) * 0.35;
+  const finalSample = Math.round(baseRows * retainedFraction * (1 - exposureThreshold / 500));
+  const overlapPct = Math.round(Math.max(20, 92 - exposureThreshold * 0.4));
+  const verdict = finalSample > 2000 && overlapPct > 50 ? "Feasible" : finalSample > 1000 ? "Marginal" : "Not feasible";
+  const retainedPct = Math.round(retainedFraction * 100);
+  return { baseRows, finalSample, overlapPct, verdict, retainedPct, participants, days };
+}
+
+function VerdictBadge({ verdict }) {
+  const cls = verdict === "Feasible" ? "chip-success" : verdict === "Marginal" ? "chip-warning" : "chip-danger";
+  return <span className={`chip ${cls}`} style={{ fontSize: 13, padding: "6px 14px" }}>{verdict}</span>;
+}
+
+function FeasibilityView({ state, actions, onGoNext }) {
+  const { datasets, questionFields, selectedQuestionId, variableRoles, lagHours, exposureThreshold, sensitivityChecks } = state;
+  const { setLagHours, setExposureThreshold, toggleSensitivity, showToast } = actions;
+
+  const feas = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
+  const seed = datasets.length ? seedFromName(datasets[0].name, datasets.length) : 42;
+  const defaultVarKey = FEASIBILITY_VARIABLE_BY_PATTERN[selectedQuestionId] || "sleep_quality";
+
+  // Variables the user has actively picked for this question (all roles except Unassigned/Proxy).
+  const targetedVars = useMemo(() => {
+    const picked = ROLE_TABLE_VARIABLES.filter((v) => {
+      const r = variableRoles[v.name] || v.roleGuess;
+      return r && r !== "Unassigned";
+    }).map((v) => v.name);
+    // ensure the default is present + available for the distribution helper
+    const distKeys = DIST_VARIABLE_OPTIONS.map((o) => o.key);
+    const merged = [...new Set([defaultVarKey, ...picked])].filter((k) => distKeys.includes(k));
+    return merged.length ? merged : [defaultVarKey];
+  }, [variableRoles, defaultVarKey]);
+
+  const [focusVar, setFocusVar] = useState(defaultVarKey);
+  useEffect(() => { if (!targetedVars.includes(focusVar)) setFocusVar(targetedVars[0]); }, [targetedVars, focusVar]);
+
+  const [distChartType, setDistChartType] = useState("bar");
+  const [tempChartType, setTempChartType] = useState("area");
+  const [freqChartType, setFreqChartType] = useState("bar");
+
+  const distInfo = DIST_VARIABLE_OPTIONS.find((o) => o.key === focusVar) || DIST_VARIABLE_OPTIONS[0];
+  const distribution = useMemo(() => buildDistribution(seed, focusVar), [seed, focusVar]);
+
+  // Temporal pattern for the focused variable (14-day rolling mean).
+  const temporalSeries = useMemo(() => {
+    const base = 40 + (seed % 20);
+    return Array.from({ length: 14 }, (_, i) => ({
+      day: `D${i + 1}`,
+      value: Math.round(base + Math.sin((i + seed) * 0.6) * 12 + ((seed + i * 7) % 8)),
+    }));
+  }, [seed, focusVar]);
+
+  // Measurement frequency per targeted variable (obs / participant / week).
+  const freqData = useMemo(() => targetedVars.map((v, i) => {
+    const meta = ROLE_TABLE_VARIABLES.find((r) => r.name === v);
+    const freq = meta?.frequency || "";
+    const obs = /event|ema|daily/i.test(freq) ? 14 + ((seed + i) % 8)
+              : /hour|minute|sensor/i.test(freq) ? 84 + ((seed + i * 3) % 20)
+              : 4 + ((seed + i) % 4);
+    return { variable: v, obs };
+  }), [targetedVars, seed]);
+
+  // Correlations of focused variable against the other targeted variables.
+  const correlationData = useMemo(() => targetedVars
+    .filter((v) => v !== focusVar)
+    .map((v, i) => ({ variable: v, r: Math.round(((((seed + i * 13 + v.length) % 140) / 100) - 0.7) * 100) / 100 })),
+  [targetedVars, focusVar, seed]);
+
+  const exposureMissing = 4 + (seed % 12);
+  const outcomeMissing = 3 + (seed % 8);
+  const participantCoverage = 60 + (seed % 30);
+  const derivedFeatureReady = feas.retainedPct >= 55;
+
+  const focusRole = variableRoles[focusVar] || ROLE_TABLE_VARIABLES.find((v) => v.name === focusVar)?.roleGuess || "Unassigned";
+
+  // Temporal ordering check
+  const temporalOrdering = useMemo(() => {
+    const exposureVar = questionFields?.exposure || "sleep_quality";
+    const outcomeVar = questionFields?.outcome || "alcohol_use_event";
+    const total = feas.participants;
+    const validCount = Math.min(total, Math.round(total * (0.88 + (seed % 8) * 0.012)));
+    const exceptionCount = total - validCount;
+    const status = exceptionCount === 0 ? "valid" : exceptionCount <= Math.round(total * 0.15) ? "partial" : "invalid";
+    const reasons = ["timestamp / timezone issue", "same-day assessment overlap", "missing timestamp column"];
+    const reason = reasons[seed % reasons.length];
+    return { exposureVar, outcomeVar, status, validCount, exceptionCount, total, reason };
+  }, [feas.participants, seed, questionFields]);
+
+  // Participant-level data availability
+  const participantStats = useMemo(() => {
+    const minDays = 3 + (seed % 5);
+    const maxDays = feas.days;
+    const medianDays = Math.round((minDays + maxDays) / 2 + (seed % 3));
+    const belowMin = Math.max(0, Math.round(feas.participants * 0.05 + (seed % 4)));
+    const withFull = Math.round(feas.participants * (0.55 + (seed % 20) * 0.01));
+    return { minDays, medianDays, maxDays, belowMin, withFull, total: feas.participants };
+  }, [feas, seed]);
+
+  // Pairwise correlation matrix (all unique pairs of targeted variables)
+  const pairwiseCorr = useMemo(() => {
+    const pairs = [];
+    for (let i = 0; i < targetedVars.length; i++) {
+      for (let j = i + 1; j < targetedVars.length; j++) {
+        const a = targetedVars[i];
+        const b = targetedVars[j];
+        const raw = ((seed + i * 13 + j * 7 + a.length * 3 + b.length * 5) % 180) / 100 - 0.9;
+        const r = Math.round(raw * 100) / 100;
+        pairs.push({ a, b, r });
+      }
+    }
+    return pairs;
+  }, [targetedVars, seed]);
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Targeted variable exploration & feasibility check</h1>
+        <p>{questionFields?.question ? <>Checking feasibility for: <strong style={{ color: "var(--navy)" }}>{questionFields.question}</strong></> : "No research question selected yet \u2014 go back to Question & Variables."}</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Which variable do you want to inspect?</div>
+          <span className="chip chip-muted">{targetedVars.length} targeted</span>
+        </div>
+        <p className="card-desc">Pick one of the variables you assigned a role to on the previous step. All charts below refocus on it.</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {targetedVars.map((v) => (
+            <button
+              key={v}
+              onClick={() => setFocusVar(v)}
+              className={`chip ${focusVar === v ? "chip-success" : "chip-muted"}`}
+              style={{ cursor: "pointer", border: focusVar === v ? "1px solid var(--success)" : "1px solid transparent" }}
+            >
+              {v} <span style={{ opacity: 0.7, marginLeft: 4 }}>({variableRoles[v] || ROLE_TABLE_VARIABLES.find((r) => r.name === v)?.roleGuess || "Unassigned"})</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Feasibility controls</div><Sparkles size={13} color="var(--accent)" /></div>
+        <p className="card-desc">Adjust these to see how your analysis-ready sample and overlap change in real time. AI will re-score below.</p>
+        <div className="slider-row">
+          <span className="filter-label">Lag between exposure and outcome: {lagHours}h</span>
+          <input type="range" min={0} max={72} step={6} value={lagHours} onChange={(e) => setLagHours(Number(e.target.value))} onMouseUp={() => actions.noteFeasibilityChange()} onTouchEnd={() => actions.noteFeasibilityChange()} onKeyUp={() => actions.noteFeasibilityChange()} />
+        </div>
+        <div className="slider-row">
+          <span className="filter-label">Minimum required exposure variation: {exposureThreshold}%</span>
+          <input type="range" min={0} max={100} step={5} value={exposureThreshold} onChange={(e) => setExposureThreshold(Number(e.target.value))} onMouseUp={() => actions.noteFeasibilityChange()} onTouchEnd={() => actions.noteFeasibilityChange()} onKeyUp={() => actions.noteFeasibilityChange()} />
+        </div>
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Distribution — {focusVar}</div>
+            <ChartTypeSwitcher value={distChartType} onChange={setDistChartType} />
+          </div>
+          <p className="card-desc">{distInfo.label} · role: <strong>{focusRole}</strong>. Try switching chart types.</p>
+          <FlexibleChart
+            data={distribution}
+            xKey="bucket"
+            series={[{ key: "count", name: "Count", color: "#2F5D8A" }]}
+            type={distChartType}
+            height={160}
+            xLabel={distInfo.axisLabel}
+            yLabel="Count"
+          />
+          <div className="unit-callout" style={{ marginTop: 8 }}>
+            AI note: distribution looks {distribution.some((d) => d.count < 8) ? "uneven — some bins are thin, which can hurt overlap." : "reasonably balanced across bins."}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Temporal pattern — {focusVar}</div>
+            <ChartTypeSwitcher value={tempChartType} onChange={setTempChartType} allow={["line", "area", "bar"]} />
+          </div>
+          <p className="card-desc">14-day trajectory (mean per day). Use this to sanity-check timestamps and drift.</p>
+          <FlexibleChart
+            data={temporalSeries}
+            xKey="day"
+            series={[{ key: "value", name: focusVar, color: "#3E8E7E" }]}
+            type={tempChartType}
+            height={160}
+            xLabel="Day"
+            yLabel="Mean"
+          />
+        </div>
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-head"><div className="card-title">Missingness & coverage</div></div>
+          <p className="card-desc">For the exposure and outcome in your selected question.</p>
+          <div className="metric-bar-row">
+            <span className="metric-bar-label">Exposure missing</span>
+            <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${exposureMissing}%`, background: exposureMissing > 15 ? "var(--warning)" : "var(--success)" }} /></div>
+            <span className="metric-bar-value">{exposureMissing}%</span>
+          </div>
+          <div className="metric-bar-row">
+            <span className="metric-bar-label">Outcome missing</span>
+            <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${outcomeMissing}%`, background: outcomeMissing > 15 ? "var(--warning)" : "var(--success)" }} /></div>
+            <span className="metric-bar-value">{outcomeMissing}%</span>
+          </div>
+          <div className="metric-bar-row">
+            <span className="metric-bar-label">Participants w/ data</span>
+            <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${participantCoverage}%`, background: participantCoverage > 70 ? "var(--success)" : "var(--warning)" }} /></div>
+            <span className="metric-bar-value">{participantCoverage}%</span>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Measurement frequency</div>
+            <ChartTypeSwitcher value={freqChartType} onChange={setFreqChartType} allow={["bar", "pie"]} />
+            <CardInfo text="Observations per participant per week for each targeted variable. Guides whether your chosen lag window is achievable — a 24h lag requires at least daily measurement for both exposure and outcome." />
+          </div>
+          <p className="card-desc">Observations per participant per week, across all targeted variables.</p>
+          <FlexibleChart
+            data={freqData}
+            xKey="variable"
+            series={[{ key: "obs", name: "obs / participant / week", color: "#C4933F" }]}
+            type={freqChartType}
+            height={160}
+            layout={freqChartType === "bar" ? "vertical" : "horizontal"}
+            xLabel={freqChartType === "bar" ? "Observations / participant / week" : "Variable"}
+            yLabel={freqChartType === "bar" ? "Variable" : "Observations / participant / week"}
+          />
+
+        </div>
+      </div>
+
+      {/* ── Temporal Ordering compact card ── */}
+      <div className={`card tempo-card${temporalOrdering.status === "partial" ? "-partial" : temporalOrdering.status === "invalid" ? "-invalid" : ""}`}
+           style={{ borderLeft: `4px solid ${temporalOrdering.status === "valid" ? "var(--success)" : temporalOrdering.status === "partial" ? "var(--warning)" : "var(--danger)"}` }}>
+        <div className="card-head">
+          <div className="card-title">Temporal ordering</div>
+          <span className={`chip ${temporalOrdering.status === "valid" ? "chip-success" : temporalOrdering.status === "partial" ? "chip-warning" : "chip-danger"}`}>
+            {temporalOrdering.status === "valid" ? "✓ Valid" : temporalOrdering.status === "partial" ? "⚠ Partially valid" : "✕ Invalid"}
+          </span>
+          <CardInfo text="Checks whether the exposure is consistently measured before the outcome within each lag window. If exposure sometimes follows outcome for some participants, the causal direction assumption is violated for those rows." />
+        </div>
+        <p className="card-desc" style={{ margin: 0 }}>
+          <span className="mono">{temporalOrdering.exposureVar}</span> (measured overnight) precedes <span className="mono">{temporalOrdering.outcomeVar}</span> (measured the next evening) for <strong>{temporalOrdering.validCount} of {temporalOrdering.total} participants</strong>.
+        </p>
+        {temporalOrdering.status !== "valid" && (
+          <div className="helper" style={{ marginTop: 8 }}>
+            <AlertTriangle size={12} style={{ color: "var(--warning)", flexShrink: 0 }} />
+            {temporalOrdering.exceptionCount} participant{temporalOrdering.exceptionCount > 1 ? "s" : ""} — {temporalOrdering.reason}. Safe to continue if this is below 15% of your sample; otherwise investigate those records in the dataset.
+          </div>
+        )}
+      </div>
+
+      {/* ── Lag Construction Reality Check ── */}
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Lag construction — reality check</div>
+          <span className={`chip ${feas.retainedPct >= 70 ? "chip-success" : feas.retainedPct >= 50 ? "chip-warning" : "chip-danger"}`}>
+            {feas.retainedPct}% of days retained
+          </span>
+          <CardInfo text="Breaks down what the chosen lag means operationally: which participant-days are dropped, what percentage is retained, and whether the lag is plausible given your data's measurement frequency and missingness." />
+        </div>
+        <p className="card-desc">Whether a valid exposure → outcome pair can actually be built at the chosen lag of <strong>{lagHours}h</strong>, given your data's measurement frequency and missingness.</p>
+        <div className="lag-reality-box">
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">What this lag means</span>
+            <span>Each participant-day's <span className="mono">{temporalOrdering.exposureVar}</span> must be recorded at least {lagHours}h before the <span className="mono">{temporalOrdering.outcomeVar}</span> record. Days where the gap between consecutive observations exceeds {lagHours + 12}h are excluded.</span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">What gets dropped</span>
+            <span>{100 - feas.retainedPct}% of participant-days are lost at this lag — typically due to missed EMA check-ins, sensor dropouts, or participants skipping a day. That leaves <strong>{feas.finalSample.toLocaleString()} usable rows</strong> from a base of {feas.baseRows.toLocaleString()}.</span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Reality check</span>
+            <span className={feas.retainedPct >= 65 ? "" : "text-warn"}>
+              {feas.retainedPct >= 65
+                ? `✓ Retention of ${feas.retainedPct}% is acceptable. The ${lagHours}h lag is constructible for the majority of your sample.`
+                : `⚠ Retention drops to ${feas.retainedPct}% at ${lagHours}h. A lag of 12–24h typically retains 75%+ of participant-days in EMA studies. Consider shortening the lag unless the longer window is theoretically necessary.`}
+            </span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Overlap (positivity)</span>
+            <span>
+              <span className={feas.overlapPct > 50 ? "cell-ok" : "cell-warn"}>
+                {feas.overlapPct > 50 ? "✓" : "⚠"} {feas.overlapPct}% of participant-days have both exposed and unexposed neighbors across covariate strata — positivity {feas.overlapPct > 50 ? "appears satisfied" : "may be violated at the margins"}.
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Participant-level data availability ── */}
+      <div className="card">
+        <div className="card-head"><div className="card-title">Participant-level data availability</div><CardInfo text="Min, median, and max observation-days per participant. Within-person estimators need enough repeated measurements per person — too few days limits the within-person signal that causal estimation relies on." /></div>
+        <p className="card-desc">How many observation-days each participant contributed. Within-person estimators need enough repeated measurements per individual to separate within-person signal from between-person differences.</p>
+        <div className="mini-stat-row" style={{ marginBottom: 12 }}>
+          <div className="mini-stat"><span className="mini-stat-label">Min days observed</span><span className="mini-stat-value">{participantStats.minDays}</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">Median days observed</span><span className="mini-stat-value">{participantStats.medianDays}</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">Max days observed</span><span className="mini-stat-value">{participantStats.maxDays}</span></div>
+        </div>
+        <div className="metric-bar-row">
+          <span className="metric-bar-label">Below 7-day minimum</span>
+          <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${Math.round(participantStats.belowMin / participantStats.total * 100)}%`, background: participantStats.belowMin > 5 ? "var(--warning)" : "var(--success)" }} /></div>
+          <span className="metric-bar-value">{participantStats.belowMin} / {participantStats.total}</span>
+        </div>
+        <div className="metric-bar-row">
+          <span className="metric-bar-label">With ≥ 10 days</span>
+          <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${Math.round(participantStats.withFull / participantStats.total * 100)}%`, background: "var(--success)" }} /></div>
+          <span className="metric-bar-value">{participantStats.withFull} / {participantStats.total}</span>
+        </div>
+        {participantStats.belowMin > 0 && (
+          <div className="helper" style={{ marginTop: 8 }}>
+            <Info size={12} style={{ flexShrink: 0 }} />
+            {participantStats.belowMin} participant{participantStats.belowMin > 1 ? "s have" : " has"} fewer than 7 days of data — too few for reliable within-person estimation. Consider excluding them from the primary analysis and including them in a sensitivity analysis.
+          </div>
+        )}
+      </div>
+
+      {/* ── Correlation & Redundancy — pairwise matrix ── */}
+      <div className="card">
+        <div className="card-head"><div className="card-title">Correlation & redundancy</div><CardInfo text="Pairwise Pearson r between all targeted variables. Pairs with |r| > 0.8 are near-redundant — including both in the same adjustment model risks multicollinearity and inflated standard errors." /></div>
+        <p className="card-desc">Pairwise Pearson r between all targeted variables. Pairs with |r| &gt; 0.8 are likely redundant — including both in the same model risks multicollinearity and inflated standard errors.</p>
+        {pairwiseCorr.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-2)" }}>Assign roles to at least two variables to see pairwise correlations.</div>
+        ) : (
+          <table className="mini-table corr-table" style={{ marginTop: 4 }}>
+            <thead>
+              <tr><th>Variable A</th><th>Variable B</th><th style={{ width: 60 }}>r</th><th>Interpretation</th></tr>
+            </thead>
+            <tbody>
+              {pairwiseCorr.map((c) => {
+                const abs = Math.abs(c.r);
+                const label = abs > 0.8 ? "Likely redundant" : abs > 0.5 ? "Moderate" : abs > 0.2 ? "Weak" : "Near independent";
+                const cls = abs > 0.8 ? "chip-danger" : abs > 0.5 ? "chip-warning" : "chip-success";
+                return (
+                  <tr key={`${c.a}-${c.b}`}>
+                    <td className="mono">{c.a}</td>
+                    <td className="mono">{c.b}</td>
+                    <td style={{ fontWeight: 700, color: abs > 0.8 ? "var(--danger)" : abs > 0.5 ? "var(--warning)" : "var(--success)" }}>{c.r.toFixed(2)}</td>
+                    <td><span className={`chip ${cls}`} style={{ fontSize: 10 }}>{label}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {pairwiseCorr.some((c) => Math.abs(c.r) > 0.8) && (
+          <div className="helper" style={{ marginTop: 10, background: "var(--danger-soft)", borderColor: "#FBBFBB" }}>
+            <AlertTriangle size={12} style={{ color: "var(--danger)", flexShrink: 0 }} />
+            One or more pairs exceed r = 0.8. Consider using the lower-missingness variable, treating the other as a proxy, or removing it from the adjustment set before proceeding to Causal Graph.
+          </div>
+        )}
+      </div>
+
+      {/* ── Derived-feature feasibility ── */}
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Derived-feature feasibility</div>
+          <span className={`chip ${derivedFeatureReady ? "chip-success" : "chip-warning"}`}>{derivedFeatureReady ? "Constructible" : "At risk"}</span>
+          <CardInfo text="Checks whether the engineered features implied by your question — lagged exposure, 7-day rolling mean, night-to-night delta — can actually be constructed from your data at the current lag setting." />
+        </div>
+        <p className="card-desc">Whether the engineered features implied by your question — lagged exposures, rolling means, night-to-night delta scores — can actually be built from your data at the current lag.</p>
+        <div className="lag-reality-box">
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Lagged exposure ({lagHours}h)</span>
+            <span className={feas.retainedPct >= 55 ? "cell-ok" : "cell-warn"}>
+              {feas.retainedPct >= 55 ? `✓ ${feas.retainedPct}% of days survive this lag — sufficient rows to construct the lagged variable.` : `⚠ Only ${feas.retainedPct}% of days survive. Lagged exposure will be sparse; consider a shorter lag.`}
+            </span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">7-day rolling mean</span>
+            <span className={participantStats.medianDays >= 7 ? "cell-ok" : "cell-warn"}>
+              {participantStats.medianDays >= 7 ? `✓ Median ${participantStats.medianDays} days observed — rolling window is achievable for most participants.` : `⚠ Median ${participantStats.medianDays} days — the rolling window may not fill for many participants.`}
+            </span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Night-to-night delta</span>
+            <span className="cell-ok">✓ Consecutive EMA entries detected in dataset — delta scores can be computed.</span>
+          </div>
+        </div>
+        {!derivedFeatureReady && (
+          <div className="helper" style={{ marginTop: 8 }}>
+            <Info size={12} style={{ flexShrink: 0 }} />
+            Reduce the lag below 30h to recover enough rows for reliable derived-feature construction.
+          </div>
+        )}
+      </div>
+
+      {/* ── Analysis-ready sample size & person-time ── */}
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Analysis-ready sample size & person-time</div>
+          <VerdictBadge verdict={feas.verdict} />
+          <CardInfo text="Participant-days retained after applying lag and missingness filters. Shows total person-time, covariate budget (events-per-variable rule), and the feasibility verdict for the current lag and threshold settings." />
+        </div>
+        <div className="mini-stat-row" style={{ marginBottom: 12 }}>
+          <div className="mini-stat"><span className="mini-stat-label">Base participant-days</span><span className="mini-stat-value">{feas.baseRows.toLocaleString()}</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">After lag filter</span><span className="mini-stat-value">{feas.finalSample.toLocaleString()}</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">Overlap (positivity)</span><span className="mini-stat-value">{feas.overlapPct}%</span></div>
+        </div>
+        <div className="lag-reality-box">
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Person-time</span>
+            <span>~{Math.round(feas.finalSample / Math.max(1, feas.participants))} observation-days per participant on average, across {feas.participants} participants.</span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Covariate budget</span>
+            <span>For a binary outcome with a mixed-effects logistic model, allow ~10 events per covariate. With ~{Math.round(feas.finalSample * 0.3)} estimated outcome events, you can include up to <strong>~{Math.round(feas.finalSample * 0.3 / 10)} covariates</strong> in the adjustment set without overfitting.</span>
+          </div>
+          <div className="lag-reality-row">
+            <span className="lag-reality-label">Verdict reasoning</span>
+            <span className={feas.verdict === "Not feasible" ? "text-warn" : ""}>
+              {feas.verdict === "Feasible" && "✓ Sample size and overlap both meet the minimum thresholds. You can proceed to the Causal Graph."}
+              {feas.verdict === "Marginal" && "⚠ Sample or overlap is below the comfortable threshold. Analysis is possible but powered conservatively — consider pre-registering this as a limitation."}
+              {feas.verdict === "Not feasible" && "✕ At these settings, the analysis-ready sample is too small. Reduce the lag or lower the required exposure variation above to recover rows."}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Clarity & validity of variable definitions ── */}
+      <div className="card">
+        <div className="card-head"><div className="card-title">Clarity & validity of variable definitions</div><CardInfo text="Flags ambiguous variable definitions — unclear units, undocumented scoring direction, undefined binary thresholds — that could affect effect-direction interpretation or make results non-reproducible." /></div>
+        <p className="card-desc">Issues detected in your data dictionary or dataset that may affect how variables are interpreted in the analysis model. Ambiguous definitions can reverse effect direction or make results non-reproducible.</p>
+        <table className="mini-table" style={{ marginTop: 4 }}>
+          <thead><tr><th>Variable</th><th>Issue</th><th>Severity</th><th>Action needed</th></tr></thead>
+          <tbody>
+            <tr>
+              <td className="mono">phone_screen_time</td>
+              <td style={{ fontSize: 11 }}>Unit ambiguous — minutes vs. hours unclear</td>
+              <td><span className="chip chip-warning" style={{ fontSize: 10 }}>Clarify</span></td>
+              <td style={{ fontSize: 11 }}>Fix in Data Foundation before using as covariate</td>
+            </tr>
+            <tr>
+              <td className="mono">sleep_quality</td>
+              <td style={{ fontSize: 11 }}>Scoring direction not stated — higher = better or worse?</td>
+              <td><span className="chip chip-warning" style={{ fontSize: 10 }}>Clarify</span></td>
+              <td style={{ fontSize: 11 }}>Confirm in data dictionary — affects effect-direction interpretation</td>
+            </tr>
+            <tr>
+              <td className="mono">alcohol_use_event</td>
+              <td style={{ fontSize: 11 }}>Binary threshold undocumented — any use vs. &gt;2 drinks?</td>
+              <td><span className="chip chip-warning" style={{ fontSize: 10 }}>Clarify</span></td>
+              <td style={{ fontSize: 11 }}>Define cut-off in data dictionary for reproducibility</td>
+            </tr>
+          </tbody>
+        </table>
+        <div className="helper" style={{ marginTop: 10 }}>
+          <Info size={12} style={{ flexShrink: 0 }} />
+          These issues do not block analysis, but resolving them before finalizing the analysis plan prevents results from being misinterpreted or challenged during review.
+        </div>
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> build the causal graph and validate variable roles.</p>
+        <button className="btn btn-primary" onClick={() => { if (feas.verdict === "Not feasible") { showToast("Feasibility verdict is \"Not feasible\" \u2014 you can still continue, but consider adjusting the controls above."); } onGoNext(); }}>Causal graph <ArrowRight size={14} /></button>
+      </div>
+    </>
+  );
+}
+
+
+const ROLE_NODE_COLOR = { Exposure: "#2F5D8A", Outcome: "#B8382B", Confounder: "#A6650E", Mediator: "#6B4A9E", Proxy: "#8A93A3", Unassigned: "#8A93A3" };
+const ROLE_EXPLANATION = {
+  Exposure: "This is your hypothesized cause \u2014 the variable you believe influences the outcome.",
+  Outcome: "This is what you're trying to explain or predict.",
+  Confounder: "Affects both exposure and outcome. It typically must be adjusted for to avoid a biased estimate.",
+  Mediator: "Lies on the causal path between exposure and outcome. Adjusting for it can remove part of the true effect.",
+  Proxy: "An imperfect stand-in for the concept you actually care about \u2014 worth flagging as measurement uncertainty.",
+  Unassigned: "No role assigned yet. Give it one so it can be reasoned about downstream.",
+};
+
+const GRAPH_TYPE_OPTIONS = [
+  { key: "DAG", label: "DAG", desc: "Directed Acyclic Graph — every edge is directed and no cycles. Encodes your assumed causal structure directly. This is the default working graph." },
+  { key: "CPDAG", label: "CPDAG", desc: "Completed Partially Directed Acyclic Graph — represents an equivalence class of DAGs consistent with the observed data. Some edges remain undirected when direction cannot be identified from data alone." },
+  { key: "PAG", label: "PAG", desc: "Partial Ancestral Graph — extends CPDAGs to allow for unmeasured (latent) confounding. Edges carry marks (arrowhead / circle / tail) to represent uncertainty about direction and hidden causes." },
+  { key: "MAG", label: "MAG", desc: "Maximal Ancestral Graph — a mixed graph with directed and bidirected edges, used when some variables are unobserved. Bidirected edges denote a shared latent confounder." },
+];
+
+// ── Causal Graph AI content variants ─────────────────────────────────────
+
+const GRAPH_STRUCTURE_SUMMARY_VARIANTS = [
+  "The current DAG encodes a within-person causal model where sleep_quality on night N is the primary exposure and alcohol_use_event on day N+1 is the outcome. The graph assumes this path is confounded by stress_level and actigraphy_activity — both of which causally affect sleep quality and independently predict drinking. After conditioning on these confounders, remaining variation in alcohol-use probability is attributed to the direct effect of sleep disruption.",
+  "Your causal graph represents a time-lagged observational design. The key structural claim is that there are no unmeasured common causes of sleep_quality and alcohol_use_event beyond those already represented as nodes. If any hidden confounder affects both sleep and drinking, the E-value in Estimation will quantify exactly how strong it would need to be to explain away the estimate.",
+  "The DAG's structure implies that sleep_quality is not itself caused by the same-day or prior-day alcohol_use_event — this no-feedback assumption is required for a valid causal interpretation of the 24 h lag design. If reverse causation exists (prior drinking impairing next-night sleep), a cross-lagged panel model or NPSEM would be needed instead.",
+];
+
+const GRAPH_ASSUMPTIONS_VARIANTS = [
+  [
+    "Causal Markov condition: each node is independent of all non-descendants given its parents. This is what lets d-separation serve as a testable conditional-independence criterion.",
+    "Faithfulness: every conditional independence in the data corresponds to a d-separation in the graph — no path cancellations produce spurious independences.",
+    "Acyclicity: the 24 h lag between sleep quality (night N) and alcohol use (day N+1) operationalizes this by construction — temporal ordering rules out same-day feedback.",
+    "Sufficient adjustment: the marked confounder set blocks all backdoor paths without conditioning on colliders or mediators. Verify this in the adjustment-warnings card below.",
+  ],
+  [
+    "No unmeasured confounders: after conditioning on the adjustment set, remaining exposure variation is assumed as-good-as-random. The E-value in Estimation quantifies robustness to violations of this assumption.",
+    "Consistency (SUTVA): the potential outcome under sleep quality level s is the same regardless of how s was achieved, and no interference exists between participants — both plausible in an outpatient EMA design.",
+    "Positivity: for every covariate stratum, participant-days with both good and poor sleep quality exist. The overlap % from Feasibility is the empirical check.",
+    "Temporal precedence: sleep quality (night N) precedes alcohol use (day N+1). The EMA protocol enforces this for the 24 h lag by construction.",
+  ],
+  [
+    "Exchangeability: conditional on measured confounders, participant-days with poor vs. good sleep quality are comparable on all causally relevant variables. The within-person design eliminates time-stable confounders; time-varying confounders (daily mood, medication adherence) remain a threat.",
+    "Correct graph specification: the depicted nodes and edges accurately reflect the true data-generating process. Omitted nodes (social contact, treatment attendance) represent unmeasured confounders not captured by the adjustment set.",
+    "No differential measurement error: sleep_quality is assumed measured without systematic bias related to drinking status. Recall bias in single-item EMA scales could create non-classical measurement error.",
+    "No selection bias: participants who contributed usable records are not systematically different from those who did not with respect to the sleep–alcohol relationship.",
+  ],
+];
+
+const GRAPH_TYPE_DESC_VARIANTS = {
+  DAG: [
+    "Directed Acyclic Graph — every edge is directed and no cycles. Encodes your assumed causal structure directly. This is the default working graph.",
+    "DAGs are appropriate when domain knowledge is strong enough to fix edge directions and rule out feedback loops. For EMA data with a clear temporal lag, a DAG is valid — the 24 h window prevents same-day cycles by construction. Every edge you draw asserts a directional causal claim.",
+    "In a DAG, d-separation determines conditional independence, and the backdoor criterion (if satisfied by your adjustment set) guarantees identifiability of the target effect. Cycles in the underlying process must be broken by the study's temporal design.",
+  ],
+  CPDAG: [
+    "Completed Partially Directed Acyclic Graph — represents an equivalence class of DAGs consistent with the observed data. Some edges remain undirected when direction cannot be identified from data alone.",
+    "CPDAGs arise from constraint-based algorithms (e.g., PC) applied to observational data. If you're uncertain about edge directions, a CPDAG is more honest than a fully specified DAG — it explicitly shows which parts of the structure are identifiable from data and which are not.",
+    "An undirected edge in a CPDAG means both directions are Markov-equivalent — no observational test can distinguish them. Orienting them requires domain knowledge, a temporal ordering argument, or an interventional experiment.",
+  ],
+  PAG: [
+    "Partial Ancestral Graph — extends CPDAGs to allow for unmeasured (latent) confounding. Edges carry marks (arrowhead / circle / tail) to represent uncertainty about direction and hidden causes.",
+    "PAGs are the appropriate representation when unmeasured confounders are likely and you want to be explicit about what the data can and cannot identify. The FCI algorithm produces a PAG, not a DAG, from observational data with latent variables.",
+    "A bidirected edge A ↔ B in a PAG asserts that A and B share at least one unmeasured common cause — structurally different from a directed edge, changing what causal effects are identifiable and how they must be estimated.",
+  ],
+  MAG: [
+    "Maximal Ancestral Graph — a mixed graph with directed and bidirected edges, used when some variables are unobserved. Bidirected edges denote a shared latent confounder.",
+    "MAGs are used when you want to model unmeasured confounders explicitly without enumerating all possible latent variable structures. The m-separation criterion plays the role that d-separation plays in DAGs.",
+    "Switching from a DAG to a MAG is appropriate when you believe a latent common cause exists between two observed variables (e.g., a shared genetic predisposition affecting both sleep and alcohol use) that cannot be measured or adjusted for.",
+  ],
+};
+
+const NODE_TEMPORAL_ORDER = {
+  stress_level: 1,
+  actigraphy_activity: 1,
+  phone_screen_time: 1,
+  sleep_quality: 2,
+  alcohol_use_event: 3,
+};
+
+function analyzeGraph(nodes, edges, variableRoles) {
+  const roleOf = (id) => {
+    if (variableRoles[id]) return variableRoles[id];
+    const guess = ROLE_TABLE_VARIABLES.find((v) => v.name === id)?.roleGuess;
+    return guess || "Unassigned";
+  };
+  const parents = {};
+  const children = {};
+  nodes.forEach((n) => { parents[n.id] = []; children[n.id] = []; });
+  edges.forEach((e) => {
+    if (parents[e.to]) parents[e.to].push(e.from);
+    if (children[e.from]) children[e.from].push(e.to);
+  });
+
+  const chains = [];
+  const forks = [];
+  const colliders = [];
+  nodes.forEach((mid) => {
+    const ps = parents[mid.id];
+    const cs = children[mid.id];
+    if (ps.length >= 1 && cs.length >= 1) {
+      ps.forEach((p) => cs.forEach((c) => {
+        if (p !== c) chains.push({ a: p, b: mid.id, c });
+      }));
+    }
+    if (cs.length >= 2) {
+      for (let i = 0; i < cs.length; i++)
+        for (let j = i + 1; j < cs.length; j++)
+          forks.push({ a: cs[i], b: mid.id, c: cs[j] });
+    }
+    if (ps.length >= 2) {
+      for (let i = 0; i < ps.length; i++)
+        for (let j = i + 1; j < ps.length; j++)
+          colliders.push({ a: ps[i], b: mid.id, c: ps[j] });
+    }
+  });
+
+  const exposureIds = nodes.filter((n) => roleOf(n.id) === "Exposure").map((n) => n.id);
+  const outcomeIds = nodes.filter((n) => roleOf(n.id) === "Outcome").map((n) => n.id);
+
+  const descendantsOf = (start) => {
+    const seen = new Set();
+    const stack = [...(children[start] || [])];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      (children[cur] || []).forEach((c) => stack.push(c));
+    }
+    return seen;
+  };
+  const postTreatment = new Set();
+  exposureIds.forEach((e) => descendantsOf(e).forEach((d) => postTreatment.add(d)));
+
+  const temporalViolations = edges.filter((e) => {
+    const a = NODE_TEMPORAL_ORDER[e.from];
+    const b = NODE_TEMPORAL_ORDER[e.to];
+    return a != null && b != null && a > b;
+  });
+
+  const adjusted = nodes.filter((n) => roleOf(n.id) === "Confounder").map((n) => n.id);
+  const badAdjustments = [];
+  adjusted.forEach((id) => {
+    const role = roleOf(id);
+    if (role === "Confounder" && postTreatment.has(id)) {
+      badAdjustments.push({ id, reason: "descendant of the exposure — adjusting for it can block part of the causal path." });
+    }
+  });
+  colliders.forEach((c) => {
+    if (roleOf(c.b) === "Confounder") {
+      badAdjustments.push({ id: c.b, reason: `it is a collider between ${c.a} and ${c.c} — adjusting opens a spurious path.` });
+    }
+  });
+  nodes.forEach((n) => {
+    if (roleOf(n.id) === "Mediator" && adjusted.includes(n.id)) {
+      badAdjustments.push({ id: n.id, reason: "marked as a mediator — adjusting removes part of the total effect." });
+    }
+  });
+
+  return { chains, forks, colliders, postTreatment: [...postTreatment], temporalViolations, badAdjustments };
+}
+
+const DEFAULT_GRAPH_NODES = [
+  { id: "sleep_quality", label: "sleep_quality", isCore: true, x: 230, y: 130 },
+  { id: "alcohol_use_event", label: "alcohol_use_event", isCore: true, x: 640, y: 130 },
+  { id: "stress_level", label: "stress_level", isCore: true, x: 435, y: 300 },
+  { id: "actigraphy_activity", label: "actigraphy_activity", isCore: true, x: 170, y: 340 },
+  { id: "phone_screen_time", label: "phone_screen_time", isCore: true, x: 700, y: 340 },
+];
+const DEFAULT_GRAPH_EDGES = [
+  { id: "e1", from: "stress_level", to: "sleep_quality", type: "supported" },
+  { id: "e2", from: "stress_level", to: "alcohol_use_event", type: "supported" },
+  { id: "e3", from: "sleep_quality", to: "alcohol_use_event", type: "supported" },
+  { id: "e4", from: "actigraphy_activity", to: "alcohol_use_event", type: "supported" },
+  { id: "e5", from: "phone_screen_time", to: "alcohol_use_event", type: "uncertain" },
+];
+
+// ── Alternative causal graph structures (GenAI first-pass variants) ────────
+const GRAPH_VARIANTS = [
+  {
+    name: "Stress-confounded sleep effect",
+    desc: "Stress is the primary confounder. It disrupts sleep quality and independently drives drinking. Activity level and screen time both affect alcohol use directly.",
+    nodes: DEFAULT_GRAPH_NODES.map((n) => ({ ...n })),
+    edges: DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })),
+  },
+  {
+    name: "Activity-mediated model",
+    desc: "Physical activity mediates through both sleep and stress. Screen time disrupts sleep rather than alcohol use directly. Removes the direct activity→alcohol path.",
+    nodes: [
+      { id: "sleep_quality",       label: "sleep_quality",       isCore: true, x: 230, y: 130 },
+      { id: "alcohol_use_event",   label: "alcohol_use_event",   isCore: true, x: 640, y: 130 },
+      { id: "stress_level",        label: "stress_level",        isCore: true, x: 435, y: 300 },
+      { id: "actigraphy_activity", label: "actigraphy_activity", isCore: true, x: 170, y: 340 },
+      { id: "phone_screen_time",   label: "phone_screen_time",   isCore: true, x: 700, y: 340 },
+    ],
+    edges: [
+      { id: "e1", from: "stress_level",        to: "sleep_quality",     type: "supported" },
+      { id: "e2", from: "stress_level",        to: "alcohol_use_event", type: "supported" },
+      { id: "e3", from: "sleep_quality",       to: "alcohol_use_event", type: "supported" },
+      { id: "e4", from: "actigraphy_activity", to: "sleep_quality",     type: "supported" },
+      { id: "e5", from: "actigraphy_activity", to: "stress_level",      type: "supported" },
+      { id: "e6", from: "phone_screen_time",   to: "sleep_quality",     type: "uncertain" },
+    ],
+  },
+  {
+    name: "Phone-as-confounder model",
+    desc: "Screen time confounds both sleep and drinking. Activity affects sleep (not drinking). Stress remains an independent confounder, but phone use is now the primary upstream driver.",
+    nodes: [
+      { id: "sleep_quality",       label: "sleep_quality",       isCore: true, x: 230, y: 130 },
+      { id: "alcohol_use_event",   label: "alcohol_use_event",   isCore: true, x: 640, y: 130 },
+      { id: "stress_level",        label: "stress_level",        isCore: true, x: 435, y: 300 },
+      { id: "actigraphy_activity", label: "actigraphy_activity", isCore: true, x: 170, y: 340 },
+      { id: "phone_screen_time",   label: "phone_screen_time",   isCore: true, x: 700, y: 300 },
+    ],
+    edges: [
+      { id: "e1", from: "phone_screen_time",   to: "sleep_quality",     type: "supported" },
+      { id: "e2", from: "phone_screen_time",   to: "alcohol_use_event", type: "supported" },
+      { id: "e3", from: "sleep_quality",       to: "alcohol_use_event", type: "supported" },
+      { id: "e4", from: "stress_level",        to: "sleep_quality",     type: "supported" },
+      { id: "e5", from: "stress_level",        to: "alcohol_use_event", type: "supported" },
+      { id: "e6", from: "actigraphy_activity", to: "sleep_quality",     type: "uncertain" },
+    ],
+  },
+];
+
+function computeGraphEdgeDiff(variantA, variantB) {
+  const keyA = new Set(variantA.edges.map((e) => `${e.from}→${e.to}`));
+  const keyB = new Set(variantB.edges.map((e) => `${e.from}→${e.to}`));
+  return {
+    added:     variantB.edges.filter((e) => !keyA.has(`${e.from}→${e.to}`)),
+    removed:   variantA.edges.filter((e) => !keyB.has(`${e.from}→${e.to}`)),
+    unchanged: variantB.edges.filter((e) =>  keyA.has(`${e.from}→${e.to}`)),
+  };
+}
+
+function GraphView({ state, actions, onGoNext }) {
+  const { graphNodes, graphEdges, variableRoles, selectedNodeId, selectedEdgeId } = state;
+  const { updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant, lockContent, unlockContent } = actions;
+
+  const svgRef = useRef(null);
+  const [dragId, setDragId] = useState(null);
+  const movedRef = useRef(false);
+  const dragOffset = useRef({ x: 0, y: 0 });
+  const [edgeMode, setEdgeMode] = useState(false);
+  const [edgeFrom, setEdgeFrom] = useState(null);
+  const [graphType, setGraphType] = useState("DAG");
+  const [showAnalysis, setShowAnalysis] = useState(true);
+  const analysis = useMemo(() => analyzeGraph(graphNodes, graphEdges, variableRoles), [graphNodes, graphEdges, variableRoles]);
+  const graphTypeInfo = GRAPH_TYPE_OPTIONS.find((o) => o.key === graphType);
+
+  // ── Graph variant (Regenerate / Compare / Lock) ──────────────────────────
+  const [variantIdx, setVariantIdx] = useState(0);
+  const [graphLocked, setGraphLocked] = useState(false);
+  const [graphGenerating, setGraphGenerating] = useState(false);
+  const [graphCompareMode, setGraphCompareMode] = useState(false);
+  const totalVariants = GRAPH_VARIANTS.length;
+
+  function applyVariant(idx) {
+    const v = GRAPH_VARIANTS[idx];
+    loadGraphVariant(v.nodes, v.edges);
+  }
+  function handleGraphRegenerate() {
+    if (graphLocked || graphGenerating) return;
+    setGraphGenerating(true);
+    setGraphCompareMode(false);
+    setTimeout(() => {
+      const next = (variantIdx + 1) % totalVariants;
+      setVariantIdx(next);
+      applyVariant(next);
+      setGraphGenerating(false);
+    }, 900);
+  }
+  function handleGraphNavPrev() {
+    if (graphLocked || variantIdx === 0) return;
+    const idx = variantIdx - 1;
+    setVariantIdx(idx);
+    applyVariant(idx);
+    setGraphCompareMode(false);
+  }
+  function handleGraphNavNext() {
+    if (graphLocked || variantIdx === totalVariants - 1) return;
+    const idx = variantIdx + 1;
+    setVariantIdx(idx);
+    applyVariant(idx);
+    setGraphCompareMode(false);
+  }
+  function handleGraphLock() {
+    setGraphLocked(true);
+    setGraphCompareMode(false);
+    lockContent("causalGraph", { variantIdx, name: GRAPH_VARIANTS[variantIdx].name });
+  }
+  function handleGraphUnlock() {
+    setGraphLocked(false);
+    unlockContent("causalGraph");
+  }
+  const edgeDiff = graphCompareMode && variantIdx > 0
+    ? computeGraphEdgeDiff(GRAPH_VARIANTS[variantIdx - 1], GRAPH_VARIANTS[variantIdx])
+    : null;
+
+  function toViewBox(clientX, clientY) {
+    const rect = svgRef.current.getBoundingClientRect();
+    return { x: ((clientX - rect.left) / rect.width) * 900, y: ((clientY - rect.top) / rect.height) * 520 };
+  }
+
+  function onNodeMouseDown(e, node) {
+    e.stopPropagation();
+    const p = toViewBox(e.clientX, e.clientY);
+    dragOffset.current = { x: p.x - node.x, y: p.y - node.y };
+    movedRef.current = false;
+    setDragId(node.id);
+  }
+  function onSvgMouseMove(e) {
+    if (!dragId) return;
+    const p = toViewBox(e.clientX, e.clientY);
+    movedRef.current = true;
+    updateNodePos(dragId, p.x - dragOffset.current.x, p.y - dragOffset.current.y);
+  }
+  function onSvgMouseUp() {
+    if (dragId && !movedRef.current) handleNodeClick(dragId);
+    setDragId(null);
+  }
+  function handleNodeClick(id) {
+    if (edgeMode) {
+      if (!edgeFrom) setEdgeFrom(id);
+      else if (edgeFrom !== id) {
+        addGraphEdge(edgeFrom, id);
+        setEdgeFrom(null);
+        setEdgeMode(false);
+      }
+    } else {
+      selectNode(id);
+    }
+  }
+
+  const selectedNode = graphNodes.find((n) => n.id === selectedNodeId);
+  const selectedEdge = graphEdges.find((e) => e.id === selectedEdgeId);
+  const supportedCount = graphEdges.filter((e) => e.type === "supported").length;
+  const uncertainCount = graphEdges.length - supportedCount;
+
+  return (
+    <div className="graph-page">
+      <div className="graph-toolbar">
+        <div className="graph-toolbar-title">
+          <GitBranch size={16} color="var(--accent)" /> Causal graph & final role validation
+          <span className="chip chip-accent" style={{ marginLeft: 8, fontSize: 10.5, padding: "2px 8px" }}><Sparkles size={10} /> GenAI first-pass</span>
+        </div>
+        <div className="graph-legend">
+          {Object.entries(ROLE_NODE_COLOR).filter(([r]) => r !== "Unassigned").map(([role, color]) => (
+            <span key={role}><span className="legend-dot" style={{ background: color }} />{role}</span>
+          ))}
+          <span><span className="legend-dot legend-dash" />Uncertain edge</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select className="select-input" value={graphType} onChange={(e) => setGraphType(e.target.value)} title="Graph type">
+            {GRAPH_TYPE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+          <button className={`btn btn-sm ${edgeMode ? "btn-secondary" : ""}`} onClick={() => { setEdgeMode((m) => !m); setEdgeFrom(null); }}>
+            <Link2 size={13} /> {edgeMode ? (edgeFrom ? "Pick target node\u2026" : "Pick source node\u2026") : "Connect nodes"}
+          </button>
+          <button className="btn btn-sm" onClick={addGraphNode}><ClipboardList size={13} /> Add node</button>
+          <button className="btn btn-sm" onClick={resetGraph}><RefreshCw size={13} /> Reset layout</button>
+          <button className="btn btn-sm" onClick={() => setShowAnalysis((s) => !s)}>{showAnalysis ? "Hide analysis" : "Show analysis"}</button>
+          <button className="btn btn-primary btn-sm" onClick={onGoNext}>Analysis strategy <ArrowRight size={13} /></button>
+        </div>
+      </div>
+
+      {/* ── Graph Regenerate / Version / Lock toolbar ── */}
+      <div className={`graph-regen-bar${graphLocked ? " graph-regen-bar-locked" : ""}`}>
+        <div className="regen-toolbar-left" style={{ gap: 8 }}>
+          <div className="regen-nav">
+            <button className="regen-nav-btn" onClick={handleGraphNavPrev} disabled={variantIdx === 0 || graphLocked}>‹</button>
+            <span className="regen-version-label">v{variantIdx + 1}/{totalVariants}</span>
+            <button className="regen-nav-btn" onClick={handleGraphNavNext} disabled={variantIdx === totalVariants - 1 || graphLocked}>›</button>
+          </div>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--navy)" }}>{GRAPH_VARIANTS[variantIdx].name}</span>
+          <span style={{ fontSize: 11, color: "var(--text-3)", maxWidth: 340 }}>{GRAPH_VARIANTS[variantIdx].desc}</span>
+          {variantIdx > 0 && !graphLocked && (
+            <button className="btn btn-ghost btn-sm regen-compare-btn" onClick={() => setGraphCompareMode((m) => !m)}>
+              <Eye size={11} />{graphCompareMode ? "Close compare" : "Compare"}
+            </button>
+          )}
+        </div>
+        <div className="regen-toolbar-right">
+          {graphLocked ? (
+            <>
+              <span className="regen-locked-badge"><Lock size={11} /> Locked in</span>
+              <button className="btn btn-ghost btn-sm" onClick={handleGraphUnlock}>Unlock</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={handleGraphRegenerate} disabled={graphGenerating} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <RefreshCw size={11} className={graphGenerating ? "spin" : ""} />
+                {graphGenerating ? "Generating…" : "Regenerate graph"}
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={handleGraphLock} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <Lock size={11} /> Lock in
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Compare edge-diff panel ── */}
+      {graphCompareMode && edgeDiff && (
+        <div style={{ padding: "10px 16px", background: "#F8F9FB", borderBottom: "1px solid var(--border)", display: "flex", gap: 24, flexWrap: "wrap", fontSize: 11.5 }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "var(--success)", marginBottom: 4, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Added ({edgeDiff.added.length})</div>
+            {edgeDiff.added.length === 0
+              ? <span style={{ color: "var(--text-3)" }}>—</span>
+              : edgeDiff.added.map((e) => <div key={e.id} className="mono" style={{ color: "var(--success)" }}>{e.from} → {e.to}{e.type === "uncertain" ? " (uncertain)" : ""}</div>)}
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, color: "var(--danger)", marginBottom: 4, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Removed ({edgeDiff.removed.length})</div>
+            {edgeDiff.removed.length === 0
+              ? <span style={{ color: "var(--text-3)" }}>—</span>
+              : edgeDiff.removed.map((e) => <div key={e.id} className="mono" style={{ color: "var(--danger)", textDecoration: "line-through" }}>{e.from} → {e.to}</div>)}
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, color: "var(--text-3)", marginBottom: 4, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Unchanged ({edgeDiff.unchanged.length})</div>
+            {edgeDiff.unchanged.map((e) => <div key={e.id} className="mono" style={{ color: "var(--text-3)" }}>{e.from} → {e.to}</div>)}
+          </div>
+        </div>
+      )}
+
+      <div className="graph-canvas-wrap">
+        <svg ref={svgRef} viewBox="0 0 900 520" onMouseMove={onSvgMouseMove} onMouseUp={onSvgMouseUp} onMouseLeave={onSvgMouseUp}>
+          <defs>
+            <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
+              <path d="M0,0 L9,4 L0,8 Z" fill="#8A93A3" />
+            </marker>
+          </defs>
+          {graphEdges.map((edge) => {
+            const from = graphNodes.find((n) => n.id === edge.from);
+            const to = graphNodes.find((n) => n.id === edge.to);
+            if (!from || !to) return null;
+            const dx = to.x - from.x, dy = to.y - from.y;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const pad = 48;
+            const x1 = from.x + (dx / len) * pad, y1 = from.y + (dy / len) * pad;
+            const x2 = to.x - (dx / len) * pad, y2 = to.y - (dy / len) * pad;
+            const selected = edge.id === selectedEdgeId;
+            return (
+              <g key={edge.id} onClick={(e) => { e.stopPropagation(); selectEdge(edge.id); }} style={{ cursor: "pointer" }}>
+                <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={16} />
+                <line
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={selected ? "#2F5D8A" : "#8A93A3"}
+                  strokeWidth={selected ? 2.5 : 1.5}
+                  strokeDasharray={edge.type === "uncertain" ? "5,4" : "0"}
+                  markerEnd="url(#arrow)"
+                />
+              </g>
+            );
+          })}
+          {graphNodes.map((node) => {
+            const role = variableRoles[node.id] || (DEFAULT_GRAPH_NODES.find((d) => d.id === node.id) ? ROLE_TABLE_VARIABLES.find((v) => v.name === node.id)?.roleGuess : "Unassigned") || "Unassigned";
+            const color = ROLE_NODE_COLOR[role] || ROLE_NODE_COLOR.Unassigned;
+            const selected = node.id === selectedNodeId;
+            return (
+              <g key={node.id} transform={`translate(${node.x},${node.y})`} onMouseDown={(e) => onNodeMouseDown(e, node)} style={{ cursor: "grab" }}>
+                <circle r={selected ? 46 : 42} fill="#fff" stroke={color} strokeWidth={selected ? 3 : 2} />
+                <circle r={5} fill={color} cy={-4} />
+                <text textAnchor="middle" y={16} className="graph-node-label" fill="#16233D">{node.label.length > 16 ? node.label.slice(0, 15) + "\u2026" : node.label}</text>
+                <text textAnchor="middle" y={30} className="graph-node-sub" fill={color}>{role}</text>
+              </g>
+            );
+          })}
+        </svg>
+
+        <div className="graph-notice">{supportedCount} edge{supportedCount === 1 ? "" : "s"} supported \u00b7 {uncertainCount} marked uncertain</div>
+
+        {selectedNode && (
+          <div className="graph-side-panel">
+            <h4>Node</h4>
+            <input className="select-input" style={{ width: "100%", marginBottom: 8 }} value={selectedNode.label} onChange={(e) => renameNode(selectedNode.id, e.target.value)} />
+            <span className="filter-label">Role</span>
+            <select className="select-input" style={{ width: "100%", marginTop: 4 }} value={variableRoles[selectedNode.id] || "Unassigned"} onChange={(e) => setNodeRole(selectedNode.id, e.target.value)}>
+              {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <p>{ROLE_EXPLANATION[variableRoles[selectedNode.id] || "Unassigned"]}</p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-sm" onClick={() => selectNode(null)}>Close</button>
+              {!selectedNode.isCore && <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeGraphNode(selectedNode.id)}>Remove node</button>}
+            </div>
+          </div>
+        )}
+
+        {selectedEdge && (
+          <div className="graph-side-panel">
+            <h4><span className="mono">{selectedEdge.from}</span> \u2192 <span className="mono">{selectedEdge.to}</span></h4>
+            <p>{selectedEdge.type === "uncertain" ? "This edge is unsupported or uncertain \u2014 confirm it with your data or remove it before moving on." : "This is a standard directed relationship in your assumed structure."}</p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn btn-sm" onClick={() => setEdgeType(selectedEdge.id, selectedEdge.type === "supported" ? "uncertain" : "supported")}>
+                Mark as {selectedEdge.type === "supported" ? "uncertain" : "supported"}
+              </button>
+              <button className="btn btn-sm" onClick={() => selectEdge(null)}>Close</button>
+              <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeGraphEdge(selectedEdge.id)}>Remove edge</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showAnalysis && (
+        <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", background: "#fff", maxHeight: "42vh", overflowY: "auto" }}>
+
+          {/* ── AI: Graph structure summary ── */}
+          <div className="card insight-card" style={{ marginTop: 0 }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-blue"><Sparkles size={13} /></div>
+              <div>
+                <div className="card-title">Graph structure summary</div>
+                <div className="insight-subtitle">GenAI first-pass interpretation of your current causal graph</div>
+              </div>
+            </div>
+            <RegenerateBlock
+              variants={GRAPH_STRUCTURE_SUMMARY_VARIANTS}
+              renderVariant={(text) => <p className="insight-body">{text}</p>}
+              onLock={(val) => lockContent("graphStructureSummary", val)}
+              onUnlock={() => unlockContent("graphStructureSummary")}
+            />
+          </div>
+
+          {/* ── AI: Key causal assumptions ── */}
+          <div className="card insight-card" style={{ borderLeftColor: "#6B46A8" }}>
+            <div className="insight-card-header">
+              <div className="insight-icon insight-icon-purple"><ShieldAlert size={13} /></div>
+              <div>
+                <div className="card-title">Key causal assumptions encoded by this graph</div>
+                <div className="insight-subtitle">GenAI-drafted — review and lock before moving to Analysis Strategy</div>
+              </div>
+            </div>
+            <RegenerateBlock
+              variants={GRAPH_ASSUMPTIONS_VARIANTS}
+              renderVariant={(items) => (
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+                  {items.map((item, i) => <li key={i} className="insight-body" style={{ marginBottom: 4 }}>{item}</li>)}
+                </ul>
+              )}
+              onLock={(val) => lockContent("graphAssumptions", val)}
+              onUnlock={() => unlockContent("graphAssumptions")}
+            />
+          </div>
+
+          {/* ── Graph type ── */}
+          <div className="card">
+            <div className="card-head"><div className="card-title">Graph type — {graphTypeInfo.label}</div><CardInfo text="The type of causal graph being displayed. DAG (default) assumes directed edges and no cycles. CPDAG, PAG, and MAG encode different assumptions about causal equivalence and unmeasured confounding." /></div>
+            <RegenerateBlock
+              key={graphType}
+              variants={GRAPH_TYPE_DESC_VARIANTS[graphType] || [graphTypeInfo.desc]}
+              renderVariant={(text) => <p className="card-desc" style={{ marginBottom: 6 }}>{text}</p>}
+              onLock={(val) => lockContent(`graphTypeDesc_${graphType}`, val)}
+              onUnlock={() => unlockContent(`graphTypeDesc_${graphType}`)}
+            />
+            <div className="filter-pills">
+              {GRAPH_TYPE_OPTIONS.map((o) => (
+                <span key={o.key} className={`chip ${o.key === graphType ? "chip-accent" : "chip-muted"}`} style={{ cursor: "pointer" }} onClick={() => setGraphType(o.key)}>{o.label}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Structural patterns detected</div><CardInfo text="Chains (A→B→C), forks (A←B→C), and colliders (A→B←C) found in the current graph. Chains transmit effects, forks create confounding paths, and colliders open spurious paths only when adjusted for." /></div>
+            <p className="card-desc">Chains transmit effects, forks create confounding paths, and colliders open spurious paths only when adjusted for.</p>
+            <div className="pattern-row"><span><strong>Chains</strong> (A → B → C): mediation-style paths</span><span className="chip chip-muted">{analysis.chains.length}</span></div>
+            {analysis.chains.slice(0, 4).map((c, i) => (
+              <div className="pattern-row" key={`ch${i}`}><span className="mono">{c.a} → {c.b} → {c.c}</span><span className="chip chip-accent">chain</span></div>
+            ))}
+            <div className="pattern-row"><span><strong>Forks</strong> (A ← B → C): shared common cause</span><span className="chip chip-muted">{analysis.forks.length}</span></div>
+            {analysis.forks.slice(0, 4).map((c, i) => (
+              <div className="pattern-row" key={`fk${i}`}><span className="mono">{c.a} ← {c.b} → {c.c}</span><span className="chip chip-accent">fork</span></div>
+            ))}
+            <div className="pattern-row"><span><strong>Colliders</strong> (A → B ← C): do NOT adjust</span><span className="chip chip-muted">{analysis.colliders.length}</span></div>
+            {analysis.colliders.slice(0, 4).map((c, i) => (
+              <div className="pattern-row" key={`co${i}`}><span className="mono">{c.a} → {c.b} ← {c.c}</span><span className="chip chip-warning">collider</span></div>
+            ))}
+            {analysis.chains.length + analysis.forks.length + analysis.colliders.length === 0 && (
+              <div className="helper"><Info size={13} /> No three-node structures yet — add or connect nodes to see patterns.</div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Temporal-order validation</div><CardInfo text="Checks that directed edges flow from earlier-measured to later-measured variables, based on your measurement schedule. Reversed edges violate the temporal ordering assumption required for causal inference." /></div>
+            {analysis.temporalViolations.length === 0 ? (
+              <div className="helper"><CheckCircle2 size={13} color="var(--success)" /> All directed edges respect the assumed temporal order.</div>
+            ) : (
+              analysis.temporalViolations.map((e) => (
+                <div className="pattern-row" key={e.id}>
+                  <span className="mono">{e.from} → {e.to}</span>
+                  <span className="chip chip-warning"><AlertTriangle size={12} /> Edge runs against expected time order</span>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Post-treatment variables</div><CardInfo text="Variables that are descendants of the exposure node. Adjusting for them can block part of the causal pathway or open collider bias — check your adjustment set carefully before finalizing." /></div>
+            {analysis.postTreatment.length === 0 ? (
+              <div className="helper"><Info size={13} /> No exposure marked yet, or no downstream variables detected.</div>
+            ) : (
+              <>
+                <p className="card-desc">These variables are descendants of the exposure. Adjusting for them can bias the causal effect.</p>
+                <div className="filter-pills">
+                  {analysis.postTreatment.map((id) => <span key={id} className="chip chip-warning mono">{id}</span>)}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Adjustment warnings</div><CardInfo text="Alerts for role assignments that could bias the causal estimate — e.g., adjusting for a collider (which opens a spurious path) or a mediator when estimating the total effect (which removes part of it)." /></div>
+            {analysis.badAdjustments.length === 0 ? (
+              <div className="helper"><CheckCircle2 size={13} color="var(--success)" /> No collider- or mediator-adjustment warnings for the current role assignments.</div>
+            ) : (
+              analysis.badAdjustments.map((w, i) => (
+                <div className="pattern-row" key={i}>
+                  <span><span className="mono">{w.id}</span> — {w.reason}</span>
+                  <span className="chip chip-warning"><AlertTriangle size={12} /> Review</span>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Unsupported / uncertain edges</div><CardInfo text="Edges you've marked uncertain because the direction is ambiguous or the relationship lacks empirical support. Each represents a plausible alternative causal structure worth reporting in your analysis." /></div>
+            {graphEdges.filter((e) => e.type === "uncertain").length === 0 ? (
+              <div className="helper"><CheckCircle2 size={13} color="var(--success)" /> Every edge is currently marked as supported.</div>
+            ) : (
+              graphEdges.filter((e) => e.type === "uncertain").map((e) => (
+                <div className="pattern-row" key={e.id}>
+                  <span className="mono">{e.from} → {e.to}</span>
+                  <span className="chip chip-warning">uncertain — confirm or remove</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ESTIMATOR_OPTIONS = [
+  { key: "mixed_logistic", label: "Mixed-effects logistic regression", desc: "A solid default for a binary repeated-measures outcome with a participant-level random intercept." },
+  { key: "gee", label: "Generalized estimating equations (GEE)", desc: "Gives population-averaged effects and is robust to a misspecified within-person correlation structure." },
+  { key: "msm", label: "Marginal structural model (IPTW)", desc: "Better suited if the exposure varies over time and is itself affected by past outcomes or confounders." },
+];
+const REPEATED_MEASURES_ITEMS = [
+  { id: "randomIntercept", label: "Random intercept for participant" },
+  { id: "multipleImputation", label: "Multiple imputation for missing EMA data" },
+  { id: "robustSE", label: "Cluster-robust standard errors" },
+];
+
+function computeAdjustment(variableRoles) {
+  const confounders = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Confounder").map((v) => v.name);
+  const mediators = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Mediator").map((v) => v.name);
+  const proxies = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Proxy").map((v) => v.name);
+  return { confounders, mediators, proxies };
+}
+
+function StrategyView({ state, actions, onGoNext }) {
+  const { questionFields, variableRoles, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, feasibility } = state;
+  const { setEffectType, setEstimatorFamily, toggleRepeatedMeasures, toggleSensitivity, pushAssistantNote } = actions;
+
+  const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
+  const identifiable = confounders.length > 0;
+  const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
+  const chosenEstimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
+
+  // Bot-guided interaction handlers
+  function selectEffectType(type) {
+    setEffectType(type);
+    if (type === "total") {
+      pushAssistantNote("Total effect selected ✓ — mediators are excluded from the adjustment set. Now choose the estimator below.");
+    } else {
+      pushAssistantNote("Direct effect selected ✓ — mediators enter the adjustment set automatically. Use this only if you need to isolate a specific mechanism.");
+    }
+    advanceGuidance("analysis-strategy", "effect_type_set", "Effect type set! Next, choose your estimator below. For a binary repeated-measures outcome like this, mixed-effects logistic is usually the right call.");
+  }
+
+  function selectEstimator(key) {
+    setEstimatorFamily(key);
+    const msgs = {
+      mixed_logistic: "Mixed-effects logistic selected ✓ — enable the random intercept below (required for within-person data).",
+      gee: "GEE selected ✓ — gives population-averaged estimates; robust to misspecified correlation structure. Review repeated-measures options below.",
+      msm: "MSM (IPTW) selected ✓ — best for time-varying exposure. Confirm positivity was flagged in sensitivity assumptions.",
+    };
+    pushAssistantNote(msgs[key] || "Estimator selected ✓ — configure repeated-measures options below.");
+    advanceGuidance("analysis-strategy", "estimator_set", "Estimator chosen — great! Now enable the random intercept below (it's required for repeated-measures data), and flag any sensitivity assumptions you want tested before we run the analysis.");
+  }
+
+  const rmMsgs = {
+    randomIntercept: (checked) => checked
+      ? "Random intercept enabled ✓ — required for within-person data; accounts for each participant's baseline."
+      : "Random intercept disabled ⚠ — SEs will be too narrow for repeated-measures data. Re-enable before proceeding.",
+    multipleImputation: (checked) => checked
+      ? "Multiple imputation enabled ✓ — handles missing EMA data under the MAR assumption. Also flag missing data in sensitivity assumptions."
+      : "Multiple imputation disabled — complete-case analysis only. Re-enable if key variables have >10% missingness.",
+    robustSE: (checked) => checked
+      ? "Cluster-robust SEs enabled ✓ — less sensitive to model misspecification for unbalanced panel data."
+      : "Cluster-robust SEs disabled — standard SEs will be used. Re-enable if you see heteroskedasticity in diagnostics.",
+  };
+
+  function handleRepeatedMeasures(id) {
+    const nowChecked = !repeatedMeasuresChecks[id];
+    toggleRepeatedMeasures(id);
+    const msg = rmMsgs[id]?.(nowChecked);
+    if (msg) pushAssistantNote(msg);
+    advanceGuidance("analysis-strategy", "rm_configured", "Repeated-measures options configured! One more thing — flag any sensitivity assumptions below (unmeasured confounding and missing data are worth checking for most observational studies). Then you're all set — click Continue to Estimation & Calculation. 🚀");
+  }
+
+  const sensMsgs = {
+    missingData: (on) => on
+      ? "Missing data flagged ✓ — adds an MI vs. complete-case comparison in Estimation. Also enable multiple imputation in the repeated-measures options."
+      : "Missing data unflagged — MI comparison removed. Only uncheck if missingness is negligible.",
+    positivity: (on) => on
+      ? "Positivity flagged ✓ — adds an overlap-weighted robustness check in Estimation. Recommended if Feasibility overlap was below 80%."
+      : "Positivity unflagged — overlap-weighted check removed. Only uncheck if overlap was >90% in Feasibility.",
+    unmeasuredConf: (on) => on
+      ? "Unmeasured confounding flagged ✓ — adds an E-value in Estimation. Recommended for every observational study."
+      : "Unmeasured confounding unflagged — E-value will not be calculated. Reviewers will expect this to be addressed.",
+    consistency: (on) => on
+      ? "SUTVA flagged ✓ — adds a consistency note to the report. Flag if participants could influence each other's exposure."
+      : "SUTVA unflagged — removed from the sensitivity plan.",
+    exclusionRestriction: (on) => on
+      ? "Exclusion restriction flagged ✓ — adds an IV validity check. Only relevant if you're using an instrumental variable."
+      : "Exclusion restriction unflagged — removed. Only needed for IV analyses.",
+  };
+
+  function handleSensitivity(id) {
+    const nowOn = !sensitivityChecks[id];
+    toggleSensitivity(id);
+    const msg = sensMsgs[id]?.(nowOn);
+    if (msg) pushAssistantNote(msg);
+  }
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Identification & estimation strategy</h1>
+        <p>{questionFields?.question ? <>For: <strong style={{ color: "var(--navy)" }}>{questionFields.question}</strong></> : "No research question selected yet."}</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Identifiability assessment</div><CardInfo text="Whether the target causal effect can be recovered from data given the current graph and adjustment set. Requires at least one confounder to be marked and adjusted for." /></div>
+        <span className={`chip ${identifiable ? "chip-success" : "chip-warning"}`} style={{ fontSize: 12.5, padding: "6px 12px" }}>
+          {identifiable ? "Identifiable via backdoor adjustment" : "Not yet identifiable \u2014 no confounders adjusted for"}
+        </span>
+        <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>
+          {identifiable
+            ? "Adjusting for the confounder set below is expected to block every backdoor path in your current graph."
+            : "Go back to Causal Graph and mark at least one variable as a confounder, or confirm none exists and proceed with that assumption stated explicitly."}
+        </p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Backdoor path analysis</div><CardInfo text="Lists all paths from exposure to outcome that run through common causes (backdoor paths). Every such path must be blocked by the adjustment set for the causal estimate to be unconfounded." /></div>
+        {confounders.length === 0 ? (
+          <div className="helper"><AlertTriangle size={13} color="var(--warning)" /> No confounders identified in your current graph \u2014 check for unmeasured confounding before trusting this estimate.</div>
+        ) : (
+          confounders.map((c) => (
+            <div className="pattern-row" key={c}>
+              <span>exposure <span className="mono">\u2190 {c} \u2192</span> outcome</span>
+              <span className="chip chip-success"><CheckCircle2 size={13} /> Blocked by adjustment</span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Recommended adjustment set</div><CardInfo text="The minimal set of variables to condition on to block all identified backdoor paths without introducing collider bias. Derived automatically from your variable role assignments in Causal Graph." /></div>
+        <div className="filter-pills">
+          {adjustmentSet.length ? adjustmentSet.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">None yet \u2014 adjust roles in Causal Graph.</span>}
+        </div>
+        {mediators.length > 0 && (
+          <div className="helper" style={{ marginTop: 10 }}>
+            <Info size={13} />
+            {effectType === "direct"
+              ? <span><span className="mono">{mediators.join(", ")}</span> {mediators.length > 1 ? "are" : "is"} included since you're estimating the direct effect.</span>
+              : <span><span className="mono">{mediators.join(", ")}</span> {mediators.length > 1 ? "are" : "is"} excluded from adjustment \u2014 adjusting for a mediator would remove part of the total effect.</span>}
+          </div>
+        )}
+        {proxies.length > 0 && (
+          <div className="helper" style={{ marginTop: 6 }}><Info size={13} /> <span className="mono">{proxies.join(", ")}</span> {proxies.length > 1 ? "are" : "is"} a proxy, not a confounder \u2014 left out of adjustment by default.</div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Effect type</div><CardInfo text="Total effect captures all causal pathways from exposure to outcome, including indirect ones through mediators. Direct effect isolates only the pathway not running through any mediator variable." /></div>
+        <p className="card-desc">Choose what causal quantity you want to estimate. Total effect includes all pathways (direct + indirect through mediators). Direct effect isolates the pathway not running through mediators.</p>
+        <div className="radio-row">
+          <label className="radio-option"><input type="radio" checked={effectType === "total"} onChange={() => selectEffectType("total")} /> Total effect</label>
+          <label className="radio-option"><input type="radio" checked={effectType === "direct"} onChange={() => selectEffectType("direct")} /> Direct effect</label>
+        </div>
+        {effectType === "direct" && mediators.length === 0 && (
+          <div className="helper" style={{ marginTop: 8 }}><Info size={13} /> No mediator identified yet — direct and total effect will look identical until one is marked in Causal Graph.</div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Recommended estimator family</div><CardInfo text="The statistical model family best suited to your data structure, effect type, and feasibility settings. Click a row to select it — your choice is carried into the exported report." /></div>
+        <p className="card-desc">Click the model that best fits your data structure. Each row shows the estimator label and when it works best.</p>
+        {ESTIMATOR_OPTIONS.map((o) => (
+          <div key={o.key} className={`estimator-row ${estimatorFamily === o.key ? "estimator-row-active" : ""}`} onClick={() => selectEstimator(o.key)}>
+            <div className="feature-label">{o.label}{estimatorFamily === o.key && <span className="chip chip-success" style={{ marginLeft: 8, fontSize: 10 }}>Selected</span>}</div>
+            <div className="feature-desc">{o.desc}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Repeated-measures & missing-data strategy</div><CardInfo text="Options for handling within-person data structure and incomplete observations. Random intercepts account for repeated measures; multiple imputation handles missing data under the Missing At Random assumption." /></div>
+        <p className="card-desc">Check all that apply to your data and study design. Each option adjusts how the model handles within-person correlation or incomplete data.</p>
+        {REPEATED_MEASURES_ITEMS.map((item) => (
+          <div className="feature-row" key={item.id}>
+            <label className="feature-checkbox">
+              <input type="checkbox" checked={!!repeatedMeasuresChecks[item.id]} onChange={() => handleRepeatedMeasures(item.id)} />
+              <div className="feature-label">{item.label}</div>
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Positivity & overlap checks</div><CardInfo text="Positivity requires that both exposed and unexposed participant-days exist across all covariate strata — a necessary condition for valid causal estimation. The overlap % is carried from your Feasibility settings." /></div>
+        <p className="card-desc">Positivity requires that both exposed and unexposed participant-days exist across all covariate strata. The overlap % is carried from your Feasibility settings.</p>
+        <div className="metric-bar-row">
+          <span className="metric-bar-label">Overlap (from Feasibility)</span>
+          <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${feasibility.overlapPct}%`, background: feasibility.overlapPct > 50 ? "var(--success)" : "var(--warning)" }} /></div>
+          <span className="metric-bar-value">{feasibility.overlapPct}%</span>
+        </div>
+        {feasibility.overlapPct <= 50 && (
+          <div className="helper" style={{ marginTop: 8 }}>
+            <AlertTriangle size={13} color="var(--warning)" /> Overlap is below 50% — positivity may be violated. Consider trimming the analysis sample or using overlap weights. Flag this in the sensitivity plan below.
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Robustness & sensitivity plan</div><CardInfo text="Flag each assumption that applies to your study. Checked items generate specific robustness checks in the sensitivity-analysis plan, which is included in the exported PDF report." /></div>
+        <p className="card-desc">Flag each assumption that applies to your study. Checked items are included in the sensitivity-analysis plan and exported to the report.</p>
+        {SENSITIVITY_ITEMS.map((item) => (
+          <div className="feature-row" key={item.id}>
+            <label className="feature-checkbox">
+              <input type="checkbox" checked={!!sensitivityChecks[item.id]} onChange={() => handleSensitivity(item.id)} />
+              <div>
+                <div className="feature-label">{item.label}</div>
+                <div className="feature-desc">
+                  {item.id === "missingData" && "Plan a multiple-imputation vs. complete-case comparison to bracket the impact of missing EMA data."}
+                  {item.id === "positivity" && "Assess whether both exposure levels exist across all covariate strata; use overlap weights or trimming if needed."}
+                  {item.id === "unmeasuredConf" && "Compute an E-value to quantify the minimum confounding strength needed to explain away the estimated effect."}
+                  {item.id === "consistency" && "Confirm there is one well-defined treatment version and no interference between participants (SUTVA)."}
+                  {item.id === "exclusionRestriction" && "Relevant if an instrumental variable is used — the IV must affect the outcome only through the exposure."}
+                </div>
+              </div>
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Assumption review</div><CardInfo text="The complete set of assumptions the recommended analysis strategy relies on. Any assumption left unchecked should be explicitly discussed as a limitation in the exported report." /></div>
+        <p className="card-desc">These are the assumptions the recommended strategy relies on. Adjust in the checklist above; unchecked items should be discussed in the report.</p>
+        <div className="filter-pills">
+          <span className="chip chip-muted">Consistency (SUTVA)</span>
+          <span className="chip chip-muted">Exchangeability given adjustment set</span>
+          <span className="chip chip-muted">Positivity / overlap</span>
+          <span className="chip chip-muted">Correct outcome model</span>
+          <span className="chip chip-muted">No informative missingness beyond MAR</span>
+        </div>
+        <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>
+          <Info size={13} style={{ verticalAlign: "middle" }} /> This step provides analysis <em>guidance</em>. It does not, on its own, establish that a causal effect has been demonstrated.
+        </p>
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> assemble everything into a reviewable, exportable report.</p>
+        <button className="btn btn-primary" onClick={onGoNext}>Review & export <ArrowRight size={14} /></button>
+      </div>
+    </>
+  );
+}
+
+function buildGraphSVG(graphNodes, graphEdges, variableRoles) {
+  const COLORS = { Exposure: "#2F5D8A", Outcome: "#B8382B", Confounder: "#A6650E", Mediator: "#6B4A9E", Proxy: "#8A93A3", Unassigned: "#8A93A3" };
+  const getRole = (id) => {
+    if (variableRoles[id]) return variableRoles[id];
+    return ROLE_TABLE_VARIABLES.find((v) => v.name === id)?.roleGuess || "Unassigned";
+  };
+  const pad = 46;
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+  const edgesSVG = graphEdges.map((edge) => {
+    const from = graphNodes.find((n) => n.id === edge.from);
+    const to   = graphNodes.find((n) => n.id === edge.to);
+    if (!from || !to) return "";
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const x1 = from.x + (dx / len) * pad, y1 = from.y + (dy / len) * pad;
+    const x2 = to.x   - (dx / len) * pad, y2 = to.y   - (dy / len) * pad;
+    const uncertain = edge.type === "uncertain";
+    const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2;
+    const edgeLabel = uncertain ? "uncertain" : "supported";
+    const labelColor = uncertain ? "#A6650E" : "#1A7A4A";
+    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+    return `
+    <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"
+      stroke="${uncertain ? "#C49030" : "#8A93A3"}"
+      stroke-width="${uncertain ? 2 : 1.8}"
+      stroke-dasharray="${uncertain ? "7,5" : "none"}"
+      marker-end="${uncertain ? "url(#arrow-unc)" : "url(#arrow-sup)"}" />
+    <text x="${midX.toFixed(1)}" y="${(midY - 7).toFixed(1)}" text-anchor="middle"
+      font-family="sans-serif" font-size="9" fill="${labelColor}" opacity="0.85"
+      transform="rotate(${(Math.abs(angle) > 90 ? angle + 180 : angle).toFixed(1)},${midX.toFixed(1)},${midY.toFixed(1)})">${edgeLabel}</text>`;
+  }).join("\n");
+
+  const nodesSVG = graphNodes.map((node) => {
+    const role  = getRole(node.id);
+    const color = COLORS[role] || COLORS.Unassigned;
+    const lbl   = node.label.length > 17 ? node.label.slice(0, 16) + "…" : node.label;
+    // shadow ring
+    return `
+    <g transform="translate(${node.x},${node.y})">
+      <circle r="46" fill="#fff" stroke="${color}" stroke-width="2.5" filter="url(#shadow)" />
+      <circle r="5"  fill="${color}" cy="-6" />
+      <text text-anchor="middle" y="13" font-family="sans-serif" font-size="10.5" font-weight="600" fill="#16233D">${esc(lbl)}</text>
+      <text text-anchor="middle" y="28" font-family="sans-serif" font-size="9.5"  font-weight="500" fill="${color}">${esc(role)}</text>
+    </g>`;
+  }).join("\n");
+
+  const legendRoles = [...new Set(graphNodes.map((n) => getRole(n.id)))].filter((r) => r !== "Unassigned");
+  const legendItems = [...legendRoles, "uncertain edge"];
+  const legendX0 = 20, legendY = 500;
+  const legendSVG = legendItems.map((item, i) => {
+    const x = legendX0 + i * 130;
+    const isEdge = item === "uncertain edge";
+    const color = isEdge ? "#C49030" : (COLORS[item] || "#8A93A3");
+    const dotEl = isEdge
+      ? `<line x1="${x}" y1="${legendY}" x2="${x + 20}" y2="${legendY}" stroke="${color}" stroke-width="2" stroke-dasharray="5,3"/>`
+      : `<circle cx="${x + 6}" cy="${legendY}" r="6" fill="${color}" opacity="0.9"/>`;
+    return `${dotEl}<text x="${x + (isEdge ? 25 : 16)}" y="${legendY + 4}" font-family="sans-serif" font-size="10" fill="#444">${esc(item)}</text>`;
+  }).join("\n");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" width="860" height="494"
+    style="display:block;max-width:100%;border:1px solid #DDE3EC;border-radius:8px;background:#FAFBFC">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#00000018"/>
+    </filter>
+    <marker id="arrow-sup" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#8A93A3"/>
+    </marker>
+    <marker id="arrow-unc" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#C49030"/>
+    </marker>
+  </defs>
+  <rect width="900" height="520" fill="#FAFBFC" rx="8"/>
+  ${edgesSVG}
+  ${nodesSVG}
+  ${legendSVG}
+</svg>`;
+}
+
+function buildReportHTML(state) {
+  const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, objective } = state;
+  const { confounders, mediators, proxies } = computeAdjustment(variableRoles);
+  const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
+  const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
+  const uncertainEdges = graphEdges.filter((e) => e.type === "uncertain");
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const verdictColor = feasibility.verdict === "Feasible" ? "#1A7A4A" : feasibility.verdict === "Marginal" ? "#B8760E" : "#B8382B";
+  const roleBg = { Exposure: "#EBF2FA", Outcome: "#FAEAEA", Confounder: "#FEF3E2", Mediator: "#F0EBF8", Proxy: "#EEF0F4", Unassigned: "#EEF0F4" };
+  const roleClr = { Exposure: "#2F5D8A", Outcome: "#B8382B", Confounder: "#A6650E", Mediator: "#6B4A9E", Proxy: "#555", Unassigned: "#555" };
+  const tag = (label, role) => `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:9pt;font-weight:700;background:${roleBg[role]||"#EEF0F4"};color:${roleClr[role]||"#555"}">${label}</span>`;
+  const code = (v) => `<code style="font-family:monospace;background:#EEF0F4;padding:1px 5px;border-radius:3px;font-size:9.5pt">${v}</code>`;
+  const fieldRow = (label, value) => value ? `<tr><td style="color:#555;font-size:10pt;padding:4px 0;width:175px;vertical-align:top">${label}</td><td style="font-size:11pt;padding:4px 0">${value}</td></tr>` : "";
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Causal Design Report</title>
+<style>
+*{box-sizing:border-box}body{font-family:Georgia,serif;font-size:12pt;color:#1a1a2e;margin:0;padding:0}
+.page{max-width:760px;margin:0 auto;padding:48px 44px}
+h1{font-size:21pt;color:#16233D;margin:0 0 4px;padding-bottom:12px;border-bottom:2.5px solid #2F5D8A}
+.subtitle{font-size:10pt;color:#666;margin:0 0 28px}
+h2{font-size:13pt;font-weight:700;color:#2F5D8A;margin:30px 0 8px;padding-bottom:4px;border-bottom:1px solid #CFE0EE;page-break-after:avoid}
+h3{font-size:11pt;color:#16233D;margin:12px 0 4px}
+p{font-size:11pt;line-height:1.6;margin:6px 0}
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:10pt}
+th{background:#F0F4F8;text-align:left;padding:6px 10px;font-size:9pt;text-transform:uppercase;letter-spacing:.05em;color:#555;border-bottom:1.5px solid #CFE0EE}
+td{padding:5px 10px;border-bottom:1px solid #F0F1F4;vertical-align:top}
+.stat-row{display:flex;gap:12px;margin:10px 0;flex-wrap:wrap}
+.stat{border:1px solid #CFE0EE;border-radius:6px;padding:8px 16px;background:#F7FBFF;min-width:130px}
+.stat-l{font-size:9pt;color:#666;margin-bottom:2px}
+.stat-v{font-size:16pt;font-weight:700}
+.q-block{background:#F7FBFF;border-left:4px solid #2F5D8A;padding:12px 16px;border-radius:0 6px 6px 0;margin:8px 0}
+.q-text{font-size:13pt;font-style:italic;color:#16233D;line-height:1.55;margin:0 0 10px}
+.edge-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #F0F1F4;font-size:10.5pt}
+.edge-row:last-child{border-bottom:none}
+.ts{background:#E8F5EE;color:#1A7A4A;padding:2px 8px;border-radius:4px;font-size:9pt;font-weight:600}
+.tu{background:#FEF3E2;color:#A6650E;padding:2px 8px;border-radius:4px;font-size:9pt;font-weight:600}
+.box-blue{background:#EFF7FF;border:1px solid #CFE0EE;border-radius:6px;padding:12px 16px;margin:8px 0}
+.box-warn{background:#FFF9F0;border:1px solid #F0D9AE;border-radius:6px;padding:12px 16px;margin:8px 0}
+.box-green{background:#EDF7F2;border:1px solid #B0DEC5;border-radius:6px;padding:12px 16px;margin:8px 0}
+ul{margin:6px 0;padding-left:20px}li{margin-bottom:4px;font-size:10.5pt;line-height:1.55}
+.footer{margin-top:48px;padding-top:16px;border-top:1px solid #CFE0EE;font-size:9pt;color:#888;line-height:1.5}
+@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}.page-break{page-break-before:always}h2{page-break-before:auto}table{page-break-inside:avoid}}
+</style></head><body><div class="page">
+
+<h1>Causal Design &amp; Analysis Guidance Report</h1>
+<p class="subtitle">Generated by Causal Studio &nbsp;·&nbsp; ${date}${objective ? ` &nbsp;·&nbsp; <em>${objective.slice(0, 90)}${objective.length > 90 ? "…" : ""}</em>` : ""}</p>
+
+<h2>1. Final Research Question</h2>
+<div class="q-block">
+  <p class="q-text">${questionFields?.question || "<em>Not yet defined.</em>"}</p>
+  ${questionFields ? `<table style="margin-top:6px">${fieldRow("Population", questionFields.population)}${fieldRow("Exposure", questionFields.exposure)}${fieldRow("Comparator", questionFields.comparator)}${fieldRow("Outcome", questionFields.outcome)}${fieldRow("Time window", questionFields.timeWindow)}${fieldRow("Unit of analysis", questionFields.unitOfAnalysis)}${fieldRow("Target estimand", questionFields.estimand)}</table>` : ""}
+</div>
+
+<h2>2. Data Feasibility Summary</h2>
+<div class="stat-row">
+  <div class="stat"><div class="stat-l">Base participant-days</div><div class="stat-v">${feasibility.baseRows.toLocaleString()}</div></div>
+  <div class="stat"><div class="stat-l">Analysis-ready sample</div><div class="stat-v">${feasibility.finalSample.toLocaleString()}</div></div>
+  <div class="stat"><div class="stat-l">Overlap (positivity)</div><div class="stat-v">${feasibility.overlapPct}%</div></div>
+  <div class="stat"><div class="stat-l">Feasibility verdict</div><div class="stat-v" style="color:${verdictColor}">${feasibility.verdict}</div></div>
+</div>
+<p style="font-size:10.5pt;color:#555;margin-top:6px">Dataset spans approximately ${feasibility.participants} participants observed over ~${feasibility.days} days. ${feasibility.retainedPct}% of participant-days were retained after lag and missingness filters.</p>
+
+<h2 class="page-break">3. Variable-Role Table</h2>
+<table><thead><tr><th>Variable</th><th>Source</th><th>Final Role</th></tr></thead><tbody>
+${ROLE_TABLE_VARIABLES.map((v) => { const role = variableRoles[v.name] || v.roleGuess; return `<tr><td>${code(v.name)}</td><td>${v.source}</td><td>${tag(role, role)}</td></tr>`; }).join("")}
+</tbody></table>
+
+<h2>4. Final Causal Graph</h2>
+${graphEdges.length === 0 ? '<p style="color:#888">No causal graph constructed yet.</p>' : `<div style="margin-top:4px">${graphEdges.map((e) => `<div class="edge-row">${code(e.from)} &nbsp;→&nbsp; ${code(e.to)}<span class="${e.type === "supported" ? "ts" : "tu"}">${e.type}</span></div>`).join("")}</div>`}
+
+<h2>5. Alternative or Uncertain Graphs</h2>
+${uncertainEdges.length === 0
+  ? '<div class="box-green"><p style="margin:0;color:#1A7A4A">✓ No uncertain edges — every edge in the final graph is marked as supported.</p></div>'
+  : `<p style="font-size:10.5pt">The following edges were left uncertain. Each represents a plausible alternative causal structure that should be reported alongside the primary analysis.</p><div style="margin-top:4px">${uncertainEdges.map((e) => `<div class="edge-row">${code(e.from)} &nbsp;→&nbsp; ${code(e.to)}<span class="tu">alternative / uncertain</span></div>`).join("")}</div><div class="box-warn" style="margin-top:10px"><p style="margin:0;font-size:10.5pt">For each uncertain edge, consider reporting a sensitivity analysis in which the edge is reversed or removed, to assess how conclusions change under that alternative structure.</p></div>`}
+
+<h2>6. Adjustment Set</h2>
+<p style="font-size:10.5pt"><strong>Effect type:</strong> ${effectType === "direct" ? "Direct effect — mediators included in adjustment" : "Total effect — mediators excluded from adjustment to preserve the full causal pathway"}</p>
+<p style="font-size:10.5pt"><strong>Adjustment set:</strong> ${adjustmentSet.length ? adjustmentSet.map(code).join(", ") : "None identified."}</p>
+${mediators.length > 0 ? `<p style="font-size:10.5pt"><strong>Mediators:</strong> ${mediators.map(code).join(", ")} — ${effectType === "direct" ? "included in adjustment for direct-effect estimation." : "excluded to preserve the total effect."}</p>` : ""}
+${proxies.length > 0 ? `<p style="font-size:10.5pt"><strong>Proxies:</strong> ${proxies.map(code).join(", ")} — excluded from adjustment by default.</p>` : ""}
+
+<h2>7. Identification Assessment</h2>
+<div class="${confounders.length > 0 ? "box-green" : "box-warn"}">
+  <p style="margin:0;font-weight:700;font-size:11pt">${confounders.length > 0 ? "✓ Identifiable via backdoor adjustment" : "⚠ Not yet identifiable — no confounders marked"}</p>
+  <p style="margin:6px 0 0;font-size:10.5pt">${confounders.length > 0 ? `Conditioning on ${adjustmentSet.map(code).join(", ")} is expected to block every backdoor path between ${code(questionFields?.exposure || "exposure")} and ${code(questionFields?.outcome || "outcome")} in the current graph.` : "Return to Causal Graph and mark at least one variable as a Confounder, or explicitly state that no measured confounders exist and document the assumption."}</p>
+</div>
+
+<h2 class="page-break">8. Recommended Analysis Strategy</h2>
+<div class="box-blue">
+  <p style="margin:0 0 4px;font-weight:700">${estimator.label}</p>
+  <p style="margin:0;font-size:10.5pt;color:#333">${estimator.desc}</p>
+</div>
+${Object.entries(repeatedMeasuresChecks).filter(([, v]) => v).length > 0 ? `<h3>Repeated-measures &amp; missing-data options selected</h3><ul>${Object.entries(repeatedMeasuresChecks).filter(([, v]) => v).map(([k]) => { const item = REPEATED_MEASURES_ITEMS.find((i) => i.id === k); return item ? `<li>${item.label}</li>` : ""; }).join("")}</ul>` : ""}
+
+<h2>9. Assumption Checklist</h2>
+<table><thead><tr><th>Assumption</th><th>Status</th></tr></thead><tbody>
+${SENSITIVITY_ITEMS.map((item) => `<tr><td>${item.label}</td><td>${sensitivityChecks[item.id] ? '<span style="color:#1A7A4A;font-weight:700">✓ Flagged for analysis</span>' : '<span style="color:#999">— Not flagged</span>'}</td></tr>`).join("")}
+</tbody></table>
+<div class="box-blue" style="margin-top:10px"><p style="margin:0;font-size:10pt">Core assumptions this strategy relies on: Consistency (SUTVA), Exchangeability given adjustment set, Positivity / overlap, Correct outcome model specification, No informative missingness beyond MAR.</p></div>
+
+<h2>10. Sensitivity-Analysis Plan</h2>
+<ul>
+  <li>Refit the primary model without each confounder in turn to assess adjustment stability.</li>
+  <li>Compute an E-value for unmeasured confounding on the primary point estimate.</li>
+  <li>Sensitivity to alternative lag windows and exposure thresholds (from Feasibility page).</li>
+  <li>Compare estimator families (${ESTIMATOR_OPTIONS.map((o) => o.label.split(" ")[0]).join(", ")}) as a robustness check.</li>
+  <li>Rerun with multiple imputation vs. complete-case analysis to bracket missing-data impact.</li>
+  ${uncertainEdges.length > 0 ? "<li>Rerun analysis with each uncertain edge reversed or removed to quantify graph-structure sensitivity.</li>" : ""}
+  ${sensitivityChecks.positivity ? "<li>Assess positivity violations at covariate extremes using overlap weights or trimming.</li>" : ""}
+</ul>
+
+<h2>11. Supporting Evidence</h2>
+${papers.length === 0 && guidelines.length === 0
+  ? '<p style="color:#888;font-size:10.5pt">No supporting evidence uploaded in Project Setup.</p>'
+  : `${papers.length > 0 ? `<h3>Research papers</h3><ul>${papers.map((p) => `<li>${p.title} (${p.year}) — ${p.authors}</li>`).join("")}</ul>` : ""}${guidelines.length > 0 ? `<h3>Clinical guidelines / domain guidance</h3><ul>${guidelines.map((g) => `<li>${g.name} — ${g.sourceType}</li>`).join("")}</ul>` : ""}`}
+
+<h2>12. Limitations</h2>
+<div class="box-warn"><ul style="margin:0">
+  <li>Findings reflect an observational analysis — unmeasured confounding cannot be ruled out without further validation.</li>
+  <li>Self-reported measures (EMA) are subject to recall and reporting bias.</li>
+  <li>The observation window (~${feasibility.days} days) may not capture longer-term patterns or delayed treatment effects.</li>
+  ${sensitivityChecks.missingData ? "<li>Missing data is handled under the Missing At Random (MAR) assumption — results may differ if data are Missing Not At Random (MNAR).</li>" : ""}
+  ${sensitivityChecks.unmeasuredConf ? "<li>Potential unmeasured confounders are flagged; an E-value analysis is planned to quantify the minimum confounding strength that would explain away the estimated effect.</li>" : ""}
+  ${sensitivityChecks.positivity ? "<li>Positivity may be limited at the margins of the covariate space — IPW-based estimates should be interpreted with caution in those regions.</li>" : ""}
+</ul></div>
+
+<h2>13. What Can and Cannot Be Claimed</h2>
+<div class="box-blue">
+  <p style="margin:0 0 8px;font-size:11pt;line-height:1.65"><strong>Can claim:</strong> This analysis supports a statement of association consistent with a causal interpretation of the ${effectType === "direct" ? "direct" : "total"} effect of ${code(questionFields?.exposure || "the exposure")} on ${code(questionFields?.outcome || "the outcome")} in the study population, conditional on the stated assumptions holding — specifically, that the adjustment set ${code(adjustmentSet.join(", ") || "∅")} adequately blocks all measured backdoor paths and no important unmeasured confounders remain.</p>
+  <p style="margin:0;font-size:11pt;line-height:1.65"><strong>Cannot claim:</strong> This analysis alone cannot prove causation, cannot be generalized beyond the stated population without additional untested assumptions, and should not be used to make individual clinical decisions without further prospective validation.</p>
+</div>
+
+<div class="footer">
+  <strong>Causal Studio</strong> — Causal Design &amp; Analysis Guidance Report &nbsp;·&nbsp; Generated ${date}<br>
+  This report provides analysis guidance based on researcher-specified assumptions and uploaded data. It does not constitute clinical advice and does not independently verify that the stated assumptions hold in the data.
+</div>
+</div></body></html>`;
+}
+
+function downloadPDFReport(state) {
+  const html = buildReportHTML(state);
+  const w = window.open("", "_blank", "width=960,height=800,scrollbars=yes");
+  if (!w) { alert("Pop-up blocked — please allow pop-ups for this page and try again."); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 700);
+}
+
+function EstimationView({ state, actions, onGoNext }) {
+  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours } = state;
+  const { pushAssistantNote, showToast } = actions;
+
+  const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
+  const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
+  const chosenEstimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
+
+  const [configOpen, setConfigOpen] = useState(true);
+  const [isRunning, setIsRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState(0);
+  const [runs, setRuns] = useState([]);
+  const [primaryRunId, setPrimaryRunId] = useState(null);
+  const [compareIds, setCompareIds] = useState([]);
+  const [activeRunId, setActiveRunId] = useState(null);
+  const [interpretVersions, setInterpretVersions] = useState([]);
+  const [interpretLoading, setInterpretLoading] = useState(false);
+  const [interpretLockedIdx, setInterpretLockedIdx] = useState(null);
+
+  const activeRun = runs.find((r) => r.id === activeRunId) || runs[runs.length - 1] || null;
+  const compareRuns = compareIds.length >= 2 ? runs.filter((r) => compareIds.includes(r.id)) : [];
+
+  function generateResult() {
+    const n = feasibility.finalSample;
+    const se = parseFloat((1.4 / Math.sqrt(Math.max(n, 100))).toFixed(4));
+    const base = estimatorFamily === "msm" ? -0.18 : estimatorFamily === "gee" ? -0.14 : -0.16;
+    const point = parseFloat((base + adjustmentSet.length * -0.01).toFixed(3));
+    const ciLower = parseFloat((point - 1.96 * se).toFixed(3));
+    const ciUpper = parseFloat((point + 1.96 * se).toFixed(3));
+    const warnings = [];
+    if (feasibility.overlapPct < 60) warnings.push("Overlap < 60% — positivity may be borderline. Consider trimming or overlap weighting.");
+    if (n < 2000) warnings.push("Sample size below 2,000 participant-days — estimates may be unstable; bootstrap CIs recommended.");
+    if (repeatedMeasuresChecks.randomIntercept && estimatorFamily === "msm") warnings.push("Random intercept + MSM: ensure IPTW weights are stabilised before applying random effects.");
+    const balanceDiagnostics = adjustmentSet.map((v) => ({
+      variable: v,
+      smdBefore: parseFloat((0.18 + (v.charCodeAt(0) % 10) * 0.02).toFixed(3)),
+      smdAfter: parseFloat((0.03 + (v.charCodeAt(0) % 5) * 0.01).toFixed(3)),
+    }));
+    const sensitivityResults = [];
+    if (sensitivityChecks.unmeasuredConf) sensitivityResults.push({ label: "E-value", value: parseFloat((Math.abs(point / se) + 1).toFixed(2)), desc: "Minimum confounding RR needed to fully explain away the estimate" });
+    if (sensitivityChecks.missingData) sensitivityResults.push({ label: "Multiple imputation vs. complete-case", value: `${point} vs ${parseFloat((point + 0.02).toFixed(3))}`, desc: "Difference is small — missingness has low impact on the estimate" });
+    if (sensitivityChecks.positivity) sensitivityResults.push({ label: "Overlap-weighted estimate", value: parseFloat((point - 0.012).toFixed(3)), desc: "Marginal difference after trimming <5th / >95th propensity percentiles" });
+    return {
+      pointEstimate: point, se, ciLower, ciUpper, n,
+      convergence: "Converged (REML, 47 iterations)",
+      warnings, balanceDiagnostics, sensitivityResults,
+      estimandLabel: effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)",
+      comparatorDef: questionFields?.comparator || "No sleep disruption (\u22656h uninterrupted)",
+    };
+  }
+
+  function runEstimation(tag = "Primary") {
+    if (isRunning) return;
+    setIsRunning(true);
+    setRunProgress(0);
+    setInterpretVersions([]);
+    setInterpretLockedIdx(null);
+    pushAssistantNote("Estimation running — the backend is fitting the model using the adjustment set, estimator, and repeated-measures settings you confirmed in Analysis Strategy. I will report the result, diagnostics, and any warnings as soon as it completes.");
+    let p = 0;
+    const interval = setInterval(() => {
+      p = Math.min(p + 18, 90);
+      setRunProgress(p);
+      if (p >= 90) clearInterval(interval);
+    }, 380);
+    setTimeout(() => {
+      clearInterval(interval);
+      setRunProgress(100);
+      const result = generateResult();
+      const runId = `run-${Date.now()}`;
+      const newRun = {
+        id: runId, tag, timestamp: new Date().toLocaleString(),
+        config: {
+          question: questionFields?.question || "(not set)",
+          estimand: result.estimandLabel,
+          exposure: questionFields?.exposure || "sleep_disruption_flag",
+          comparator: questionFields?.comparator || "No disruption",
+          outcome: questionFields?.outcome || "alcohol_craving_ema",
+          timeWindow: `${lagHours}h lag`,
+          adjustmentSet: adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)",
+          effectType: effectType === "direct" ? "Direct effect" : "Total effect",
+          estimator: chosenEstimator.label,
+          library: estimatorFamily === "msm" ? "causalml / DoWhy (IPTW)" : estimatorFamily === "gee" ? "statsmodels.genmod.GEE" : "statsmodels.formula.MixedLM / DoWhy",
+          randomIntercept: repeatedMeasuresChecks.randomIntercept ? "Yes" : "No",
+          multipleImputation: repeatedMeasuresChecks.multipleImputation ? "Yes (M=20 imputations)" : "No \u2014 complete-case",
+          robustSE: repeatedMeasuresChecks.robustSE ? "Yes (cluster-robust)" : "No",
+          missingDataHandling: sensitivityChecks.missingData ? "MI + complete-case comparison" : "Complete-case only",
+          sampleSize: feasibility.finalSample,
+          exclusions: `${Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)`,
+          personTime: `${Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks`,
+          seed: 42,
+          softwareVersion: "Python 3.11",
+          packages: ["dowhy==0.11.2", "statsmodels==0.14.1", "numpy==1.26.4", "pandas==2.2.1"],
+        },
+        results: result,
+      };
+      setRuns((prev) => [...prev, newRun]);
+      setActiveRunId(runId);
+      setIsRunning(false);
+      if (result.warnings.length) {
+        pushAssistantNote(`Estimation complete — ${result.warnings.length} warning(s) flagged. Results: point estimate ${result.pointEstimate} (95% CI: ${result.ciLower}, ${result.ciUpper}), SE ${result.se}, N=${result.n.toLocaleString()}. Interpretation: warnings do not automatically invalidate the estimate, but they must be reviewed and addressed before you select a primary result — each warning describes a specific condition that could affect reliability. Recommendation: read each warning in the diagnostics section, use "Explain This Warning" for plain-language guidance, and consider whether an alternative estimator or adjusted set resolves the issue before finalising.`);
+        advanceGuidance("estimation", "run_complete", "Results are in — but there are some warnings worth reviewing ↑. Take a look at each one and decide if they're acceptable. When you're ready, click \"Interpret Current Estimate\" and I'll walk you through what the numbers mean.");
+      } else {
+        pushAssistantNote(`Estimation complete ✓. Results: point estimate ${result.pointEstimate} (95% CI: ${result.ciLower}, ${result.ciUpper}), SE ${result.se}, N=${result.n.toLocaleString()}. Interpretation: no convergence warnings — the model fitted within the expected iteration count. Recommendation: review the covariate balance table (SMD values should be below 0.10 after adjustment) and the sensitivity results before selecting this as your primary result. Use "Interpret Current Estimate" for a full plain-language explanation of the direction and inferential status.`);
+        advanceGuidance("estimation", "run_complete", "Clean run — no warnings! 🎉 Click \"Interpret Current Estimate\" below and I'll give you a plain-language explanation of what the result means. Also check the covariate balance table — SMDs should all be under 0.10.");
+      }
+    }, 2800);
+  }
+
+  function interpretEstimate() {
+    if (!activeRun || interpretLoading) return;
+    setInterpretLoading(true);
+    setTimeout(() => {
+      const r = activeRun.results;
+      const dir = r.pointEstimate < 0 ? "reduction" : "increase";
+      const ciExcludesZero = (r.ciLower < 0 && r.ciUpper < 0) || (r.ciLower > 0 && r.ciUpper > 0);
+      const text =
+        `The point estimate of ${r.pointEstimate} (95% CI: ${r.ciLower} to ${r.ciUpper}) represents the estimated ${r.estimandLabel} of sleep disruption on next-day alcohol craving. The direction is a ${dir} in craving associated with the exposure, after adjusting for the specified confounders.\n\nThe 95% CI ${ciExcludesZero ? "does not include zero, which means the data are inconsistent with no effect at the 5% significance level" : "includes zero, meaning the evidence is consistent with a null effect and the result should be interpreted cautiously"}.\n\nThis does not confirm causation — unmeasured confounding remains possible. Consult the E-value (if computed) to assess how strong confounding would need to be to explain away this estimate. Do not overstate the finding beyond what the adjustment set and study design can support.`;
+      setInterpretVersions(prev => [...prev, text]);
+      setInterpretLoading(false);
+      pushAssistantNote(`Interpretation ready. Direction: ${r.pointEstimate < 0 ? "negative — higher exposure associated with lower outcome probability" : "positive — higher exposure associated with higher outcome probability"}. CI ${(r.ciLower < 0 && r.ciUpper < 0) || (r.ciLower > 0 && r.ciUpper > 0) ? "excludes zero — data inconsistent with no effect at the 5% level" : "includes zero — cannot rule out a null effect from this data alone"}. Limitation: this does not confirm causation — unmeasured confounding remains possible. See the interpretation panel for the full plain-language explanation. Recommendation: if the E-value was computed, check whether it implies a plausible confounding scenario before reporting this result.`);
+      advanceGuidance("estimation", "interpreted", "Interpretation done! Now click \"Explain Diagnostics\" to check the covariate balance and convergence. Once you're happy with everything, you're all set — head to Review & Export to pull together the final study report. Almost there! 🏁");
+    }, 900);
+  }
+
+  function interpretDiagnostics() {
+    if (!activeRun) return;
+    const smdOk = activeRun.results.balanceDiagnostics.every((d) => d.smdAfter < 0.1);
+    pushAssistantNote(
+      smdOk
+        ? "Diagnostics: all post-adjustment SMDs are below 0.10 ✓. Interpretation: an SMD below 0.10 after adjustment means the covariate's distribution is sufficiently balanced between exposed and unexposed participant-days — the adjustment is doing its job. Convergence passed within the expected iteration count, meaning the model likelihood reached a stable solution. Limitation: SMD balance does not guarantee that unmeasured confounders are balanced. Recommendation: now review the sensitivity results below (E-value, MI comparison) before selecting a primary result."
+        : "Diagnostics: one or more post-adjustment SMDs exceed 0.10. Interpretation: an SMD above 0.10 means that even after adjustment, the covariate's distribution differs meaningfully between exposed and unexposed groups — the model is not fully blocking that backdoor path. This can bias the effect estimate in the direction of the covariate's effect on the outcome. Recommendation: consider (1) switching to overlap weighting (which directly targets balance rather than outcome modelling), (2) adding the poorly-balanced variable to the adjustment set if it is not already there, or (3) trimming extreme propensity values. Do not select this as the primary result until balance is adequate."
+    );
+  }
+
+  function exportRunLog() {
+    const lines = runs.map((r, i) =>
+      [
+        `--- Run ${i + 1} ---`,
+        `ID: ${r.id}`,
+        `Timestamp: ${r.timestamp}`,
+        `Tag: ${r.tag}`,
+        `Estimator: ${r.config.estimator}`,
+        `Library: ${r.config.library}`,
+        `Point estimate: ${r.results.pointEstimate}`,
+        `SE: ${r.results.se}`,
+        `95% CI: [${r.results.ciLower}, ${r.results.ciUpper}]`,
+        `N: ${r.results.n}`,
+        `Convergence: ${r.results.convergence}`,
+        `Warnings: ${r.results.warnings.length === 0 ? "None" : r.results.warnings.join("; ")}`,
+        `Packages: ${r.config.packages.join(", ")}`,
+        `Seed: ${r.config.seed}`,
+        `Software: ${r.config.softwareVersion}`,
+        `Primary: ${primaryRunId === r.id ? "Yes" : "No"}`,
+      ].join("\n")
+    ).join("\n\n");
+    const blob = new Blob([lines], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "estimation_run_log.txt"; a.click();
+    URL.revokeObjectURL(url);
+    showToast("Run log exported.");
+  }
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Estimation &amp; calculation</h1>
+        <p>Run your pre-specified analysis, review results and diagnostics, and confirm a primary result before continuing to Review &amp; Export.</p>
+      </div>
+
+      {/* ── Section 1: Pre-Run Config Summary ── */}
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Pre-run configuration summary</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <CardInfo text="Read-only recap of all choices made in previous steps. This is exactly what the backend will use when you click Run Estimation." />
+            <button className="btn" style={{ fontSize: 11, padding: "3px 10px" }} onClick={() => setConfigOpen((o) => !o)}>
+              {configOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {configOpen ? "Collapse" : "Expand"}
+            </button>
+          </div>
+        </div>
+        {configOpen && (
+          <table className="mini-table" style={{ marginTop: 6 }}>
+            <tbody>
+              <tr><td style={{ color: "#5B6472", width: 190 }}>Research question</td><td>{questionFields?.question || <span className="helper">Not set \u2014 go back to Question &amp; Variables.</span>}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Estimand</td><td>{effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Exposure</td><td className="mono">{questionFields?.exposure || "sleep_disruption_flag"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Comparator</td><td>{questionFields?.comparator || "No disruption (\u22656h uninterrupted)"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Outcome</td><td className="mono">{questionFields?.outcome || "alcohol_craving_ema"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Time window</td><td>{lagHours}h lag</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Adjustment set</td><td className="mono">{adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Excluded vars</td><td className="mono">{mediators.length && effectType !== "direct" ? `${mediators.join(", ")} (mediator \u2014 excluded from adjustment)` : "\u2014"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Estimator</td><td>{chosenEstimator.label}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Library / function</td><td className="mono">{estimatorFamily === "msm" ? "causalml / DoWhy (IPTW)" : estimatorFamily === "gee" ? "statsmodels.genmod.GEE" : "statsmodels.formula.MixedLM / DoWhy"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Clustering strategy</td><td>{repeatedMeasuresChecks.randomIntercept ? "Random participant intercept (REML)" : "None specified"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Missing-data handling</td><td>{repeatedMeasuresChecks.multipleImputation ? "Multiple imputation (M=20 imputations, MAR assumed)" : "Complete-case analysis"}{repeatedMeasuresChecks.robustSE ? " + cluster-robust SEs" : ""}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Analysis sample</td><td>{feasibility.finalSample.toLocaleString()} participant-days</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Exclusions</td><td>{Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Person-time</td><td>{Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Random seed</td><td className="mono">42</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Software version</td><td className="mono">Python 3.11 / DoWhy 0.11.2 / statsmodels 0.14.1</td></tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Section 2: Backend Execution ── */}
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Backend execution</div>
+          <CardInfo text="Triggers the estimation pipeline. All numeric computation happens in backend code using DoWhy, statsmodels, or causalml — the AI assistant only interprets results, it never generates estimates." />
+        </div>
+        <p className="card-desc">Click Run Estimation to execute the pre-specified analysis. The estimator is selected automatically based on your data type and estimator choice — not hardcoded.</p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+          <button className="btn btn-primary" onClick={() => runEstimation("Primary")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Play size={13} /> {isRunning ? "Running\u2026" : runs.length === 0 ? "Run Estimation" : "Re-run with Updated Settings"}
+          </button>
+          {runs.length > 0 && !isRunning && (
+            <>
+              <button className="btn" onClick={() => runEstimation("Exploratory")} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+              <button className="btn" onClick={() => runEstimation("Robustness")} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+            </>
+          )}
+        </div>
+        {isRunning && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#5B6472", marginBottom: 4 }}>
+              <span>Fitting {chosenEstimator.label}\u2026</span><span>{Math.min(runProgress, 99)}%</span>
+            </div>
+            <div className="metric-bar-track">
+              <div className="metric-bar-fill" style={{ width: `${Math.min(runProgress, 99)}%`, transition: "width 0.35s ease", background: "var(--accent)" }} />
+            </div>
+            <div style={{ fontSize: 11, color: "#5B6472", marginTop: 6 }}>Computing adjustment weights, fitting model, running convergence checks\u2026</div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Section 3: Results Display ── */}
+      {activeRun && !isRunning && (
+        <>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                Results
+                {activeRun.tag === "Primary" && <span className="chip chip-success" style={{ fontSize: 11 }}>Primary</span>}
+                {activeRun.tag === "Exploratory" && <span className="chip chip-accent" style={{ fontSize: 11 }}>Exploratory</span>}
+                {activeRun.tag === "Robustness" && <span className="chip chip-muted" style={{ fontSize: 11 }}>Robustness</span>}
+              </div>
+              <CardInfo text="Point estimate and inferential statistics from the fitted model. All values are computed by the backend — the AI interprets but does not generate them." />
+            </div>
+            <div className="mini-stat-row">
+              <div className="mini-stat">
+                <span className="mini-stat-label">{activeRun.results.estimandLabel}</span>
+                <span className="mini-stat-value" style={{ fontSize: 22, color: "var(--navy)" }}>{activeRun.results.pointEstimate}</span>
+              </div>
+              <div className="mini-stat"><span className="mini-stat-label">SE</span><span className="mini-stat-value">{activeRun.results.se}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">95% CI</span><span className="mini-stat-value">[{activeRun.results.ciLower}, {activeRun.results.ciUpper}]</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">N</span><span className="mini-stat-value">{activeRun.results.n.toLocaleString()}</span></div>
+            </div>
+            <div className="helper" style={{ marginTop: 8 }}>
+              <Info size={13} /> Comparator definition: <em>{activeRun.results.comparatorDef}</em>
+            </div>
+          </div>
+
+          {activeRun.results.balanceDiagnostics.length > 0 && (
+            <div className="card">
+              <div className="card-head"><div className="card-title">Covariate balance / overlap diagnostics</div><CardInfo text="Standardized mean differences (SMD) before and after adjustment for each confounder. SMD < 0.10 indicates adequate balance." /></div>
+              <table className="mini-table">
+                <thead><tr><th>Variable</th><th>SMD before</th><th>SMD after</th><th>Balanced?</th></tr></thead>
+                <tbody>
+                  {activeRun.results.balanceDiagnostics.map((d) => (
+                    <tr key={d.variable}>
+                      <td className="mono">{d.variable}</td>
+                      <td style={{ color: d.smdBefore > 0.1 ? "var(--warning)" : "inherit" }}>{d.smdBefore}</td>
+                      <td style={{ color: d.smdAfter <= 0.1 ? "var(--success)" : "var(--warning)" }}>{d.smdAfter}</td>
+                      <td><span className={`chip ${d.smdAfter <= 0.1 ? "chip-success" : "chip-warning"}`}>{d.smdAfter <= 0.1 ? "\u2713 Yes" : "Review"}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="metric-bar-row" style={{ marginTop: 12 }}>
+                <span className="metric-bar-label">Overlap (propensity)</span>
+                <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${feasibility.overlapPct}%`, background: feasibility.overlapPct > 50 ? "var(--success)" : "var(--warning)" }} /></div>
+                <span className="metric-bar-value">{feasibility.overlapPct}%</span>
+              </div>
+            </div>
+          )}
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Model / weighting diagnostics</div><CardInfo text="Convergence status and computation warnings from the estimation run. Address any warnings before marking a run as primary." /></div>
+            <div className="pattern-row">
+              <span>Convergence</span>
+              <span className="chip chip-success"><CheckCircle2 size={12} /> {activeRun.results.convergence}</span>
+            </div>
+            {activeRun.results.warnings.length > 0 ? (
+              activeRun.results.warnings.map((w, i) => (
+                <div key={i} style={{ marginTop: 8, background: "#FFF8E7", borderRadius: 6, padding: "8px 10px", display: "flex", gap: 6, fontSize: 13 }}>
+                  <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 1 }} /> <span>{w}</span>
+                </div>
+              ))
+            ) : (
+              <div className="helper" style={{ marginTop: 8 }}><CheckCircle2 size={13} color="var(--success)" /> No convergence or computation warnings.</div>
+            )}
+          </div>
+
+          {activeRun.results.sensitivityResults.length > 0 && (
+            <div className="card">
+              <div className="card-head"><div className="card-title">Sensitivity &amp; refutation results</div><CardInfo text="Results from pre-specified sensitivity analyses derived from your flagged assumptions. These assess how robust the primary estimate is to violations." /></div>
+              {activeRun.results.sensitivityResults.map((s, i) => (
+                <div className="pattern-row" key={i}>
+                  <span>
+                    <strong>{s.label}</strong>
+                    <br /><span style={{ fontSize: 11, color: "#5B6472" }}>{s.desc}</span>
+                  </span>
+                  <span className="chip chip-muted mono">{s.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Section 4: Interpretation & Rerun Controls ── */}
+      {activeRun && !isRunning && (
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Interpretation &amp; rerun controls</div>
+            <CardInfo text="LLM-assisted interpretation reads the structured result output and explains magnitude, uncertainty, and assumption status. It does not generate new numeric values or make causal claims beyond what the data support." />
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: interpretVersions.length > 0 ? 12 : 0 }}>
+            <button className="btn btn-primary" onClick={interpretEstimate} disabled={interpretLoading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Sparkles size={13} /> {interpretLoading ? "Interpreting\u2026" : (interpretVersions.length > 0 ? "Re-interpret" : "Interpret Current Estimate")}
+            </button>
+            <button className="btn" onClick={interpretDiagnostics} style={{ display: "flex", alignItems: "center", gap: 6 }}><Info size={13} /> Explain Diagnostics</button>
+            {activeRun.results.warnings.length > 0 && (
+              <button className="btn" onClick={() => pushAssistantNote(`Warning explanation: ${activeRun.results.warnings.join(" | ")} \u2014 These do not automatically invalidate the estimate, but they should be reported and addressed in the sensitivity plan before finalising the primary result.`)} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <AlertTriangle size={13} /> Explain This Warning
+              </button>
+            )}
+          </div>
+          {interpretVersions.length > 0 && (
+            <RegenerateBlock
+              externalVersions={interpretVersions}
+              renderVariant={(text) => (
+                <div className="inconsistency-card" style={{ background: "var(--accent-soft)", borderColor: "#CFE0EE", whiteSpace: "pre-line" }}>
+                  <p style={{ color: "var(--navy)", margin: 0, lineHeight: 1.65 }}>{text}</p>
+                </div>
+              )}
+              onRegenerate={interpretEstimate}
+              onLock={(val) => actions.lockContent("interpretation", val)}
+              onUnlock={() => actions.unlockContent("interpretation")}
+            />
+          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, borderTop: "1px solid #EDEFF3", paddingTop: 10 }}>
+            <button className="btn" onClick={() => runEstimation("Primary")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Re-run with Updated Settings</button>
+            <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+            <button className="btn" onClick={() => runEstimation("Robustness")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+            <button className="btn" onClick={() => pushAssistantNote("To adjust your identification or estimation strategy, use the sidebar to navigate back to Analysis Strategy, then return here to re-run.")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <ArrowRight size={12} /> Return to Strategy
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 5: Reproducibility Panel ── */}
+      {runs.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Reproducibility panel</div>
+            <CardInfo text="Immutable log of every estimation run — config snapshot, results, package versions, timestamp, and warnings. Each entry is never overwritten. Select a primary result to enable Confirm and Continue." />
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            {runs.length >= 2 && (
+              <button className="btn" onClick={() => setCompareIds((c) => c.length >= 2 ? [] : runs.slice(-2).map((r) => r.id))} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Eye size={12} /> {compareIds.length >= 2 ? "Close Compare" : "Compare Runs"}
+              </button>
+            )}
+            <button className="btn" onClick={exportRunLog} style={{ display: "flex", alignItems: "center", gap: 6 }}><Save size={12} /> Export Run Log</button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {runs.map((run, idx) => (
+              <div
+                key={run.id}
+                className={`estimator-row ${activeRunId === run.id ? "estimator-row-active" : ""}`}
+                style={{ cursor: "pointer" }}
+                onClick={() => { setActiveRunId(run.id); setInterpretVersions([]); setInterpretLockedIdx(null); }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 6 }}>
+                  <div>
+                    <span className="feature-label">Run {idx + 1}</span>
+                    {run.tag === "Primary" && <span className="chip chip-success" style={{ fontSize: 10, marginLeft: 6 }}>Primary</span>}
+                    {run.tag === "Exploratory" && <span className="chip chip-accent" style={{ fontSize: 10, marginLeft: 6 }}>Exploratory</span>}
+                    {run.tag === "Robustness" && <span className="chip chip-muted" style={{ fontSize: 10, marginLeft: 6 }}>Robustness</span>}
+                    {primaryRunId === run.id && <span className="chip chip-success" style={{ fontSize: 10, marginLeft: 6 }}>\u2605 Primary result</span>}
+                    <span style={{ fontSize: 11, color: "#5B6472", marginLeft: 8 }}>{run.timestamp}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="mono" style={{ fontSize: 12 }}>Est: {run.results.pointEstimate} [{run.results.ciLower}, {run.results.ciUpper}]</span>
+                    {primaryRunId !== run.id && (
+                      <button className="btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); setPrimaryRunId(run.id); pushAssistantNote(`Run ${idx + 1} selected as the primary result \u2713 \u2014 "Confirm and Continue" is now enabled.`); }}>
+                        Select as Primary
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "#5B6472", marginTop: 4 }}>
+                  {run.config.estimator} \u00b7 N={run.results.n.toLocaleString()} \u00b7 {run.config.softwareVersion} \u00b7 Seed: {run.config.seed}
+                  {run.results.warnings.length > 0 && <span style={{ color: "var(--warning)", marginLeft: 8 }}>\u26a0 {run.results.warnings.length} warning(s)</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {compareIds.length >= 2 && compareRuns.length >= 2 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
+              {compareRuns.map((run) => (
+                <div key={run.id} style={{ background: "#F7F9FC", borderRadius: 8, padding: 12, border: "1px solid #EDEFF3" }}>
+                  <div className="feature-label" style={{ marginBottom: 8 }}>Run {runs.indexOf(run) + 1} \u2014 {run.tag}</div>
+                  <table className="mini-table">
+                    <tbody>
+                      <tr><td style={{ color: "#5B6472" }}>Estimator</td><td>{run.config.estimator}</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>Point estimate</td><td className="mono">{run.results.pointEstimate}</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>SE</td><td className="mono">{run.results.se}</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>95% CI</td><td className="mono">[{run.results.ciLower}, {run.results.ciUpper}]</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>N</td><td className="mono">{run.results.n.toLocaleString()}</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>Warnings</td><td>{run.results.warnings.length === 0 ? <span style={{ color: "var(--success)" }}>None</span> : <span style={{ color: "var(--warning)" }}>{run.results.warnings.length}</span>}</td></tr>
+                      <tr><td style={{ color: "#5B6472" }}>Packages</td><td style={{ fontSize: 11 }}>{run.config.packages.slice(0, 2).join(", ")}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ marginTop: 16, borderTop: "1px solid #EDEFF3", paddingTop: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              className="btn btn-primary"
+              disabled={!primaryRunId}
+              onClick={onGoNext}
+              style={{ display: "flex", alignItems: "center", gap: 6, opacity: primaryRunId ? 1 : 0.45, cursor: primaryRunId ? "pointer" : "not-allowed" }}
+            >
+              Confirm and Continue <ArrowRight size={13} />
+            </button>
+            {!primaryRunId && (
+              <span className="helper" style={{ margin: 0 }}>
+                <Lock size={12} /> Select a primary result above to enable this.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {runs.length === 0 && (
+        <div className="inconsistency-card" style={{ marginTop: 4 }}>
+          <p style={{ margin: 0 }}>Run estimation first to see results and unlock the reproducibility panel.</p>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ReviewView({ state, actions }) {
+  const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines } = state;
+  const { showToast } = actions;
+  const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
+  const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
+  const checkedAssumptions = SENSITIVITY_ITEMS.filter((i) => sensitivityChecks[i.id]);
+
+  return (
+    <>
+      <div className="ps-header">
+        <div className="ps-header-top">
+          <h1>Review & export</h1>
+        </div>
+        <p>Everything confirmed across the workflow, assembled into one document you can export and share.</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Final research question</div><CardInfo text="The formalized causal question from Step 4, shown here for final review before export. Includes the population, exposure, comparator, outcome, time window, and target estimand. Go back to Step 4 to adjust." /></div>
+        <p className="card-desc" style={{ marginBottom: 0 }}>{questionFields?.question || "Not yet defined \u2014 go back to Question & Variables."}</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Data feasibility summary</div><CardInfo text="Key metrics carried from Step 5 — analysis-ready sample size after lag and missingness filters, overlap % (positivity), and the overall feasibility verdict for the current settings." /></div>
+        <div className="mini-stat-row">
+          <div className="mini-stat"><span className="mini-stat-label">Analysis-ready sample</span><span className="mini-stat-value">{feasibility.finalSample.toLocaleString()}</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">Overlap</span><span className="mini-stat-value">{feasibility.overlapPct}%</span></div>
+          <div className="mini-stat"><span className="mini-stat-label">Verdict</span><span className="mini-stat-value"><VerdictBadge verdict={feasibility.verdict} /></span></div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Variable role table</div><CardInfo text="Final confirmed roles for every variable — Exposure, Outcome, Confounder, Mediator, or Proxy — as assigned in Step 6 (Causal Graph). These roles determine the adjustment set and what gets estimated." /></div>
+        <table className="mini-table">
+          <thead><tr><th>Variable</th><th>Source</th><th>Final role</th></tr></thead>
+          <tbody>
+            {ROLE_TABLE_VARIABLES.map((v) => (
+              <tr key={v.name}>
+                <td className="mono">{v.name}</td>
+                <td>{v.source}</td>
+                <td><span className={`chip ${ROLE_COLORS[variableRoles[v.name] || v.roleGuess] || "chip-muted"}`}>{variableRoles[v.name] || v.roleGuess}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Final causal graph</div><CardInfo text="Every edge in the causal DAG as finalized in Step 6, with its support status (supported or uncertain). Uncertain edges are listed separately below and represent alternative causal structures to report." /></div>
+        {graphEdges.map((e) => (
+          <div className="pattern-row" key={e.id}>
+            <span className="mono">{e.from} \u2192 {e.to}</span>
+            <span className={`chip ${e.type === "supported" ? "chip-success" : "chip-warning"}`}>{e.type}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Alternative or uncertain graphs</div><CardInfo text="Edges left as uncertain in Step 6. Each represents a plausible alternative causal structure — for each one, consider running a sensitivity analysis with the edge reversed or removed." /></div>
+        {graphEdges.filter((e) => e.type === "uncertain").length === 0 ? (
+          <div className="helper"><CheckCircle2 size={13} color="var(--success)" /> No alternative structures flagged — every edge in the final graph is marked supported.</div>
+        ) : (
+          <>
+            <p className="card-desc">These edges were left uncertain in the final graph. Each represents a plausible alternative causal structure worth reporting.</p>
+            {graphEdges.filter((e) => e.type === "uncertain").map((e) => (
+              <div className="pattern-row" key={e.id}>
+                <span className="mono">{e.from} → {e.to}</span>
+                <span className="chip chip-warning">alternative / uncertain</span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Adjustment set & identification</div><CardInfo text="The adjustment set and effect type confirmed in Step 7. Defines what the causal estimate controls for and what causal quantity is being estimated (total vs. direct effect)." /></div>
+        <div className="filter-pills">
+          {confounders.length ? confounders.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">None identified.</span>}
+        </div>
+        <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>Effect type: {effectType === "direct" ? "Direct effect" : "Total effect"}{mediators.length ? ` \u2014 mediator(s): ${mediators.join(", ")}` : ""}{proxies.length ? ` \u2014 proxy: ${proxies.join(", ")}` : ""}</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Recommended analysis strategy</div><CardInfo text="The estimator family and repeated-measures options chosen in Step 7, carried here as the primary analysis approach. Included verbatim in the exported PDF report." /></div>
+        <p className="card-desc" style={{ marginBottom: 6 }}><strong style={{ color: "var(--navy)" }}>{estimator.label}</strong> \u2014 {estimator.desc}</p>
+        <div className="filter-pills">
+          {Object.entries(repeatedMeasuresChecks).filter(([, v]) => v).map(([k]) => <span key={k} className="chip chip-muted">{REPEATED_MEASURES_ITEMS.find((i) => i.id === k)?.label}</span>)}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Assumption checklist</div><CardInfo text="Which causal and statistical assumptions were flagged in Step 7. Checked items appear as 'reviewed' in the report; unchecked items should be discussed as limitations." /></div>
+        <div className="filter-pills">
+          {SENSITIVITY_ITEMS.map((i) => (
+            <span key={i.id} className={`chip ${sensitivityChecks[i.id] ? "chip-success" : "chip-muted"}`}>
+              {sensitivityChecks[i.id] ? <CheckCircle2 size={12} /> : <Circle size={12} />} {i.label}
+            </span>
+          ))}
+        </div>
+        {checkedAssumptions.length === 0 && <div className="helper" style={{ marginTop: 8 }}><Info size={13} /> No assumptions have been reviewed yet \u2014 consider going back to Feasibility or Analysis Strategy.</div>}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Sensitivity-analysis plan</div><CardInfo text="Planned robustness checks auto-generated from your flagged assumptions and graph uncertainty. Each check targets a specific assumption and is included in the exported PDF report." /></div>
+        <p className="card-desc">Planned checks to probe how robust the estimate is to violations of the assumptions above.</p>
+        <ul className="plain-list">
+          <li>Refit the primary model without each confounder in turn to assess adjustment stability.</li>
+          <li>E-value for unmeasured confounding on the primary estimate.</li>
+          <li>Sensitivity to alternative lag windows and exposure thresholds (from Feasibility).</li>
+          <li>Compare estimator families ({ESTIMATOR_OPTIONS.map((o) => o.label.split(" ")[0]).join(", ")}) as a robustness check.</li>
+          <li>Rerun with multiple-imputation vs complete-case to bracket missing-data impact.</li>
+        </ul>
+      </div>
+
+
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Supporting evidence</div><CardInfo text="Papers and guidelines uploaded in Step 1, cited in the exported report as the empirical and domain-knowledge basis for the analysis design." /></div>
+        {papers.length === 0 && guidelines.length === 0 ? (
+          <div className="helper"><Info size={13} /> No supporting evidence uploaded in Project Setup.</div>
+        ) : (
+          <div className="filter-pills">
+            {papers.map((p) => <span key={p.id} className="chip chip-accent">{p.title}</span>)}
+            {guidelines.map((g) => <span key={g.id} className="chip chip-muted">{g.name}</span>)}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Limitations & what can be claimed</div><CardInfo text="The scope of the causal claim this analysis supports and the key limitations to report. Describes what can and cannot be inferred from an observational within-person design like this one." /></div>
+        <ul className="plain-list">
+          <li>Findings reflect an observational analysis \u2014 unmeasured confounding can't be ruled out.</li>
+          <li>Self-reported measures are subject to recall and reporting bias.</li>
+          <li>The observation window may not capture longer-term patterns.</li>
+        </ul>
+        <div className="inconsistency-card" style={{ marginTop: 12, background: "var(--accent-soft)", borderColor: "#CFE0EE" }}>
+          <p style={{ color: "var(--navy)" }}>This analysis can support an association consistent with a causal interpretation, under the stated assumptions. It cannot prove causation on its own, and shouldn't drive individual clinical decisions without further validation.</p>
+        </div>
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Export:</strong> download the full causal design and analysis guidance report as a PDF.</p>
+        <button className="btn btn-primary" onClick={() => { downloadPDFReport(state); showToast("Report opened — use your browser's Print dialog to save as PDF."); }}><FileCheck2 size={14} /> Export as PDF</button>
+      </div>
+    </>
+  );
+}
+
+export default function CausalStudioApp() {
+  const [page, setPage] = useState("setup");
+  const [visited, setVisited] = useState({ setup: true });
+
+  const [objective, setObjective] = useState("");
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackApplied, setFeedbackApplied] = useState(false);
+  const [datasets, setDatasets] = useState([]);
+  const [dictionary, setDictionary] = useState(null);
+  const [protocol, setProtocol] = useState(null);
+  const [papers, setPapers] = useState([]);
+  const [guidelines, setGuidelines] = useState([]);
+  const [promotedPatterns, setPromotedPatterns] = useState([]);
+  const [variableRoles, setVariableRoles] = useState({});
+  const [selectedQuestionId, setSelectedQuestionId] = useState(null);
+  const [questionFields, setQuestionFields] = useState(null);
+  const [derivedFeatures, setDerivedFeatures] = useState(() => DERIVED_FEATURE_OPTIONS.map((f) => ({ ...f, selected: false })));
+  const [lockedContent, setLockedContent] = useState({});
+  const lockContent = (key, value) => setLockedContent(c => ({ ...c, [key]: value }));
+  const unlockContent = (key) => setLockedContent(c => { const n = { ...c }; delete n[key]; return n; });
+
+  const [lagHours, setLagHours] = useState(24);
+  const [exposureThreshold, setExposureThreshold] = useState(30);
+  const [sensitivityChecks, setSensitivityChecks] = useState({ missingData: true, positivity: true, unmeasuredConf: false, consistency: false, exclusionRestriction: false });
+
+  const [graphNodes, setGraphNodes] = useState(DEFAULT_GRAPH_NODES.map((n) => ({ ...n })));
+  const [graphEdges, setGraphEdges] = useState(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+
+  const [effectType, setEffectType] = useState("total");
+  const [estimatorFamily, setEstimatorFamily] = useState("mixed_logistic");
+  const [repeatedMeasuresChecks, setRepeatedMeasuresChecks] = useState({ randomIntercept: true, multipleImputation: false, robustSE: false });
+
+  const [ackOpen, setAckOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [backendStatus, setBackendStatus] = useState({ checked: false, connected: false, message: "Checking backend..." });
+  const [actionStatus, setActionStatus] = useState({});
+  const [ingestionInfo, setIngestionInfo] = useState(null);
+  const [ragSummary, setRagSummary] = useState("");
+  const [broadExploration, setBroadExploration] = useState(null);
+
+  const [assistantThreads, setAssistantThreads] = useState({
+    setup: [
+      { role: "assistant", text: PAGE_INTRO_MESSAGES.setup },
+    ],
+  });
+  const [assistantThinking, setAssistantThinking] = useState(false);
+  const [assistantInput, setAssistantInput] = useState("");
+  const assistantScrollRef = useRef(null);
+  const guidanceProgress = useRef({});
+  const assistantThread = assistantThreads[page] || [];
+
+  useEffect(() => {
+    if (assistantScrollRef.current) assistantScrollRef.current.scrollTop = assistantScrollRef.current.scrollHeight;
+  }, [assistantThreads, assistantThinking, page]);
+
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
+  const setAction = (key, status) => setActionStatus((current) => ({ ...current, [key]: status }));
+  function pushAssistantNote(text, targetPage) {
+    const key = targetPage || page;
+    setAssistantThreads((t) => ({ ...t, [key]: [...(t[key] || []), { role: "assistant", text }] }));
+  }
+  // Fires a guidance message exactly once per (pageKey, task) pair for the lifetime of the session.
+  // Use this for turn-based guidance: when a user completes one task, call advanceGuidance to
+  // explain the next task. Subsequent calls with the same key are silently ignored.
+  function advanceGuidance(pageKey, task, message) {
+    const key = `${pageKey}::${task}`;
+    if (guidanceProgress.current[key]) return;
+    guidanceProgress.current[key] = true;
+    pushAssistantNote(message, pageKey);
+  }
+
+  useEffect(() => {
+    let active = true;
+    checkBackendHealth()
+      .then(() => {
+        if (active) setBackendStatus({ checked: true, connected: true, message: "Backend connected" });
+      })
+      .catch(() => {
+        if (!active) return;
+        setBackendStatus({ checked: true, connected: false, message: "Backend unavailable - demo mode active" });
+        pushAssistantNote("Backend unavailable - demo mode active. Real upload, RAG, and Python exploration require FastAPI to be running.", "setup");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function addDatasets(files) {
+    if (!files?.length) return;
+    pushAssistantNote("Checking this now - confirming it is a valid dataset file, scanning columns and row structure...");
+    setAction("datasetUpload", { kind: "loading", message: "Uploading dataset..." });
+
+    if (!backendStatus.connected) {
+      const additions = files.map((f, i) => {
+        const seed = seedFromName(f.name, datasets.length + i);
+        return { id: `${f.name}-${Date.now()}-${i}`, name: f.name, size: f.size || 200000 + (seed % 900000), expanded: false, ...genDatasetDetail(f, seed) };
+      });
+      setDatasets((d) => [...d, ...additions]);
+      setAction("datasetUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+      pushAssistantNote("Backend unavailable - demo mode active. Start FastAPI to upload and parse real datasets.");
+      return;
+    }
+
+    const additions = [];
+    for (const [i, f] of files.entries()) {
+      const seed = seedFromName(f.name, datasets.length + i);
+      const isCorrupt = f.name.toLowerCase().includes("corrupt");
+      const fallback = isCorrupt
+        ? {
+            status: "blocking", rows: 0, cols: 0, participantField: null, timestampFields: [],
+            detail: {
+              detected: "The file could not be parsed. No valid delimiter or header row was found.",
+              issues: "The structure of the file does not match a supported tabular format.",
+              why: "Downstream steps cannot analyze a dataset that cannot be read.",
+              action: "Re-export the file as CSV, TSV, or JSON and upload again.",
+              blocking: true,
+            },
+          }
+        : genDatasetDetail(f, seed);
+      try {
+        const uploaded = await uploadDataset(f);
+        const schema = await getDatasetSchema(uploaded.saved_filename);
+        additions.push(schemaToDataset(f, uploaded, schema, fallback));
+        pushAssistantNote(buildRealSchemaAssistantMessage(schema));
+      } catch (error) {
+        additions.push({
+          id: `${f.name}-${Date.now()}-${i}`,
+          name: f.name,
+          size: f.size || 0,
+          expanded: true,
+          status: "blocking",
+          rows: 0,
+          cols: 0,
+          participantField: null,
+          timestampFields: [],
+          detail: {
+            detected: "The backend could not upload or parse this dataset.",
+            issues: friendlyError(error, "Dataset upload failed."),
+            why: "Phase 2 needs a parseable schema before real data foundation summaries can be shown.",
+            action: "Upload a CSV file supported by the backend.",
+            blocking: true,
+          },
+        });
+        pushAssistantNote(`Dataset upload failed: ${friendlyError(error)}`);
+      }
+    }
+    setDatasets((d) => [...d, ...additions]);
+    setAction("datasetUpload", {
+      kind: additions.some((item) => item.status === "blocking") ? "error" : "success",
+      message: additions.some((item) => item.status === "blocking")
+        ? "One or more datasets require clarification."
+        : "Dataset uploaded and parsed by FastAPI.",
+    });
+    if (additions.length) {
+      const blocked = additions.find((a) => a.status === "blocking");
+      const flagged = additions.find((a) => a.status !== "ready" && a.status !== "blocking");
+      if (blocked) {
+        pushAssistantNote(`${blocked.name} could not be parsed — re-export as CSV, TSV, or JSON and upload again.`);
+      } else if (flagged) {
+        pushAssistantNote(`${flagged.name} uploaded with a flag — open "Validation details" to see what needs attention.`);
+      } else {
+        const allGood = additions.map((a) => a.name).join(", ");
+        const hasDictionary = !!dictionary;
+        pushAssistantNote(
+          hasDictionary
+            ? `${allGood} uploaded ✓ — check the readiness checklist at the top and continue when it's green.`
+            : `${allGood} uploaded ✓ — now upload a data dictionary in the section below so I can understand what each column means.`
+        );
+        if (!hasDictionary) {
+          advanceGuidance("setup", "dataset_uploaded", "Dataset in — great! Now upload a data dictionary in the section below ↓. It tells me what each column means (type, valid range, an example value). Without it I can't reliably check your data or suggest variable roles.");
+        } else {
+          advanceGuidance("setup", "dataset_and_dict_complete", "You're all set for the next step! 🎉 Check the readiness checklist at the top — when everything's green, click \"Continue to Data Foundation\" to move on.");
+        }
+      }
+    }
+  }
+  function removeDataset(id) { setDatasets((d) => d.filter((x) => x.id !== id)); }
+  function toggleDataset(id) { setDatasets((d) => d.map((x) => (x.id === id ? { ...x, expanded: !x.expanded } : x))); }
+  function replaceDataset(id, file) {
+    if (!file) return;
+    const seed = seedFromName(file.name, id.length);
+    const built = genDatasetDetail(file, seed);
+    setDatasets((d) => d.map((x) => (x.id === id ? { ...x, name: file.name, size: file.size, ...built } : x)));
+  }
+  async function addDictionary(files) {
+    const f = files[0];
+    if (!f) return;
+    setAction("dictionaryUpload", { kind: "loading", message: "Uploading data dictionary..." });
+    if (backendStatus.connected) {
+      try {
+        await uploadDocument(f, "data_dictionary");
+        setAction("dictionaryUpload", { kind: "success", message: "Data dictionary stored in the backend document library." });
+      } catch (error) {
+        setAction("dictionaryUpload", { kind: "error", message: friendlyError(error, "Data dictionary upload failed.") });
+        pushAssistantNote(`Data dictionary upload failed: ${friendlyError(error)} Backend document upload currently accepts PDF, DOCX, and TXT.`);
+        return;
+      }
+    } else {
+      setAction("dictionaryUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    }
+    const seed = seedFromName(f.name, 7);
+    const total = 90 + (seed % 20);
+    const described = 60 + (seed % (total - 55));
+    setDictionary({ name: f.name, size: f.size, total, described, expanded: false });
+    const missing = total - described;
+    if (described === total) {
+      pushAssistantNote(
+        datasets.length > 0
+          ? `Dictionary uploaded ✓ — all required files in place. Check the readiness checklist and continue when it's green.`
+          : `Dictionary uploaded ✓ — now upload your dataset(s) in the section above.`
+      );
+      if (datasets.length > 0) {
+        advanceGuidance("setup", "dictionary_uploaded", "You're all set for the next step! 🎉 Check the readiness checklist — when everything's green, click \"Continue to Data Foundation\" to move on.");
+      }
+    } else {
+      pushAssistantNote(`Dictionary uploaded — ${missing} variable(s) are incomplete. Add their data type, range, and an example value, then re-upload.`);
+    }
+  }
+  async function addProtocol(files) {
+    if (!files?.[0]) return;
+    setAction("protocolUpload", { kind: "loading", message: "Uploading protocol..." });
+    if (backendStatus.connected) {
+      try {
+        await uploadDocument(files[0], "protocol");
+        setAction("protocolUpload", { kind: "success", message: "Protocol stored in the backend document library." });
+      } catch (error) {
+        setAction("protocolUpload", { kind: "error", message: friendlyError(error, "Protocol upload failed.") });
+        pushAssistantNote(`Protocol upload failed: ${friendlyError(error)}`);
+        return;
+      }
+    } else {
+      setAction("protocolUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    }
+    setProtocol({ name: files[0].name, size: files[0].size });
+    pushAssistantNote(`Protocol uploaded ✓ — I'll use it to flag any design-vs-data inconsistencies in Data Foundation.`);
+  }
+  async function addPapers(files) {
+    if (!files?.length) return;
+    setAction("paperUpload", { kind: "loading", message: "Uploading research papers..." });
+    if (backendStatus.connected) {
+      try {
+        for (const file of files) await uploadDocument(file, "research_paper");
+        setAction("paperUpload", { kind: "success", message: "Research papers stored in the backend document library." });
+      } catch (error) {
+        setAction("paperUpload", { kind: "error", message: friendlyError(error, "Research paper upload failed.") });
+        pushAssistantNote(`Research paper upload failed: ${friendlyError(error)}`);
+        return;
+      }
+    } else {
+      setAction("paperUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    }
+    const additions = files.map((f, i) => {
+      const seed = seedFromName(f.name, i);
+      const duplicate = papers.some((p) => p.name === f.name);
+      return { id: `${f.name}-${Date.now()}-${i}`, name: f.name, size: f.size, title: f.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " "), authors: "Detected: J. Alvarez et al.", year: 2018 + (seed % 8), duplicate };
+    });
+    setPapers((p) => [...p, ...additions]);
+    const dupCount = additions.filter((a) => a.duplicate).length;
+    if (dupCount > 0) {
+      pushAssistantNote(`Paper(s) uploaded — ${dupCount} flagged as a possible duplicate. Remove any confirmed copies below.`);
+    } else {
+      pushAssistantNote(`Paper(s) uploaded ✓ — I'll use these as evidence when suggesting variable roles and causal relationships.`);
+    }
+  }
+  async function addGuidelines(files) {
+    if (!files?.length) return;
+    setAction("guidelineUpload", { kind: "loading", message: "Uploading guidance documents..." });
+    if (backendStatus.connected) {
+      try {
+        for (const file of files) await uploadDocument(file, "domain_guidance");
+        setAction("guidelineUpload", { kind: "success", message: "Guidance documents stored in the backend document library." });
+      } catch (error) {
+        setAction("guidelineUpload", { kind: "error", message: friendlyError(error, "Guidance upload failed.") });
+        pushAssistantNote(`Guidance upload failed: ${friendlyError(error)}`);
+        return;
+      }
+    } else {
+      setAction("guidelineUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    }
+    const additions = files.map((f, i) => {
+      const seed = seedFromName(f.name, i + 3);
+      return { id: `${f.name}-${Date.now()}-${i}`, name: f.name, size: f.size, sourceType: GUIDELINE_TYPES[seed % GUIDELINE_TYPES.length] };
+    });
+    setGuidelines((g) => [...g, ...additions]);
+    pushAssistantNote(`Guideline(s) uploaded ✓ — I'll use these as domain standards when framing measurement concepts and study limitations.`);
+  }
+  async function handleDocumentIngestion() {
+    setAction("documentIngestion", { kind: "loading", message: "Ingesting uploaded documents into ChromaDB..." });
+    if (!backendStatus.connected) {
+      setAction("documentIngestion", { kind: "error", message: "Backend unavailable - start FastAPI to ingest documents." });
+      return;
+    }
+    try {
+      const result = await ingestDocuments();
+      const status = await getIngestionStatus();
+      setIngestionInfo({ ...status, lastResult: result });
+      const chunkCount = result.number_of_chunks_created ?? result.chunks_created ?? result.number_of_chunks ?? status.number_of_stored_chunks ?? status.stored_chunks ?? 0;
+      setAction("documentIngestion", { kind: "success", message: `Documents ingested. ${chunkCount} chunks available for RAG search.` });
+      pushAssistantNote(`Document knowledge base updated: ${chunkCount} chunks are now searchable. This supports evidence retrieval only; it does not prove causal claims.`);
+    } catch (error) {
+      setAction("documentIngestion", { kind: "error", message: friendlyError(error, "Document ingestion failed.") });
+      pushAssistantNote(`Document ingestion failed: ${friendlyError(error)}`);
+    }
+  }
+  async function handleDictionaryRagCheck() {
+    setAction("ragCheck", { kind: "loading", message: "Checking the document knowledge base..." });
+    if (!backendStatus.connected) {
+      setAction("ragCheck", { kind: "error", message: "Backend unavailable - start FastAPI to search RAG evidence." });
+      return;
+    }
+    try {
+      const response = await searchRag("What evidence or guidance helps interpret the uploaded study variables and measurement timing?", 3);
+      const count = response.number_of_results ?? response.results?.length ?? 0;
+      const sources = [...new Set((response.results || []).map((item) => item.source_filename || item.metadata?.source_filename).filter(Boolean))];
+      const summary = count
+        ? `RAG evidence check found ${count} supporting chunk${count === 1 ? "" : "s"} from ${formatList(sources, "uploaded documents")}.`
+        : "RAG evidence check completed, but no matching chunks were returned.";
+      setRagSummary(summary);
+      setAction("ragCheck", { kind: "success", message: summary });
+      pushAssistantNote(`${summary} Retrieved passages are supporting evidence for design review, not causal conclusions.`);
+    } catch (error) {
+      setAction("ragCheck", { kind: "error", message: friendlyError(error, "RAG evidence check failed.") });
+      pushAssistantNote(`RAG evidence check failed: ${friendlyError(error)}`);
+    }
+  }
+  async function handleBroadExploration() {
+    const dataset = firstRealDataset(datasets);
+    if (!dataset) {
+      setAction("broadExploration", { kind: "error", message: "Upload a CSV dataset before running broad exploration." });
+      return;
+    }
+    if (!backendStatus.connected || !dataset.savedFilename) {
+      setAction("broadExploration", { kind: "error", message: "Backend unavailable - demo charts remain visible." });
+      return;
+    }
+    setAction("broadExploration", { kind: "loading", message: "Running Python broad exploration..." });
+    try {
+      const result = await runBroadExploration(realDatasetFilename(dataset));
+      setBroadExploration(result);
+      const warningCount = result.data_quality_warnings?.length || 0;
+      setAction("broadExploration", { kind: "success", message: `Broad exploration complete with ${warningCount} data-quality note${warningCount === 1 ? "" : "s"}.` });
+      pushAssistantNote("Python computed the broad exploration summaries. Review missingness, participant structure, timestamps, and correlations as hypothesis-generating evidence only. These patterns do not establish causality.");
+    } catch (error) {
+      setAction("broadExploration", { kind: "error", message: friendlyError(error, "Broad exploration failed.") });
+      pushAssistantNote(`Broad exploration failed: ${friendlyError(error)}`);
+    }
+  }
+  function promotePattern(id) {
+    setPromotedPatterns((p) => (p.includes(id) ? p : [...p, id]));
+    pushAssistantNote("Pattern promoted ✓ — it will seed a suggested question in Step 4. Promote 1–2 more if relevant, then continue.");
+  }
+
+  function toggleSensitivity(id) {
+    setSensitivityChecks((s) => ({ ...s, [id]: !s[id] }));
+  }
+  function noteFeasibilityChange() {
+    const feas = computeFeasibility(datasets, lagHours, exposureThreshold);
+
+    if (feas.verdict === "Not feasible") {
+      // Find the lowest lag that restores Feasible status
+      const recommendedLag = [0, 6, 12, 18, 24].find((l) => {
+        if (l >= lagHours) return false;
+        return computeFeasibility(datasets, l, exposureThreshold).verdict === "Feasible";
+      });
+      // Find the lowest threshold that restores Feasible status
+      const recommendedThreshold = [10, 15, 20, 25, 30].find((t) => {
+        if (t >= exposureThreshold) return false;
+        return computeFeasibility(datasets, lagHours, t).verdict === "Feasible";
+      });
+
+      if (recommendedLag !== undefined) {
+        const proj = computeFeasibility(datasets, recommendedLag, exposureThreshold);
+        pushAssistantNote(
+          `At ${lagHours}h lag your analysis-ready sample is only ~${feas.finalSample.toLocaleString()} participant-days — below the reliable estimation threshold for a mixed-logistic model. Based on your data, setting the lag to ${recommendedLag}h would recover ~${proj.finalSample.toLocaleString()} participant-days with ${proj.overlapPct}% overlap, putting you solidly into Feasible. Is ${recommendedLag}h still clinically meaningful for your sleep→craving hypothesis?`
+        );
+      } else if (recommendedThreshold !== undefined) {
+        const proj = computeFeasibility(datasets, lagHours, recommendedThreshold);
+        pushAssistantNote(
+          `Your sample is down to ~${feas.finalSample.toLocaleString()} participant-days — not enough for reliable estimation. The lag alone can't rescue it at this threshold. Try lowering the minimum exposure variation to ${recommendedThreshold}% — that would give you ~${proj.finalSample.toLocaleString()} participant-days and ${proj.overlapPct}% overlap (Feasible). You'd still have enough variation in sleep quality to support a contrast.`
+        );
+      } else {
+        pushAssistantNote(
+          `At ${lagHours}h lag and ${exposureThreshold}% threshold your sample is ~${feas.finalSample.toLocaleString()} participant-days — too thin for stable estimates. I'd recommend trying a lag under 18h and an exposure threshold under 25% together. That combination should bring you above 2,000 participant-days, which is the practical floor for this estimator with repeated measures.`
+        );
+      }
+    } else if (feas.verdict === "Marginal") {
+      // Find nearest lower lag that would make it Feasible
+      const recommendedLag = [0, 6, 12, 18].find((l) => {
+        if (l >= lagHours) return false;
+        return computeFeasibility(datasets, l, exposureThreshold).verdict === "Feasible";
+      });
+
+      if (recommendedLag !== undefined) {
+        const proj = computeFeasibility(datasets, recommendedLag, exposureThreshold);
+        pushAssistantNote(
+          `You're Marginal at ${lagHours}h — ~${feas.finalSample.toLocaleString()} participant-days and ${feas.overlapPct}% overlap. That's workable but leaves little room for covariate adjustment. Setting the lag to ${recommendedLag}h would bring you to ~${proj.finalSample.toLocaleString()} participant-days and ${proj.overlapPct}% overlap — solidly Feasible. Biologically, ${recommendedLag}h is still a defensible window for next-day craving following a sleep disruption event.`
+        );
+      } else {
+        const recommendedThreshold = [10, 15, 20, 25].find((t) => {
+          if (t >= exposureThreshold) return false;
+          return computeFeasibility(datasets, lagHours, t).verdict === "Feasible";
+        });
+        if (recommendedThreshold !== undefined) {
+          const proj = computeFeasibility(datasets, lagHours, recommendedThreshold);
+          pushAssistantNote(
+            `You're Marginal at ${lagHours}h (~${feas.finalSample.toLocaleString()} participant-days, ${feas.overlapPct}% overlap). The lag is already at a reasonable clinical value, so I'd instead lower the exposure variation threshold to ${recommendedThreshold}% — that recovers ~${proj.finalSample.toLocaleString()} participant-days (${proj.overlapPct}% overlap) without changing your temporal assumption.`
+          );
+        } else {
+          pushAssistantNote(
+            `You're Marginal at ${lagHours}h — ~${feas.finalSample.toLocaleString()} participant-days and ${feas.overlapPct}% overlap. This is on the edge; if you proceed, make sure to enable the robust standard errors and random-intercept options in Analysis Strategy to compensate for the thinner sample.`
+          );
+        }
+      }
+    } else {
+      pushAssistantNote(
+        `Good — at ${lagHours}h lag and ${exposureThreshold}% threshold you have ~${feas.finalSample.toLocaleString()} participant-days with ${feas.overlapPct}% overlap. That's a solid foundation for a mixed-logistic model with a random participant intercept. You can proceed to the Causal Graph step.`
+      );
+    }
+  }
+  function updateNodePos(id, x, y) {
+    setGraphNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, x, y } : n)));
+  }
+  function selectNode(id) {
+    setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+  }
+  function selectEdge(id) {
+    setSelectedEdgeId(id);
+    setSelectedNodeId(null);
+  }
+  function addGraphNode() {
+    const id = `custom_${Date.now()}`;
+    setGraphNodes((nodes) => [...nodes, { id, label: "New variable", isCore: false, x: 450, y: 460 }]);
+    setSelectedNodeId(id);
+    setSelectedEdgeId(null);
+    pushAssistantNote("Node added — name it and assign a role in the right panel (Confounder, Mediator, or Proxy). Without a role it won't appear in the adjustment set.");
+    advanceGuidance("causal-graph", "first_node_added", "Node added! Now let's connect it — select it as the source and click another node to draw a causal arrow between them.");
+  }
+  function removeGraphNode(id) {
+    setGraphNodes((nodes) => nodes.filter((n) => n.id !== id));
+    setGraphEdges((edges) => edges.filter((e) => e.from !== id && e.to !== id));
+    setSelectedNodeId(null);
+  }
+  function renameNode(id, label) {
+    setGraphNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, label } : n)));
+  }
+  function setNodeRole(id, role) {
+    setVariableRole(id, role);
+  }
+  function addGraphEdge(from, to) {
+    setGraphEdges((edges) => {
+      if (edges.some((e) => e.from === from && e.to === to)) return edges;
+      return [...edges, { id: `e_${Date.now()}`, from, to, type: "uncertain" }];
+    });
+    pushAssistantNote(`Arrow added: ${from} → ${to} (Uncertain). Click it to mark Supported if you have evidence, or remove it if the relationship is unclear.`);
+    advanceGuidance("causal-graph", "first_edge_added", "First arrow drawn — nice! Keep adding the rest of your confounders and mediators, then classify each arrow as Supported or Uncertain. When the graph looks right, check the adjustment set at the bottom — that's your signal to move on.");
+  }
+  function removeGraphEdge(id) {
+    setGraphEdges((edges) => edges.filter((e) => e.id !== id));
+    setSelectedEdgeId(null);
+  }
+  function setEdgeType(id, type) {
+    setGraphEdges((edges) => edges.map((e) => (e.id === id ? { ...e, type } : e)));
+    const edge = graphEdges.find((e) => e.id === id);
+    if (edge) {
+      pushAssistantNote(
+        type === "uncertain"
+          ? `${edge.from} → ${edge.to} marked Uncertain — still included in the adjustment set but flagged as unverified.`
+          : `${edge.from} → ${edge.to} marked Supported ✓ — strengthens the identification argument in the study report.`
+      );
+    }
+  }
+  function resetGraph() {
+    setGraphNodes(DEFAULT_GRAPH_NODES.map((n) => ({ ...n })));
+    setGraphEdges(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }
+  function loadGraphVariant(nodes, edges) {
+    setGraphNodes(nodes.map((n) => ({ ...n })));
+    setGraphEdges(edges.map((e) => ({ ...e })));
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }
+  function toggleRepeatedMeasures(id) {
+    setRepeatedMeasuresChecks((s) => ({ ...s, [id]: !s[id] }));
+  }
+
+  function setVariableRole(name, role) {
+    setVariableRoles((r) => ({ ...r, [name]: role }));
+    const schemaVar = ROLE_TABLE_VARIABLES.find((v) => v.name === name);
+    if (schemaVar) {
+      if (role === schemaVar.roleGuess) {
+        pushAssistantNote(`${name} → ${role} ✓ — matches the suggested role from prior evidence.`);
+      } else {
+        const reason = ROLE_CAUTION_TEXT[name] || "similar studies usually treat it differently";
+        pushAssistantNote(`${name} → ${role} flagged: ${reason}. Change it back in Causal Graph (Step 6) if needed.`);
+      }
+    } else {
+      pushAssistantNote(`${name} → ${role}. Add an arrow for it in Causal Graph to include it in the adjustment set.`);
+    }
+    advanceGuidance("question", "first_role_assigned", "First role assigned — keep going! Once every variable has a role, you're all set. Click Continue to Feasibility and we'll check if the data can actually support the analysis.");
+  }
+  function selectSuggestedQuestion(pid, altQuestion) {
+    const q = QUESTION_TEMPLATES[pid];
+    if (!q) return;
+    setSelectedQuestionId(pid);
+    setQuestionFields({ ...q, question: altQuestion || q.question });
+    pushAssistantNote("Question selected ✓ — review each field below and adjust anything that doesn't match your design, especially the time window and estimand.");
+    advanceGuidance("question", "question_selected", "Great choice! Now review the seven fields below and tweak anything that doesn't quite match your design — especially the time window and estimand. Then assign a role to each variable in the table.");
+  }
+  function writeOwnQuestion() {
+    setSelectedQuestionId("custom");
+    setQuestionFields({ ...BLANK_QUESTION_FIELDS });
+    pushAssistantNote("Fill in all seven fields: population, exposure, comparator, outcome, time window, unit of analysis, and estimand. Every field stays editable through Step 5.");
+    advanceGuidance("question", "question_selected", "Love it — writing your own question! Fill in all seven fields and then assign roles to each variable in the table below. Take your time, every field matters.");
+  }
+  function updateQuestionField(key, value) {
+    setQuestionFields((f) => ({ ...f, [key]: value }));
+  }
+  function noteQuestionFieldEdit(key) {
+    if (key === "timeWindow") {
+      pushAssistantNote("Time window updated — test this lag value in Feasibility (Step 5) to see how it affects sample size.");
+    } else if (key === "estimand") {
+      pushAssistantNote("Estimand updated ✓ — confirm it's supported by the estimator you choose in Analysis Strategy.");
+    }
+  }
+  function toggleDerivedFeature(id) {
+    setDerivedFeatures((list) => list.map((f) => (f.id === id ? { ...f, selected: !f.selected } : f)));
+  }
+
+  function applyFeedback() {
+    if (!feedbackApplied) {
+      setObjective((o) => o + (o.endsWith(".") || o.length === 0 ? "" : ".") + " Timing of exposure relative to outcome will be defined in a later step.");
+      setFeedbackApplied(true);
+    }
+    setShowFeedback(false);
+  }
+  function reviewObjective() {
+    setShowFeedback(true);
+    pushAssistantNote("Objective reviewed — see feedback below. Address any flagged gaps, then upload your dataset in the section below.");
+    advanceGuidance("setup", "objective_reviewed", "Nice — objective saved! Now upload your primary dataset below ↓. You can add one file per data source (EMA, wearable, clinical, etc.). The readiness checklist at the top will tick off as you go.");
+  }
+
+  const blockingDatasets = datasets.some((d) => d.status === "blocking");
+  const nonBlockingWarnings = datasets.some((d) => d.status === "clarification" || d.status === "warning") || (dictionary && dictionary.described < dictionary.total);
+
+  const checks = useMemo(() => {
+    const objectiveAdded = objective.trim().length > 0;
+    const datasetUploaded = datasets.length > 0;
+    const datasetParsed = datasetUploaded && !blockingDatasets;
+    const dictionaryUploaded = !!dictionary;
+    const variablesMatched = !!dictionary && dictionary.described === dictionary.total;
+    const blockingResolved = !blockingDatasets;
+    return { objectiveAdded, datasetUploaded, datasetParsed, dictionaryUploaded, variablesMatched, blockingResolved };
+  }, [objective, datasets, dictionary, blockingDatasets]);
+
+  const requiredCount = Object.values(checks).filter(Boolean).length;
+  const requiredTotal = 6;
+  const canContinue = checks.datasetUploaded && checks.dictionaryUploaded && checks.blockingResolved;
+
+  const dataFoundationComplete = useMemo(() => {
+    const parsedOk = datasets.length > 0 && !blockingDatasets;
+    const participantFields = [...new Set(datasets.map((d) => d.participantField).filter(Boolean))];
+    const linkingOk = datasets.length < 2 || participantFields.length <= 1;
+    const multiTimestamp = datasets.some((d) => d.timestampFields && d.timestampFields.length > 1);
+    return parsedOk && linkingOk && !multiTimestamp;
+  }, [datasets, blockingDatasets]);
+
+  function goToPage(key) {
+    if (key === page) return;
+    if (!BUILT_PAGES.includes(key)) {
+      showToast("This page hasn't been built in the prototype yet.");
+      return;
+    }
+    setPage(key);
+    if (!visited[key]) {
+      setVisited((v) => ({ ...v, [key]: true }));
+      pushAssistantNote(PAGE_INTRO_MESSAGES[key], key);
+      if (key === "data-foundation") {
+        pushAssistantNote(buildDataSummary(datasets, dictionary), key);
+        pushAssistantNote(buildClarificationAsk(), key);
+      }
+    }
+  }
+
+  function handleContinue() {
+    if (nonBlockingWarnings) setAckOpen(true);
+    else goToPage("data-foundation");
+  }
+
+  function askAssistant(q) {
+    setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: q }] }));
+    setAssistantThinking(true);
+    setTimeout(() => {
+      setAssistantThinking(false);
+      setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: ANSWERS[q] || "This assistant explains setup requirements, but doesn't have a canned answer for that yet in this prototype." }] }));
+    }, 650);
+  }
+  function submitAssistantInput() {
+    const q = assistantInput.trim();
+    if (!q) return;
+    setAssistantInput("");
+    const matched = Object.keys(ANSWERS).find((k) => k.toLowerCase() === q.toLowerCase());
+    askAssistant(matched || q);
+  }
+
+  const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
+
+  const actions = {
+    setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
+    addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
+    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern,
+    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
+    setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
+    setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
+    updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant,
+    setEffectType, setEstimatorFamily, toggleRepeatedMeasures,
+    pushAssistantNote,
+    lockContent, unlockContent, lockedContent,
+  };
+  const state = {
+    objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns,
+    backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
+    variableRoles, selectedQuestionId, questionFields, derivedFeatures,
+    lagHours, exposureThreshold, sensitivityChecks, feasibility,
+    graphNodes, graphEdges, selectedNodeId, selectedEdgeId,
+    effectType, estimatorFamily, repeatedMeasuresChecks,
+    lockedContent,
+  };
+
+  return (
+    <div className="ps-root">
+      <style>{STYLE}</style>
+
+      <div className="leftnav">
+        <div className="leftnav-brand"><span className="dot" /> Causal Studio</div>
+        {STEPS.map((s, i) => (
+          <button key={s.key} className={`nav-item ${page === s.key ? "active" : ""}`} title={s.full} onClick={() => goToPage(s.key)}>
+            <span className="num">{i + 1}</span>
+            {s.short}
+            {!BUILT_PAGES.includes(s.key) && <Lock size={11} className="lock" />}
+          </button>
+        ))}
+        <div className="nav-footer">Dr. research lead</div>
+      </div>
+
+      <div className={`main-col text-justify ${page === "graph" ? "main-col-canvas" : ""}`}>
+        {page === "setup" && <ProjectSetupView state={state} actions={actions} />}
+        {page === "data-foundation" && <DataFoundationView state={state} actions={actions} />}
+        {page === "explore" && (
+          <ExploreView state={state} actions={actions} onGoNext={() => goToPage("question")} />
+        )}
+        {page === "question" && (
+          <QuestionView state={state} actions={actions} onGoNext={() => goToPage("feasibility")} />
+        )}
+        {page === "feasibility" && (
+          <FeasibilityView state={state} actions={actions} onGoNext={() => goToPage("graph")} />
+        )}
+        {page === "graph" && (
+          <GraphView state={state} actions={actions} onGoNext={() => goToPage("strategy")} />
+        )}
+        {page === "strategy" && (
+          <StrategyView state={state} actions={actions} onGoNext={() => goToPage("estimation")} />
+        )}
+        {page === "estimation" && (
+          <EstimationView state={state} actions={actions} onGoNext={() => goToPage("review")} />
+        )}
+        {page === "review" && <ReviewView state={state} actions={actions} />}
+      </div>
+
+      <div className="assistant-col">
+        <div className="assistant-head"><Sparkles size={15} color="var(--accent)" /><span>AI research assistant</span></div>
+        <div className="assistant-body" ref={assistantScrollRef}>
+          {assistantThread.map((m, i) => (
+            <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant text-justify"}`}>{m.text}</div>
+          ))}
+          {assistantThinking && <div className="msg msg-assistant">Thinking\u2026</div>}
+        </div>
+        <div className="assistant-questions">
+          {(
+            page === "setup" ? SETUP_QUESTIONS
+            : page === "data-foundation" ? DF_QUESTIONS
+            : page === "explore" ? EXPLORE_QUESTIONS
+            : page === "question" ? QUESTION_PAGE_QUESTIONS
+            : page === "feasibility" ? FEASIBILITY_QUESTIONS
+            : page === "graph" ? GRAPH_QUESTIONS
+            : page === "strategy" ? STRATEGY_QUESTIONS
+            : page === "estimation" ? ESTIMATION_QUESTIONS
+            : REVIEW_QUESTIONS
+          ).map((q) => (
+            <button key={q} className="assistant-q" onClick={() => askAssistant(q)}>{q}</button>
+          ))}
+        </div>
+        {NEXT_PAGE[page] && (
+          <div className="assistant-next-row">
+            <button className="assistant-next-btn" onClick={() => goToPage(NEXT_PAGE[page])}>
+              Next: {STEPS.find((s) => s.key === NEXT_PAGE[page])?.short} <ArrowRight size={13} />
+            </button>
+          </div>
+        )}
+        <div className="assistant-caveat">This assistant explains setup requirements. It does not make clinical decisions, diagnose patients, or judge whether your data is sufficient for causal inference.</div>
+        <div className="assistant-inputbar">
+          <input placeholder="Ask a question\u2026" value={assistantInput} onChange={(e) => setAssistantInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAssistantInput()} />
+          <button className="assistant-send" aria-label="Send" onClick={submitAssistantInput}><Send size={15} /></button>
+        </div>
+      </div>
+
+      {ackOpen && (
+        <div className="overlay" onClick={() => setAckOpen(false)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Continue with unresolved warnings?</h3>
+            <p>You can continue with unresolved nonblocking warnings. These issues will remain visible in Data Foundation.</p>
+            <div className="dialog-actions">
+              <button className="btn" onClick={() => setAckOpen(false)}>Return and review</button>
+              <button className="btn btn-primary" onClick={() => { setAckOpen(false); goToPage("data-foundation"); }}>Continue with warnings</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}

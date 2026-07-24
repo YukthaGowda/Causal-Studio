@@ -1,5 +1,5 @@
-import { HomePage } from "../pages/HomePage";
+import CausalStudioApp from "../components/CausalStudioApp.jsx";
 
 export function App() {
-  return <HomePage />;
+  return <CausalStudioApp />;
 }

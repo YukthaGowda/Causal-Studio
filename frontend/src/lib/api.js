@@ -1,0 +1,92 @@
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+async function parseJsonResponse(response, fallbackMessage) {
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const detail = data?.detail;
+    if (Array.isArray(detail)) {
+      throw new Error(detail.map((item) => item.msg || item.message).filter(Boolean).join("; ") || fallbackMessage);
+    }
+    throw new Error(detail || data?.message || fallbackMessage);
+  }
+
+  return data;
+}
+
+export async function checkBackendHealth() {
+  const response = await fetch(`${API_BASE_URL}/health`);
+  return parseJsonResponse(response, "Backend health check failed.");
+}
+
+export async function uploadDataset(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${API_BASE_URL}/datasets/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return parseJsonResponse(response, "Dataset upload failed.");
+}
+
+export async function listDatasets() {
+  const response = await fetch(`${API_BASE_URL}/datasets`);
+  return parseJsonResponse(response, "Could not list datasets.");
+}
+
+export async function getDatasetSchema(filename) {
+  const response = await fetch(`${API_BASE_URL}/datasets/${encodeURIComponent(filename)}/schema`);
+  return parseJsonResponse(response, "Dataset schema parsing failed.");
+}
+
+export async function uploadDocument(file, category) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("category", category);
+  const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return parseJsonResponse(response, "Document upload failed.");
+}
+
+export async function listDocuments() {
+  const response = await fetch(`${API_BASE_URL}/documents`);
+  return parseJsonResponse(response, "Could not list documents.");
+}
+
+export async function ingestDocuments() {
+  const response = await fetch(`${API_BASE_URL}/documents/ingest`, {
+    method: "POST",
+  });
+  return parseJsonResponse(response, "Document ingestion failed.");
+}
+
+export async function getIngestionStatus() {
+  const response = await fetch(`${API_BASE_URL}/documents/ingest/status`);
+  return parseJsonResponse(response, "Could not check document ingestion status.");
+}
+
+export async function searchRag(query, topK = 5) {
+  const response = await fetch(`${API_BASE_URL}/rag/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+  return parseJsonResponse(response, "RAG search failed.");
+}
+
+export async function runBroadExploration(filename) {
+  const response = await fetch(`${API_BASE_URL}/exploration/broad`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataset_filename: filename }),
+  });
+  return parseJsonResponse(response, "Broad exploration failed.");
+}

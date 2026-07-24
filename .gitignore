@@ -64,6 +64,7 @@ data/chroma_db/
 uploads/
 backend/uploads/
 data/uploads/
+backend/runtime/
 tmp/
 temp/
 *.tmp

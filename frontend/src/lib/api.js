@@ -117,3 +117,26 @@ export async function validateCausalGraph(payload) {
   });
   return parseJsonResponse(response, "Causal graph validation failed.");
 }
+
+export async function runEstimation(payload) {
+  const response = await fetch(`${API_BASE_URL}/estimation/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Estimation run failed.");
+}
+
+export async function listEstimationRuns() {
+  const response = await fetch(`${API_BASE_URL}/estimation/runs`);
+  return parseJsonResponse(response, "Could not list estimation runs.");
+}
+
+export async function interpretEstimation(payload) {
+  const response = await fetch(`${API_BASE_URL}/estimation/interpret`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Estimation interpretation failed.");
+}

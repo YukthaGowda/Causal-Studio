@@ -35,6 +35,8 @@ import {
   assistantAction,
   checkBackendHealth,
   generateCausalGraph,
+  interpretEstimation,
+  listEstimationRuns,
   getDatasetSchema,
   getIngestionStatus,
   ingestDocuments,
@@ -42,6 +44,7 @@ import {
   searchRag,
   uploadDataset,
   uploadDocument,
+  runEstimation as runBackendEstimation,
   validateCausalGraph,
 } from "../lib/api.js";
 
@@ -4512,13 +4515,86 @@ function downloadPDFReport(state) {
   setTimeout(() => w.print(), 700);
 }
 
+function backendEstimationToRun(response, tag, fallbackConfig = {}) {
+  const estimate = response.estimate || {};
+  const diagnostics = response.diagnostics || {};
+  const sensitivity = response.sensitivity || {};
+  const reproducibility = response.reproducibility || {};
+  const ci = estimate.confidence_interval || [null, null];
+  const warnings = [
+    ...(response.readiness?.warnings || []),
+    ...(diagnostics.model_warnings || []),
+    ...(diagnostics.data_warnings || []),
+    ...(sensitivity.warnings || []),
+  ].filter(Boolean);
+  return {
+    id: response.run_id,
+    tag,
+    timestamp: reproducibility.timestamp || new Date().toLocaleString(),
+    raw: response,
+    config: {
+      question: fallbackConfig.question || "",
+      estimand: estimate.estimand || fallbackConfig.estimand || "ATE",
+      exposure: estimate.exposure || fallbackConfig.exposure || "",
+      comparator: fallbackConfig.comparator || "one-unit lower vs one-unit higher",
+      outcome: estimate.outcome || fallbackConfig.outcome || "",
+      timeWindow: fallbackConfig.timeWindow || "",
+      adjustmentSet: (reproducibility.variables_used || []).filter((v) => v !== estimate.exposure && v !== estimate.outcome).join(", ") || fallbackConfig.adjustmentSet || "(none)",
+      effectType: fallbackConfig.effectType || "ATE",
+      estimator: estimate.estimator || reproducibility.estimator || fallbackConfig.estimator || "statsmodels",
+      library: "statsmodels backend computation",
+      randomIntercept: fallbackConfig.randomIntercept || "Clustered SE when participant ID is available",
+      multipleImputation: "No - complete-case proof of concept",
+      robustSE: "Cluster/robust SE when available",
+      missingDataHandling: "Complete-case filtering",
+      sampleSize: estimate.sample_size || diagnostics.rows_after_filtering || 0,
+      exclusions: `${diagnostics.excluded_rows ?? 0} rows (${diagnostics.excluded_percent ?? 0}%)`,
+      personTime: "Not calculated in proof of concept",
+      seed: reproducibility.random_seed ?? 42,
+      softwareVersion: `Python ${reproducibility.python_version || ""}`.trim(),
+      packages: Object.entries(reproducibility.package_versions || {}).map(([name, version]) => `${name}==${version}`),
+    },
+    results: {
+      pointEstimate: estimate.point_estimate,
+      se: estimate.standard_error,
+      ciLower: ci[0],
+      ciUpper: ci[1],
+      pValue: estimate.p_value,
+      n: estimate.sample_size || diagnostics.rows_after_filtering || 0,
+      convergence: diagnostics.convergence || "not_applicable",
+      warnings,
+      balanceDiagnostics: [],
+      sensitivityResults: (sensitivity.checks || []).map((check, index) => ({ label: `Check ${index + 1}`, value: "planned/review", desc: check })),
+      estimandLabel: estimate.estimand || "ATE",
+      comparatorDef: fallbackConfig.comparator || "one-unit change",
+      diagnostics,
+      sensitivity,
+      interpretationBoundary: estimate.interpretation_boundary || response.safe_interpretation_note,
+    },
+  };
+}
+
 function EstimationView({ state, actions, onGoNext }) {
-  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours } = state;
+  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult } = state;
   const { pushAssistantNote, showToast } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
   const chosenEstimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
+  const estimationDataset = firstRealDataset(datasets);
+  const estimationColumns = estimationDataset?.schema?.column_names || [];
+  const estimationExposure = estimationColumns.includes("acc_mean_magnitude") ? "acc_mean_magnitude" : questionFields?.exposure || "";
+  const estimationOutcome = estimationColumns.includes("label") ? "label" : questionFields?.outcome || "";
+  const estimationAdjustment = ["time_of_day", "day_of_week"].filter((name) => estimationColumns.includes(name));
+  const readinessItems = [
+    { label: "Backend connected", ok: backendStatus.connected },
+    { label: "Dataset uploaded", ok: Boolean(estimationDataset?.savedFilename) },
+    { label: `Exposure available (${estimationExposure || "not selected"})`, ok: Boolean(estimationExposure && estimationColumns.includes(estimationExposure)) },
+    { label: `Outcome available (${estimationOutcome || "not selected"})`, ok: Boolean(estimationOutcome && estimationColumns.includes(estimationOutcome)) },
+    { label: "Graph confirmed", ok: Boolean(confirmedGraph), warning: true },
+    { label: "Identification confirmed", ok: Boolean(graphValidationResult?.safe_to_continue), warning: true },
+    { label: "Assumptions reviewed", ok: Object.values(sensitivityChecks).some(Boolean), warning: true },
+  ];
 
   const [configOpen, setConfigOpen] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
@@ -4563,8 +4639,91 @@ function EstimationView({ state, actions, onGoNext }) {
     };
   }
 
-  function runEstimation(tag = "Primary") {
+  async function runEstimation(tag = "Primary") {
     if (isRunning) return;
+    const dataset = firstRealDataset(datasets);
+    if (!backendStatus.connected) {
+      pushAssistantNote("Backend unavailable - Phase 8 numerical estimation must run in Python. Start FastAPI and try again.");
+      showToast("Backend unavailable - estimation needs FastAPI.");
+      return;
+    }
+    if (!dataset?.savedFilename) {
+      pushAssistantNote("Upload and parse a CSV dataset before running Phase 8 estimation.");
+      showToast("Upload a dataset first.");
+      return;
+    }
+    setIsRunning(true);
+    setRunProgress(0);
+    setInterpretVersions([]);
+    setInterpretLockedIdx(null);
+    pushAssistantNote("Phase 8 is running in Python now. The backend will calculate the estimate, uncertainty, diagnostics, and warnings; I can interpret the computed output afterward, but I do not generate numerical results.");
+    const backendRunInterval = setInterval(() => setRunProgress((p) => Math.min(p + 18, 90)), 380);
+    const exposure = dataset.schema?.column_names?.includes("acc_mean_magnitude")
+      ? "acc_mean_magnitude"
+      : questionFields?.exposure || dataset.schema?.possible_numeric_columns?.[0] || "";
+    const outcome = dataset.schema?.column_names?.includes("label")
+      ? "label"
+      : questionFields?.outcome || dataset.schema?.column_names?.find((name) => name !== exposure) || "";
+    const safeAdjustment = ["time_of_day", "day_of_week"].filter((name) => dataset.schema?.column_names?.includes(name));
+    const payload = {
+      dataset_filename: dataset.savedFilename,
+      confirmed_question: questionFields?.question || "Among adults in the uploaded EMA/passive sensing dataset, what is the association between accelerometer magnitude and label under the specified model?",
+      estimand: effectType === "direct" ? "ADE" : "ATE",
+      exposure,
+      comparator: { type: "continuous_unit_change", reference: "one-unit lower", treatment: "one-unit higher" },
+      outcome,
+      adjustment_set: safeAdjustment.length ? safeAdjustment : adjustmentSet.filter((name) => dataset.schema?.column_names?.includes(name)),
+      participant_id: dataset.participantField || "pid",
+      timestamp: dataset.timestampFields?.[0] || "time_stamp",
+      time_window: { exposure_window: "8h", lag: `${Math.max(1, Math.round(lagHours / 24))}d`, outcome_window: "24h" },
+      estimator: "statsmodels_linear",
+      missing_data_strategy: "complete_case",
+      cluster_or_repeated_measures: repeatedMeasuresChecks.randomIntercept ? "cluster_by_participant" : "none",
+      random_seed: 42,
+      identification_confirmed: Boolean(graphValidationResult?.safe_to_continue),
+      graph_confirmed: Boolean(confirmedGraph),
+      assumptions_reviewed: Object.values(sensitivityChecks).some(Boolean),
+      allow_unconfirmed_analysis: true,
+    };
+    const fallbackConfig = {
+      question: payload.confirmed_question,
+      estimand: payload.estimand,
+      exposure: payload.exposure,
+      comparator: `${payload.comparator.reference} vs ${payload.comparator.treatment}`,
+      outcome: payload.outcome,
+      timeWindow: `${payload.time_window.exposure_window} exposure, ${payload.time_window.lag} lag, ${payload.time_window.outcome_window} outcome`,
+      adjustmentSet: payload.adjustment_set.join(", ") || "(none)",
+      effectType: payload.estimand,
+      estimator: "statsmodels",
+      randomIntercept: payload.cluster_or_repeated_measures,
+    };
+    try {
+      const response = await runBackendEstimation(payload);
+      clearInterval(backendRunInterval);
+      setRunProgress(100);
+      if (response.status === "blocked_not_ready") {
+        pushAssistantNote(`Estimation was blocked by readiness checks: ${response.readiness?.blocking_issues?.join("; ") || "not ready"}`);
+        showToast("Estimation blocked by readiness checks.");
+        return;
+      }
+      const newRun = backendEstimationToRun(response, tag, fallbackConfig);
+      setRuns((prev) => [...prev, newRun]);
+      setActiveRunId(newRun.id);
+      if (newRun.results.warnings.length) {
+        pushAssistantNote(`Python estimation complete with ${newRun.results.warnings.length} warning(s). Point estimate ${newRun.results.pointEstimate} (95% CI: ${newRun.results.ciLower}, ${newRun.results.ciUpper}), SE ${newRun.results.se}, p=${newRun.results.pValue}, N=${Number(newRun.results.n || 0).toLocaleString()}. This is computed under the specified model and assumptions; it does not prove causality by itself.`);
+        advanceGuidance("estimation", "run_complete", "Results are in - review warnings before selecting a primary result. Use Interpret Current Estimate for a plain-language explanation of the computed output.");
+      } else {
+        pushAssistantNote(`Python estimation complete. Point estimate ${newRun.results.pointEstimate} (95% CI: ${newRun.results.ciLower}, ${newRun.results.ciUpper}), SE ${newRun.results.se}, p=${newRun.results.pValue}, N=${Number(newRun.results.n || 0).toLocaleString()}. This is computed output only; it does not prove causality by itself.`);
+        advanceGuidance("estimation", "run_complete", "Clean run - no warnings. Use Interpret Current Estimate for a plain-language explanation of the computed output.");
+      }
+    } catch (error) {
+      clearInterval(backendRunInterval);
+      pushAssistantNote(`Estimation failed: ${friendlyError(error)} Try checking the selected exposure, outcome, adjustment variables, and whether Logit needs a linear fallback.`);
+      showToast("Estimation failed.");
+    } finally {
+      setIsRunning(false);
+    }
+    return;
     setIsRunning(true);
     setRunProgress(0);
     setInterpretVersions([]);
@@ -4620,9 +4779,21 @@ function EstimationView({ state, actions, onGoNext }) {
     }, 2800);
   }
 
-  function interpretEstimate() {
+  async function interpretEstimate() {
     if (!activeRun || interpretLoading) return;
     setInterpretLoading(true);
+    try {
+      const response = await interpretEstimation({ estimation_result: activeRun.raw || activeRun, user_question: "Interpret the current computed estimate." });
+      const text = response.assistant_message || "The backend returned an interpretation, but no message was provided.";
+      setInterpretVersions(prev => [...prev, text]);
+      pushAssistantNote(text);
+      advanceGuidance("estimation", "interpreted", "Interpretation done. Now review diagnostics and sensitivity notes before selecting a primary run.");
+    } catch (error) {
+      pushAssistantNote(`Interpretation failed: ${friendlyError(error)} The numerical output remains valid as backend-computed output; only the interpretation step failed.`);
+    } finally {
+      setInterpretLoading(false);
+    }
+    return;
     setTimeout(() => {
       const r = activeRun.results;
       const dir = r.pointEstimate < 0 ? "reduction" : "increase";
@@ -4698,24 +4869,41 @@ function EstimationView({ state, actions, onGoNext }) {
             <tbody>
               <tr><td style={{ color: "#5B6472", width: 190 }}>Research question</td><td>{questionFields?.question || <span className="helper">Not set \u2014 go back to Question &amp; Variables.</span>}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Estimand</td><td>{effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Exposure</td><td className="mono">{questionFields?.exposure || "sleep_disruption_flag"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Exposure</td><td className="mono">{estimationExposure || questionFields?.exposure || "not selected"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Comparator</td><td>{questionFields?.comparator || "No disruption (\u22656h uninterrupted)"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Outcome</td><td className="mono">{questionFields?.outcome || "alcohol_craving_ema"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Outcome</td><td className="mono">{estimationOutcome || questionFields?.outcome || "not selected"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Time window</td><td>{lagHours}h lag</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Adjustment set</td><td className="mono">{adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Adjustment set</td><td className="mono">{estimationAdjustment.length ? estimationAdjustment.join(", ") : adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Excluded vars</td><td className="mono">{mediators.length && effectType !== "direct" ? `${mediators.join(", ")} (mediator \u2014 excluded from adjustment)` : "\u2014"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Estimator</td><td>{chosenEstimator.label}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Library / function</td><td className="mono">{estimatorFamily === "msm" ? "causalml / DoWhy (IPTW)" : estimatorFamily === "gee" ? "statsmodels.genmod.GEE" : "statsmodels.formula.MixedLM / DoWhy"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Library / function</td><td className="mono">statsmodels OLS/Logit with robust or clustered standard errors</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Clustering strategy</td><td>{repeatedMeasuresChecks.randomIntercept ? "Random participant intercept (REML)" : "None specified"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Missing-data handling</td><td>{repeatedMeasuresChecks.multipleImputation ? "Multiple imputation (M=20 imputations, MAR assumed)" : "Complete-case analysis"}{repeatedMeasuresChecks.robustSE ? " + cluster-robust SEs" : ""}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Analysis sample</td><td>{feasibility.finalSample.toLocaleString()} participant-days</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Exclusions</td><td>{Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Person-time</td><td>{Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Random seed</td><td className="mono">42</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Software version</td><td className="mono">Python 3.11 / DoWhy 0.11.2 / statsmodels 0.14.1</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Software version</td><td className="mono">Python backend / statsmodels / pandas / numpy / scipy</td></tr>
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Readiness check</div>
+          <CardInfo text="Phase 8 is cautious by default. Missing graph, identification, or assumption confirmation is shown as a warning; backend estimation can still run only because this proof of concept sends allow_unconfirmed_analysis=true." />
+        </div>
+        <div className="filter-pills">
+          {readinessItems.map((item) => (
+            <span key={item.label} className={`chip ${item.ok ? "chip-success" : item.warning ? "chip-warning" : "chip-danger"}`}>
+              {item.ok ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />} {item.label}
+            </span>
+          ))}
+        </div>
+        <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>
+          Required variables for the safe demo run: exposure <span className="mono">{estimationExposure || "not selected"}</span>, outcome <span className="mono">{estimationOutcome || "not selected"}</span>, adjustment set <span className="mono">{estimationAdjustment.join(", ") || "(none)"}</span>. Numerical results are calculated by Python only.
+        </p>
       </div>
 
       {/* ── Section 2: Backend Execution ── */}
@@ -4769,10 +4957,11 @@ function EstimationView({ state, actions, onGoNext }) {
               </div>
               <div className="mini-stat"><span className="mini-stat-label">SE</span><span className="mini-stat-value">{activeRun.results.se}</span></div>
               <div className="mini-stat"><span className="mini-stat-label">95% CI</span><span className="mini-stat-value">[{activeRun.results.ciLower}, {activeRun.results.ciUpper}]</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">p-value</span><span className="mini-stat-value">{activeRun.results.pValue ?? "—"}</span></div>
               <div className="mini-stat"><span className="mini-stat-label">N</span><span className="mini-stat-value">{activeRun.results.n.toLocaleString()}</span></div>
             </div>
             <div className="helper" style={{ marginTop: 8 }}>
-              <Info size={13} /> Comparator definition: <em>{activeRun.results.comparatorDef}</em>
+              <Info size={13} /> Comparator definition: <em>{activeRun.results.comparatorDef}</em>. {activeRun.results.interpretationBoundary}
             </div>
           </div>
 
@@ -4805,6 +4994,15 @@ function EstimationView({ state, actions, onGoNext }) {
             <div className="pattern-row">
               <span>Convergence</span>
               <span className="chip chip-success"><CheckCircle2 size={12} /> {activeRun.results.convergence}</span>
+            </div>
+            <div className="pattern-row"><span>Rows before filtering</span><span className="mono">{activeRun.results.diagnostics?.rows_before_filtering ?? "—"}</span></div>
+            <div className="pattern-row"><span>Rows after filtering</span><span className="mono">{activeRun.results.diagnostics?.rows_after_filtering ?? "—"}</span></div>
+            <div className="pattern-row"><span>Excluded rows</span><span className="mono">{activeRun.results.diagnostics?.excluded_rows ?? "—"} ({activeRun.results.diagnostics?.excluded_percent ?? "—"}%)</span></div>
+            <div className="pattern-row">
+              <span>Exposure variation</span>
+              <span className="mono">
+                mean {activeRun.results.diagnostics?.exposure_variation?.mean ?? "—"} · std {activeRun.results.diagnostics?.exposure_variation?.std ?? "—"} · unique {activeRun.results.diagnostics?.exposure_variation?.unique_values ?? "—"}
+              </span>
             </div>
             {activeRun.results.warnings.length > 0 ? (
               activeRun.results.warnings.map((w, i) => (

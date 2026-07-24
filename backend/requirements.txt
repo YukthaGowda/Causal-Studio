@@ -11,3 +11,6 @@ python-dotenv
 networkx
 langgraph
 langsmith
+numpy
+scipy
+statsmodels

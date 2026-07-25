@@ -140,3 +140,40 @@ export async function interpretEstimation(payload) {
   });
   return parseJsonResponse(response, "Estimation interpretation failed.");
 }
+
+export async function generateReport(payload) {
+  const response = await fetch(`${API_BASE_URL}/reports/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Report generation failed.");
+}
+
+export async function auditClaims(payload) {
+  const response = await fetch(`${API_BASE_URL}/reports/audit-claims`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Claim audit failed.");
+}
+
+export function exportReport(payload, format = "json") {
+  const extension = format === "markdown" ? "md" : "json";
+  const date = new Date().toISOString().slice(0, 10);
+  const filename = `causal_design_estimation_evidence_report_${date}.${extension}`;
+  const content = format === "markdown"
+    ? payload.markdown || JSON.stringify(payload, null, 2)
+    : JSON.stringify(payload, null, 2);
+  const blob = new Blob([content], { type: format === "markdown" ? "text/markdown" : "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  return filename;
+}

@@ -8,7 +8,7 @@ from app.services.causal_questions import CausalQuestionGenerationError, resolve
 from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
 
 
-REPORT_TYPE = "Causal Design and Analysis Guidance Report"
+REPORT_TYPE = "Causal Design, Estimation, and Evidence Report"
 
 UNSAFE_LANGUAGE_PATTERNS = [
     ("causes", "Use 'is evaluated for association with' or 'is hypothesized to affect under assumptions'."),
@@ -23,6 +23,8 @@ UNSAFE_LANGUAGE_PATTERNS = [
     ("clinical decision", "State that this is not for clinical decision-making."),
     ("causal effect is established", "State that the current design does not establish a causal effect."),
     ("assumptions are proven", "State that assumptions require review and are not proven."),
+    ("confirms the true causal structure", "State that the graph is a design assumption, not the true causal structure."),
+    ("will relapse", "Do not make clinical prediction or relapse claims."),
 ]
 
 
@@ -142,6 +144,151 @@ def first_present(*values: Any) -> Any:
     return None
 
 
+def normalize_estimation_run(selected_primary_estimation_run: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not selected_primary_estimation_run:
+        return None
+
+    raw = selected_primary_estimation_run.get("raw") if isinstance(selected_primary_estimation_run, dict) else None
+    source = raw if isinstance(raw, dict) else selected_primary_estimation_run
+    estimate = source.get("estimate") or source.get("results") or {}
+    diagnostics = source.get("diagnostics") or estimate.get("diagnostics") or {}
+    sensitivity = source.get("sensitivity") or estimate.get("sensitivity") or {}
+    reproducibility = source.get("reproducibility") or {}
+    config = source.get("config") or selected_primary_estimation_run.get("config") or {}
+
+    confidence_interval = estimate.get("confidence_interval")
+    if not confidence_interval and {"ciLower", "ciUpper"} <= set(estimate):
+        confidence_interval = [estimate.get("ciLower"), estimate.get("ciUpper")]
+
+    return {
+        "run_id": source.get("run_id") or source.get("id") or selected_primary_estimation_run.get("id"),
+        "status": source.get("status") or selected_primary_estimation_run.get("tag") or "selected_primary",
+        "estimate": {
+            "estimand": estimate.get("estimand") or estimate.get("estimandLabel") or config.get("estimand"),
+            "estimator": estimate.get("estimator") or reproducibility.get("estimator") or config.get("estimator"),
+            "exposure": estimate.get("exposure") or config.get("exposure"),
+            "outcome": estimate.get("outcome") or config.get("outcome"),
+            "point_estimate": first_present(estimate.get("point_estimate"), estimate.get("pointEstimate")),
+            "standard_error": first_present(estimate.get("standard_error"), estimate.get("se")),
+            "confidence_interval": confidence_interval,
+            "p_value": first_present(estimate.get("p_value"), estimate.get("pValue")),
+            "sample_size": first_present(estimate.get("sample_size"), estimate.get("n"), config.get("sampleSize")),
+            "interpretation_boundary": estimate.get("interpretation_boundary")
+            or estimate.get("interpretationBoundary")
+            or source.get("safe_interpretation_note"),
+        },
+        "diagnostics": {
+            "rows_before_filtering": diagnostics.get("rows_before_filtering"),
+            "rows_after_filtering": diagnostics.get("rows_after_filtering"),
+            "excluded_rows": diagnostics.get("excluded_rows"),
+            "excluded_percent": diagnostics.get("excluded_percent"),
+            "convergence": diagnostics.get("convergence") or estimate.get("convergence"),
+            "exposure_variation": diagnostics.get("exposure_variation"),
+            "model_warnings": diagnostics.get("model_warnings") or estimate.get("warnings", []),
+            "data_warnings": diagnostics.get("data_warnings", []),
+        },
+        "sensitivity": {
+            "checks": sensitivity.get("checks") or [
+                item.get("desc") or item.get("label")
+                for item in estimate.get("sensitivityResults", [])
+                if isinstance(item, dict)
+            ],
+            "warnings": sensitivity.get("warnings", []),
+        },
+        "reproducibility": {
+            "dataset_filename": reproducibility.get("dataset_filename") or config.get("dataset_filename"),
+            "estimator": reproducibility.get("estimator") or config.get("estimator"),
+            "random_seed": reproducibility.get("random_seed") or config.get("seed"),
+            "variables_used": reproducibility.get("variables_used") or [
+                value
+                for value in [
+                    config.get("exposure"),
+                    config.get("outcome"),
+                    *(str(config.get("adjustmentSet") or "").split(", ") if config.get("adjustmentSet") else []),
+                ]
+                if value and value != "(none)"
+            ],
+            "package_versions": reproducibility.get("package_versions") or config.get("packages", []),
+            "timestamp": reproducibility.get("timestamp") or selected_primary_estimation_run.get("timestamp"),
+            "complete_case_filtering": config.get("missingDataHandling") or "Complete-case filtering details require review.",
+            "warnings": source.get("readiness", {}).get("warnings", []) + diagnostics.get("model_warnings", []) + diagnostics.get("data_warnings", []),
+        },
+    }
+
+
+def audit_user_claims(
+    *,
+    claims: list[Any],
+    confirmed_question: str | None = None,
+    final_graph: dict[str, Any] | None = None,
+    identification_result: dict[str, Any] | None = None,
+    analysis_strategy: dict[str, Any] | None = None,
+    assumptions_review: dict[str, Any] | None = None,
+    selected_primary_estimation_run: dict[str, Any] | None = None,
+    rag_evidence: list[Any] | None = None,
+) -> dict[str, Any]:
+    linked_claims: list[dict[str, Any]] = []
+    needs_review_claims: list[dict[str, Any]] = []
+    blocked_claims: list[dict[str, Any]] = []
+    safe_rewrites: list[dict[str, str]] = []
+    warnings: list[str] = []
+    estimation_run = normalize_estimation_run(selected_primary_estimation_run)
+
+    if not estimation_run:
+        warnings.append("No selected primary estimation run was provided; numerical claims cannot be verified.")
+    if not rag_evidence:
+        warnings.append("No RAG evidence was linked; evidence limitations should be documented.")
+    if not final_graph:
+        warnings.append("No final graph was provided; graph-linked causal wording should remain provisional.")
+
+    blocked_terms = {
+        "proves": "Graph and estimates do not prove causality.",
+        "proven": "Graph and estimates do not prove causality.",
+        "will relapse": "Clinical prediction and relapse language are outside project scope.",
+        "diagnose": "Diagnostic language is outside project scope.",
+        "treatment recommendation": "Treatment recommendation language is outside project scope.",
+        "confirms the true causal structure": "The graph is an assumption set, not proof of the true structure.",
+    }
+    review_terms = {
+        "causes": "Direct causal wording needs explicit boundaries tied to graph, identification, assumptions, diagnostics, and estimates.",
+        "cause ": "Direct causal wording needs explicit boundaries tied to graph, identification, assumptions, diagnostics, and estimates.",
+        "leads to": "Use cautious wording unless the design and estimate are explicitly bounded.",
+        "reduces": "Effect direction and magnitude must match the selected backend-computed estimate.",
+    }
+
+    for raw_claim in claims or []:
+        claim = str(raw_claim).strip()
+        if not claim:
+            continue
+        lowered = claim.lower()
+        matched_block = next((reason for term, reason in blocked_terms.items() if term in lowered), None)
+        matched_review = next((reason for term, reason in review_terms.items() if term in lowered), None)
+        item = {"claim": claim, "confirmed_question": confirmed_question}
+        if matched_block:
+            blocked_claims.append({**item, "reason": matched_block})
+            safe_rewrites.append(
+                {
+                    "original_claim": claim,
+                    "safe_rewrite": "The analysis evaluates the estimated association under the specified causal graph, adjustment set, model, and assumptions.",
+                }
+            )
+        elif matched_review or not estimation_run:
+            needs_review_claims.append({**item, "reason": matched_review or "Claim is not linked to a selected primary estimation run."})
+        else:
+            linked_claims.append({**item, "evidence_link": "Consistent with provided design context and selected estimation run; still requires human review."})
+
+    status_value = "blocked" if blocked_claims else "warnings" if needs_review_claims or warnings else "passed"
+    return {
+        "status": status_value,
+        "linked_claims": linked_claims,
+        "needs_review_claims": needs_review_claims,
+        "blocked_claims": blocked_claims,
+        "safe_rewrites": safe_rewrites,
+        "warnings": warnings,
+        "safety_note": "LLM wording may be revised, but numerical estimates must come from Phase 8 backend results.",
+    }
+
+
 def generate_report(
     *,
     project_title: str | None = None,
@@ -162,6 +309,7 @@ def generate_report(
     identification_result: dict[str, Any],
     analysis_strategy: dict[str, Any],
     assumptions_review: dict[str, Any],
+    selected_primary_estimation_run: dict[str, Any] | None = None,
     evidence_summary: list[Any] | None = None,
     user_notes: str | None = None,
 ) -> dict[str, Any]:
@@ -202,15 +350,37 @@ def generate_report(
         or identification_result.get("proposed_adjustment_set")
         or []
     )
+    estimation_run = normalize_estimation_run(selected_primary_estimation_run)
+    diagnostics = (estimation_run or {}).get("diagnostics", {})
+    diagnostic_warnings = [
+        *(diagnostics.get("model_warnings") or []),
+        *(diagnostics.get("data_warnings") or []),
+        *((estimation_run or {}).get("sensitivity", {}).get("warnings") or []),
+    ]
+    blocked_items = []
+    warnings = []
+    if not estimation_run:
+        warnings.append("Phase 8 estimation has not been completed or selected as primary.")
+        blocked_items.append("Select a primary Phase 8 estimation run before final sign-off.")
+    if list_assumptions_by_status(assumptions, {"uncertain", "not_supported"}):
+        warnings.append("One or more assumptions remain uncertain or unsupported.")
+    if diagnostic_warnings:
+        warnings.extend(diagnostic_warnings)
 
     report = {
-        "report_title": project_title or "Causal Design Agent Analysis Guidance Report",
+        "report_id": f"report_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        "title": project_title or "Causal Design, Estimation, and Evidence Report",
+        "report_title": project_title or "Causal Design, Estimation, and Evidence Report",
         "report_type": REPORT_TYPE,
+        "status": "blocked" if blocked_items else "ready_with_warnings" if warnings else "draft",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "warnings": warnings,
+        "blocked_items": blocked_items,
+        "export_options": {"json": True, "markdown": True, "pdf": False},
         "project_summary": {
             "project_title": project_title,
             "user_notes": user_notes,
-            "safety_note": "This is a design and guidance report, not a causal-results report.",
+            "safety_note": "This is a causal design, estimation, and evidence package, not a causal proof document.",
         },
         "research_objective": research_objective,
         "final_research_question": confirmed_question.strip(),
@@ -238,15 +408,21 @@ def generate_report(
         "identification_assessment": identification_result,
         "adjustment_set": adjustment_set,
         "analysis_strategy": strategy_plan,
+        "selected_primary_estimation_run": estimation_run,
+        "estimation_and_calculation": (estimation_run or {}).get("estimate"),
+        "diagnostics_and_sensitivity": {
+            "diagnostics": diagnostics,
+            "sensitivity": (estimation_run or {}).get("sensitivity"),
+        },
         "assumption_checklist": assumptions.get("assumptions", []),
         "sensitivity_plan": assumptions.get("sensitivity_checks", strategy_plan.get("sensitivity_checks", [])),
         "robustness_plan": assumptions.get("robustness_checks", strategy_plan.get("robustness_checks", [])),
         "supporting_evidence": evidence_summary or [],
         "limitations": [
-            "This report does not estimate a causal effect.",
-            "This report does not calculate p-values or treatment effects.",
+            "Computed estimates are conditional on the selected model, graph, adjustment set, and assumptions.",
             "Exploratory patterns do not establish causality.",
             "Causal interpretation requires reviewed and justified assumptions.",
+            "This report is not diagnostic guidance or treatment-decision support.",
             *strategy_plan.get("limitations", []),
             *assumptions.get("causal_interpretation_limits", []),
         ],
@@ -266,16 +442,48 @@ def generate_report(
             "Review all high-severity warnings before analysis.",
             "Confirm exposure, outcome, time window, and adjustment set.",
             "Document assumptions, limitations, and sensitivity checks.",
-            "Proceed to estimation only outside this report and only after user review.",
+            "Review the selected Phase 8 estimation run, diagnostics, and sensitivity notes before export.",
         ],
         "pdf_export_status": "not_implemented",
         "pdf_export_message": "PDF export will be added later. This endpoint returns a structured JSON report.",
     }
+    report["sections"] = {
+        "project_summary": report["project_summary"],
+        "dataset_and_schema_summary": report["dataset_summary"],
+        "broad_exploration_summary": report["broad_data_exploration_summary"],
+        "causal_question": {"confirmed_question": report["final_research_question"]},
+        "variable_definitions_and_roles": report["causal_role_table"],
+        "targeted_feasibility": report["data_feasibility_summary"],
+        "causal_graph_summary": report["final_causal_graph_summary"],
+        "identification_review": report["identification_assessment"],
+        "analysis_strategy": report["analysis_strategy"],
+        "estimation_and_calculation": report["estimation_and_calculation"],
+        "diagnostics_and_sensitivity": report["diagnostics_and_sensitivity"],
+        "evidence_notes": report["supporting_evidence"],
+        "claim_safety_audit": {},
+        "what_can_and_cannot_be_claimed": {
+            "can_claim": report["what_can_be_claimed"],
+            "cannot_claim": report["what_cannot_be_claimed"],
+        },
+        "human_review_checklist": {
+            "confirmed_research_question": bool(confirmed_question),
+            "confirmed_graph": bool(graph),
+            "identification_reviewed": bool(identification_result),
+            "assumptions_reviewed": bool(assumptions_review),
+            "estimation_run_selected": bool(estimation_run),
+            "diagnostics_reviewed": bool(estimation_run and diagnostics),
+            "claim_audit_passed": False,
+            "evidence_reviewed": bool(evidence_summary),
+            "limitations_documented": True,
+        },
+        "reproducibility_log": (estimation_run or {}).get("reproducibility"),
+    }
     report["claim_audit"] = audit_claims(report)
+    report["sections"]["claim_safety_audit"] = report["claim_audit"]
     record_trace_event(
         "review_export_report_generation",
         {
-            "workflow_step": 8,
+            "workflow_step": 9,
             "dataset_filename": dataset_path.name,
             "research_objective_present": bool(research_objective),
             "confirmed_question_length": len(confirmed_question),
@@ -285,6 +493,7 @@ def generate_report(
             "identification_status": identification_result.get("identification_status"),
             "strategy_status": strategy_plan.get("strategy_status"),
             "assumption_review_status": assumptions.get("review_status"),
+            "selected_estimation_run_present": bool(estimation_run),
             "claim_audit_status": report["claim_audit"].get("status"),
             "unsafe_claim_count": len(report["claim_audit"].get("unsafe_claims_found", [])),
         },

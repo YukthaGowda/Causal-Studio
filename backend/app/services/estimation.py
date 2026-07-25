@@ -154,12 +154,17 @@ def prepare_design_matrix(dataframe: Any, exposure: str, outcome: str, adjustmen
     rows_before = len(working)
 
     for column in [exposure, outcome, *adjustment_set]:
-        working[column] = pd.to_numeric(working[column], errors="ignore")
+        converted = pd.to_numeric(working[column], errors="coerce")
+        if converted.notna().sum() > 0:
+            working[column] = converted
 
     selected = [exposure, outcome, *adjustment_set]
     complete = working.dropna(subset=selected)
     variables_dropped: list[str] = []
     y = pd.to_numeric(complete[outcome], errors="coerce")
+    if y.notna().sum() == 0:
+        codes, _ = pd.factorize(complete[outcome], sort=True)
+        y = pd.Series(codes, index=complete.index).replace(-1, pd.NA)
     X_raw = complete[[exposure, *adjustment_set]].copy()
     X_raw[exposure] = pd.to_numeric(X_raw[exposure], errors="coerce")
     X = pd.get_dummies(X_raw, columns=[col for col in adjustment_set if not pd.api.types.is_numeric_dtype(X_raw[col])], drop_first=True)
@@ -261,6 +266,10 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     outcome_type = infer_outcome_type(y)
     model_warnings: list[str] = []
     data_warnings: list[str] = []
+    if pd.to_numeric(dataframe[outcome], errors="coerce").notna().sum() == 0:
+        data_warnings.append(
+            f"Outcome '{outcome}' is non-numeric and was encoded for this proof-of-concept calculation; confirm the outcome definition before interpreting estimates."
+        )
 
     variation, overlap, exposure_warnings = exposure_diagnostics(dataframe.loc[y.index, exposure])
     data_warnings.extend(exposure_warnings)

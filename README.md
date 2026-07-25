@@ -40,7 +40,7 @@ Causal Design Agent does not:
 - Automatically produce causal conclusions.
 - Run final causal estimation yet, unless that capability is explicitly added later.
 
-Exploratory patterns do not establish causality. The report output is a causal design and analysis guidance report, not a causal results report.
+Exploratory patterns do not establish causality. The report output is a causal design, estimation, and evidence package, not a causal proof document.
 
 ## Core Project Rule
 
@@ -341,7 +341,7 @@ Use the FastAPI docs at `/docs` for request and response shapes.
 - Do not present causal conclusions as proven.
 - Treat LLM outputs as recommendations, explanations, and drafts.
 - Require backend validation for roles, timing, graph structure, identification readiness, assumptions, and claims.
-- Report output should be a causal design and analysis guidance report, not a causal results report.
+- Report output should be a causal design, estimation, and evidence package, not a causal proof document.
 
 ## Next Planned Work
 

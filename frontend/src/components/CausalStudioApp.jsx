@@ -2965,7 +2965,7 @@ function VerdictBadge({ verdict }) {
 
 function FeasibilityView({ state, actions, onGoNext }) {
   const { datasets, questionFields, selectedQuestionId, variableRoles, lagHours, exposureThreshold, sensitivityChecks, targetedFeasibilityResult, actionStatus } = state;
-  const { setLagHours, setExposureThreshold, toggleSensitivity, showToast, handleRunFeasibilityCheck, runAssistantAction } = actions;
+  const { setLagHours, setExposureThreshold, toggleSensitivity, showToast, handleRunFeasibilityCheck, runAssistantAction, goToPage } = actions;
 
   const feas = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
   const seed = datasets.length ? seedFromName(datasets[0].name, datasets.length) : 42;
@@ -3120,14 +3120,28 @@ function FeasibilityView({ state, actions, onGoNext }) {
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Explain This Warning")}>
             <AlertTriangle size={13} /> Explain This Warning
           </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Reprocess with Feedback")}>
+            <Sparkles size={13} /> Reprocess with Feedback
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={handleRunFeasibilityCheck} disabled={!canRunFeasibility || actionStatus.targetedFeasibility?.kind === "loading"}>
             <RefreshCw size={13} /> Recalculate
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={() => actions.showToast("Go back to Phase 4 using the left navigation to revise the confirmed question.")}>
+          <button className="btn btn-secondary btn-sm" onClick={() => { showToast("Returning to Phase 4 to revise the question."); goToPage?.("question"); }}>
             Revise Question
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={() => actions.showToast("Go back to Phase 4 to revise candidate variables and roles.")}>
+          <button className="btn btn-secondary btn-sm" onClick={() => { showToast("Returning to Phase 4 to revise variables."); goToPage?.("question"); }}>
             Revise Variables
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => { showToast("Returning to Phase 4 to choose an alternative exposure."); goToPage?.("question"); }}>
+            Try Alternative Exposure
+          </button>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={onGoNext}
+            disabled={!targetedFeasibilityResult?.safe_to_continue_to_graph}
+            title="Enabled only when Python feasibility says the design can continue to graph review."
+          >
+            Proceed with Limitations
           </button>
         </div>
         {statusMessage(actionStatus.targetedFeasibility) && (
@@ -3142,6 +3156,9 @@ function FeasibilityView({ state, actions, onGoNext }) {
         )}
         <div className={`helper ${feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision" ? "" : ""}`} style={{ marginTop: 10 }}>
           <ShieldAlert size={13} /> {statusMessageText}
+        </div>
+        <div className="helper" style={{ marginTop: 8 }}>
+          <Info size={13} /> Python calculated these feasibility diagnostics from the uploaded dataset. These checks do not establish causality. Feasibility only means the proposed analysis may be technically implementable.
         </div>
       </div>
 
@@ -7806,6 +7823,31 @@ export default function CausalStudioApp() {
       };
     }
 
+    if (pageKey === "feasibility") {
+      const selectedVariables = [
+        ...new Set([
+          ...Object.entries(variableRoles)
+            .filter(([, role]) => role && role !== "Unassigned")
+            .map(([name]) => name),
+          ...(targetedFeasibilityResult?.selected_variables_checked || []),
+        ]),
+      ];
+      return {
+        ...base,
+        phase: "phase_5_feasibility",
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        confirmed_question: questionFields || {},
+        feasibility_result: targetedFeasibilityResult || {},
+        targeted_feasibility_result: targetedFeasibilityResult || {},
+        selected_variables: selectedVariables,
+        schema_summary: schema || {},
+        rag_evidence: [],
+        variable_roles: variableRoles,
+        status_message: targetedFeasibilityResult?.summary,
+        safety_note: "Python feasibility diagnostics do not establish causality or estimate an effect.",
+      };
+    }
+
     return {
       ...base,
       dataset_filename: dataset?.savedFilename || dataset?.name,
@@ -7957,7 +7999,7 @@ export default function CausalStudioApp() {
   const actions = {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
-    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern,
+    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, goToPage,
     handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,

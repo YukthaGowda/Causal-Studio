@@ -157,6 +157,39 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
         parts.append("These feasibility diagnostics do not establish causality or estimate an effect.")
         return " ".join(parts)
 
+    if phase == "phase_6_causal_graph":
+        graph = page_state.get("current_graph") or {}
+        nodes = graph.get("nodes") or page_state.get("graph_nodes") or []
+        edges = graph.get("edges") or page_state.get("graph_edges") or []
+        validation = page_state.get("validation_result") or page_state.get("graph_validation_result") or {}
+        selected_node = page_state.get("selected_node")
+        selected_edge = page_state.get("selected_edge")
+        status = validation.get("status") or "not validated"
+        errors = validation.get("errors") or []
+        warnings = validation.get("warnings") or []
+        graph_type = graph.get("graph_type") or page_state.get("graph_type") or "DAG"
+        parts = [
+            f"Phase 6 graph status: {graph_type} with {len(nodes)} node(s) and {len(edges)} edge(s).",
+            f"Deterministic validation status: {str(status).replace('_', ' ')} with {len(errors)} error(s) and {len(warnings)} warning(s).",
+        ]
+        if selected_node:
+            node_id = selected_node.get("id") if isinstance(selected_node, dict) else str(selected_node)
+            parts.append(f"Selected node: {node_id}. Review its role, timing, measurement meaning, and missingness before confirming.")
+        if selected_edge:
+            if isinstance(selected_edge, dict):
+                source = selected_edge.get("source") or selected_edge.get("from")
+                target = selected_edge.get("target") or selected_edge.get("to")
+                confidence = selected_edge.get("confidence") or selected_edge.get("type") or "uncertain"
+                parts.append(f"Selected edge: {source} -> {target}, marked {confidence}. Treat this as an assumption until reviewed.")
+        if errors:
+            parts.append(f"Blocking graph issues: {' '.join(map(str, errors[:4]))}")
+        elif warnings:
+            parts.append(f"Warnings to document before continuing: {' '.join(map(str, warnings[:4]))}")
+        parts.append(
+            "Graph edges are assumptions, not proven causal relationships. The assistant can explain alternatives, but backend validation is the source of truth."
+        )
+        return " ".join(parts)
+
     if phase == "phase_1_project_setup":
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}

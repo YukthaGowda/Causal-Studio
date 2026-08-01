@@ -3835,6 +3835,7 @@ function frontendNodesToBackend(nodes, variableRoles) {
     role: roleToBackendRole(variableRoles[node.id] || node.role || "Unassigned"),
     temporal_role: node.temporalRole || node.temporal_role || "unknown",
     measurement_role: node.measurementRole || node.measurement_role || "unknown",
+    data_category: node.dataCategory || node.data_category || "dataset_variable",
     locked: Boolean(node.locked),
     notes: node.notes || "",
   }));
@@ -3849,6 +3850,7 @@ function frontendEdgesToBackend(edges) {
     rationale: edge.rationale || "",
     supporting_evidence: edge.supportingEvidence || [],
     confidence: edge.confidence || (edge.type === "uncertain" ? "uncertain" : "medium"),
+    temporal_constraint: edge.temporalConstraint || edge.temporal_constraint || "Requires user review before downstream use.",
     locked: Boolean(edge.locked),
     user_modified: Boolean(edge.userModified),
   }));
@@ -3865,6 +3867,7 @@ function backendGraphToFrontend(graphResponse) {
       role: backendRoleToFrontendRole(node.role),
       temporalRole: node.temporal_role || "unknown",
       measurementRole: node.measurement_role || "unknown",
+      dataCategory: node.data_category || "dataset_variable",
       locked: Boolean(node.locked),
       notes: node.notes || "",
       isCore: true,
@@ -3881,6 +3884,7 @@ function backendGraphToFrontend(graphResponse) {
     rationale: edge.rationale || "",
     supportingEvidence: edge.supporting_evidence || [],
     confidence: edge.confidence || "uncertain",
+    temporalConstraint: edge.temporal_constraint || "Requires user review before downstream use.",
     locked: Boolean(edge.locked),
     userModified: Boolean(edge.user_modified),
   })).filter((edge) => edge.from && edge.to);
@@ -4281,7 +4285,7 @@ function GraphView({ state, actions, onGoNext }) {
               <strong>Variable:</strong> <span className="mono">{selectedNode.id}</span><br />
               <strong>Temporal role:</strong> {selectedNode.temporalRole || "unknown"}<br />
               <strong>Measurement role:</strong> {selectedNode.measurementRole || "unknown"}<br />
-              <strong>Data category:</strong> {ROLE_TABLE_VARIABLES.find((v) => v.name === selectedNode.id)?.source || "unknown"}<br />
+              <strong>Data category:</strong> {selectedNode.dataCategory || ROLE_TABLE_VARIABLES.find((v) => v.name === selectedNode.id)?.source || "unknown"}<br />
               <strong>Locked:</strong> {selectedNode.locked ? "yes" : "no"}<br />
               <strong>Notes:</strong> {selectedNode.notes || "No node notes recorded yet."}
             </p>
@@ -7848,6 +7852,30 @@ export default function CausalStudioApp() {
       };
     }
 
+    if (pageKey === "graph") {
+      const currentGraph = {
+        graph_type: graphType,
+        version_label: graphVersionLabel,
+        nodes: frontendNodesToBackend(graphNodes, variableRoles),
+        edges: frontendEdgesToBackend(graphEdges),
+        alternatives_saved: graphAlternatives.length,
+        confirmed: Boolean(confirmedGraph),
+      };
+      return {
+        ...base,
+        phase: "phase_6_causal_graph",
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        confirmed_question: questionFields?.question || DEFAULT_CONFIRMED_QUESTION,
+        current_graph: currentGraph,
+        selected_node: graphNodes.find((node) => node.id === selectedNodeId) || null,
+        selected_edge: graphEdges.find((edge) => edge.id === selectedEdgeId) || null,
+        validation_result: graphValidationResult || {},
+        feasibility_result: targetedFeasibilityResult || feasibility || {},
+        rag_evidence: ragSummary ? [{ source_filename: "RAG evidence summary", text: ragSummary }] : [],
+        safety_note: "Graph edges are assumptions, not proven causal relationships. The LLM can draft graph alternatives, but backend validation checks graph structure.",
+      };
+    }
+
     return {
       ...base,
       dataset_filename: dataset?.savedFilename || dataset?.name,
@@ -7905,6 +7933,16 @@ export default function CausalStudioApp() {
         recommended_revisions: targetedFeasibilityResult?.recommended_revisions || [],
       };
     }
+    if (pageKey === "graph") {
+      return {
+        prompt,
+        selected_node: graphNodes.find((node) => node.id === selectedNodeId) || null,
+        selected_edge: graphEdges.find((edge) => edge.id === selectedEdgeId) || null,
+        validation_status: graphValidationResult?.status || "not_validated",
+        validation_errors: graphValidationResult?.errors || [],
+        validation_warnings: graphValidationResult?.warnings || [],
+      };
+    }
     if (pageKey === "estimation") {
       return {
         prompt,
@@ -7959,13 +7997,14 @@ export default function CausalStudioApp() {
     setAssistantThinking(true);
     setAssistantThinkingMessage("Assistant is reviewing the current page state...");
     try {
+      const pageState = buildAssistantPageState(page);
       const response = await assistantAction({
         phase,
         action: assistantActionForPrompt(page, prompt),
-        page_state: buildAssistantPageState(page),
+        page_state: pageState,
         selected_item: buildAssistantSelectedItem(page, prompt),
         user_feedback: prompt,
-        rag_evidence: [],
+        rag_evidence: pageState.rag_evidence || [],
       });
       setAssistantThreads((t) => ({
         ...t,

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
 import networkx as nx
+from dotenv import load_dotenv
+from openai import OpenAI, OpenAIError
+
+from app.services.causal_questions import DEFAULT_MODEL
 
 
 SUPPORTED_GRAPH_TYPES = {"DAG", "CPDAG", "PAG", "MAG"}
@@ -93,6 +99,30 @@ def _measurement_role(name: str) -> str:
     return "unknown"
 
 
+def _data_category(name: str, metadata: dict[str, Any] | None = None) -> str:
+    metadata = metadata or {}
+    explicit = (
+        metadata.get("data_category")
+        or metadata.get("source")
+        or metadata.get("source_field")
+        or metadata.get("category")
+    )
+    if explicit:
+        return str(explicit)
+    name_l = name.lower()
+    if name_l in {"pid", "participant_id", "participant", "subject_id", "id"}:
+        return "identifier"
+    if "time" in name_l or "date" in name_l or "day" in name_l:
+        return "temporal_context"
+    if "acc_" in name_l:
+        return "wearable_or_passive_sensing"
+    if "lat" in name_l or "lon" in name_l or "gps" in name_l:
+        return "mobility_context"
+    if "label" in name_l or "alcohol" in name_l:
+        return "outcome_candidate"
+    return "dataset_variable"
+
+
 def _selected_metadata(selected_variables: list[Any]) -> dict[str, dict[str, Any]]:
     metadata: dict[str, dict[str, Any]] = {}
     for item in selected_variables:
@@ -101,6 +131,122 @@ def _selected_metadata(selected_variables: list[Any]) -> dict[str, dict[str, Any
             continue
         metadata[name] = item if isinstance(item, dict) else {}
     return metadata
+
+
+def _compact_evidence(rag_evidence: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for item in (rag_evidence or [])[:5]:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        compact.append(
+            {
+                "source_filename": item.get("source_filename") or metadata.get("source_filename") or item.get("filename"),
+                "page_number": item.get("page_number") or metadata.get("page_number"),
+                "chunk_index": item.get("chunk_index") or metadata.get("chunk_index"),
+                "snippet": str(item.get("chunk_text") or item.get("text") or "")[:500],
+            }
+        )
+    return compact
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _draft_graph_with_llm(
+    *,
+    graph_type: str,
+    confirmed_question: str,
+    names: list[str],
+    nodes: list[dict[str, Any]],
+    provisional_roles: dict[str, Any] | None,
+    rag_evidence: list[dict[str, Any]] | None,
+    user_feedback: str,
+) -> dict[str, Any] | None:
+    load_dotenv()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = {
+        "graph_type": graph_type,
+        "confirmed_question": confirmed_question,
+        "allowed_variables": names,
+        "node_drafts": nodes,
+        "provisional_roles": provisional_roles or {},
+        "rag_evidence": _compact_evidence(rag_evidence),
+        "user_feedback": user_feedback,
+        "rules": [
+            "Return JSON only.",
+            "Use only allowed_variables as observed nodes.",
+            "Do not invent causal conclusions or say anything is proven.",
+            "Use latent/unavailable concepts only in notes, not as observed nodes, unless no observed proxy exists.",
+            "Every edge is an assumption and must include rationale, confidence, and temporal_constraint.",
+        ],
+        "response_shape": {
+            "nodes": [
+                {
+                    "id": "variable_name",
+                    "label": "Readable label",
+                    "role": "exposure|outcome|confounder|mediator|collider_candidate|proxy|unknown",
+                    "temporal_role": "baseline|pre_treatment|time_varying|post_treatment|unknown",
+                    "measurement_role": "direct|proxy|derived|unknown",
+                    "data_category": "compact category",
+                    "locked": False,
+                    "notes": "short limitation or rationale",
+                }
+            ],
+            "edges": [
+                {
+                    "source": "variable_name",
+                    "target": "variable_name",
+                    "edge_type": "directed|uncertain",
+                    "rationale": "short assumption rationale",
+                    "supporting_evidence": ["source filename or compact note"],
+                    "confidence": "low|medium|high|uncertain",
+                    "temporal_constraint": "short timing check",
+                    "locked": False,
+                    "user_modified": False,
+                }
+            ],
+            "warnings": ["short warning"],
+            "evidence_notes": ["short source note"],
+        },
+    }
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You draft causal-design graph JSON for Causal Design Agent. "
+                        "The graph is a provisional design artifact only; deterministic Python validation is authoritative."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(prompt, default=str)},
+            ],
+            temperature=0.1,
+        )
+        content = response.choices[0].message.content or ""
+        parsed = _extract_json_object(content)
+        if not parsed:
+            return None
+        return parsed
+    except OpenAIError:
+        return None
 
 
 def _has_high_missingness(name: str, metadata: dict[str, Any], feasibility_result: dict[str, Any] | None = None) -> bool:
@@ -145,6 +291,7 @@ def _normalize_node(node: Any, selected_metadata: dict[str, dict[str, Any]] | No
         "role": role,
         "temporal_role": raw.get("temporal_role") or _temporal_role(node_id),
         "measurement_role": raw.get("measurement_role") or _measurement_role(node_id),
+        "data_category": raw.get("data_category") or _data_category(node_id, metadata),
         "locked": bool(raw.get("locked", False)),
         "notes": notes,
     }
@@ -168,6 +315,7 @@ def _normalize_edge(edge: Any) -> dict[str, Any] | None:
         "rationale": edge.get("rationale") or "",
         "supporting_evidence": edge.get("supporting_evidence") or [],
         "confidence": edge.get("confidence") or ("uncertain" if edge_type == "uncertain" else "medium"),
+        "temporal_constraint": edge.get("temporal_constraint") or "Requires user review before downstream use.",
         "locked": bool(edge.get("locked", False)),
         "user_modified": bool(edge.get("user_modified", False)),
     }
@@ -228,7 +376,9 @@ def validate_structured_graph(
     if graph_type not in SUPPORTED_GRAPH_TYPES:
         errors.append(f"Unsupported graph_type '{graph_type}'. Use DAG, CPDAG, PAG, or MAG.")
     elif graph_type != "DAG":
-        warnings.append(f"{graph_type} support is experimental in this proof of concept; deterministic checks are DAG-oriented.")
+        warnings.append(
+            "This graph type is currently experimental. Full representation-specific validation is not yet implemented."
+        )
 
     for edge in normalized_edges:
         if edge["source"] == edge["target"]:
@@ -346,6 +496,7 @@ def generate_structured_graph(
                 "role": _role_from_source(name, provisional_roles),
                 "temporal_role": _temporal_role(name),
                 "measurement_role": _measurement_role(name),
+                "data_category": _data_category(name, metadata.get(name, {})),
                 "locked": False,
                 "notes": notes,
             }
@@ -375,6 +526,7 @@ def generate_structured_graph(
                     "rationale": rationale,
                     "supporting_evidence": [],
                     "confidence": confidence,
+                    "temporal_constraint": "Draft direction must be checked against measurement timing.",
                     "locked": False,
                     "user_modified": False,
                 }
@@ -388,7 +540,45 @@ def generate_structured_graph(
     if exposure and outcome:
         add_edge(exposure, outcome, "Draft target relation from the confirmed research question; requires user review and validation.", "medium")
 
+    llm_used = False
+    llm_warnings: list[str] = []
+    llm_evidence_notes: list[str] = []
+    llm_draft = _draft_graph_with_llm(
+        graph_type=(graph_type or "DAG").upper(),
+        confirmed_question=confirmed_question,
+        names=names,
+        nodes=nodes,
+        provisional_roles=provisional_roles,
+        rag_evidence=rag_evidence,
+        user_feedback=user_feedback,
+    )
+    if llm_draft:
+        allowed = set(names)
+        llm_nodes = [
+            node
+            for node in (_normalize_node(item, metadata) for item in llm_draft.get("nodes", []))
+            if node and node["id"] in allowed
+        ]
+        llm_node_ids = {node["id"] for node in llm_nodes}
+        llm_edges = [
+            edge
+            for edge in (_normalize_edge(item) for item in llm_draft.get("edges", []))
+            if edge and edge["source"] in llm_node_ids and edge["target"] in llm_node_ids
+        ]
+        if llm_nodes and (llm_edges or len(llm_nodes) == 1):
+            nodes = llm_nodes
+            edges = llm_edges
+            llm_used = True
+            llm_warnings = [str(item) for item in llm_draft.get("warnings", []) if str(item).strip()]
+            llm_evidence_notes = [str(item) for item in llm_draft.get("evidence_notes", []) if str(item).strip()]
+            node_ids = {node["id"] for node in nodes}
+            exposure = next((node["id"] for node in nodes if node["role"] == "exposure"), exposure)
+            outcome = next((node["id"] for node in nodes if node["role"] == "outcome"), outcome)
+
     evidence_notes = []
+    if llm_used:
+        evidence_notes.append("LLM drafted this graph from selected variables, provisional roles, compact RAG evidence, and user feedback.")
+    evidence_notes.extend(llm_evidence_notes)
     for item in rag_evidence or []:
         source = item.get("source_filename") or item.get("metadata", {}).get("source_filename")
         if source:
@@ -419,9 +609,16 @@ def generate_structured_graph(
         selected_variables=selected_variables,
         feasibility_result=feasibility_result,
     )
-    warnings = list(dict.fromkeys(validation["warnings"] + ["Graph is an AI/deterministic first-pass draft and requires user review."]))
+    draft_warning = (
+        "Graph is an AI/deterministic first-pass draft and requires user review."
+        if llm_used
+        else "LLM graph generation is unavailable, so this is a deterministic placeholder graph based on selected variables."
+    )
+    warnings = list(dict.fromkeys(validation["warnings"] + llm_warnings + [draft_warning]))
     if (graph_type or "DAG").upper() != "DAG":
-        warnings.append(f"{graph_type} graph support is experimental; DAG is the validated default.")
+        warnings.append(
+            "This graph type is currently experimental. Full representation-specific validation is not yet implemented."
+        )
 
     return {
         "graph_type": (graph_type or "DAG").upper(),
@@ -431,7 +628,7 @@ def generate_structured_graph(
         "validation_result": {key: value for key, value in validation.items() if not key.startswith("normalized_")},
         "warnings": warnings,
         "evidence_notes": evidence_notes,
-        "status": "fallback",
+        "status": "success" if llm_used else "fallback",
         "generated_at": _now_iso(),
         "confirmed_question": confirmed_question,
         "requires_user_review": True,

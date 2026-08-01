@@ -77,6 +77,7 @@ class ValidateGraphRequest(BaseModel):
     timestamp_fields: list[str] = Field(default_factory=list)
     participant_id: str = Field(default="")
     selected_variables: list[Any] = Field(default_factory=list)
+    schema_summary: dict[str, Any] = Field(default_factory=dict)
     feasibility_result: dict[str, Any] = Field(default_factory=dict)
 
 

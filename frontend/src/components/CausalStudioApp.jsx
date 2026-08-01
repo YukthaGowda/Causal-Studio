@@ -33,12 +33,12 @@ import {
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   assistantAction,
-  auditClaims,
+  assembleReviewPackage,
   checkBackendHealth,
+  exportReviewPackage,
   exportReport,
   generateCausalGraph,
   generateAnalysisStrategy,
-  generateReport,
   interpretEstimation,
   listEstimationRuns,
   getDatasetSchema,
@@ -53,6 +53,7 @@ import {
   uploadDataset,
   uploadDocument,
   runEstimation as runBackendEstimation,
+  runClaimAudit,
   validateEstimationConfig,
   validateAnalysisStrategy,
   validateCausalGraph,
@@ -5972,6 +5973,158 @@ function reportPayloadFromState(state, claimAudit = null) {
   };
 }
 
+function reviewExportPayloadFromState(state, reportPreferences = {}) {
+  const {
+    objective,
+    datasets,
+    dictionary,
+    protocol,
+    papers,
+    guidelines,
+    broadExploration,
+    promotedPatterns,
+    questionFields,
+    questionCandidates,
+    candidateVariables,
+    derivedFeatureCandidates,
+    derivedFeatures,
+    variableRoles,
+    targetedFeasibilityResult,
+    feasibility,
+    graphNodes,
+    graphEdges,
+    graphValidationResult,
+    graphAlternatives,
+    confirmedGraph,
+    analysisStrategyResult,
+    analysisStrategyDraft,
+    analysisStrategyValidation,
+    editableAdjustmentSet,
+    analysisStrategyConfirmed,
+    primaryEstimationRun,
+    latestEstimationRun,
+    ragSummary,
+    ingestionInfo,
+  } = state;
+  const dataset = firstRealDataset(datasets) || datasets?.[0] || {};
+  const schema = dataset.schema || {};
+  const { confounders, mediators } = computeAdjustment(variableRoles);
+  const fallbackAdjustmentSet = editableAdjustmentSet?.length
+    ? editableAdjustmentSet
+    : confounders;
+  const roleTable = ROLE_TABLE_VARIABLES.map((item) => ({
+    variable_name: item.name,
+    source: item.source,
+    final_role: variableRoles[item.name] || item.roleGuess,
+    descriptive_meaning: item.meaning,
+    missingness_warning: item.name === "avg_latitude" ? "Review GPS/mobility missingness before relying on this proxy." : "",
+  }));
+  const confirmedQuestion = {
+    question_text: questionFields?.question || "",
+    population: questionFields?.population || "",
+    exposure: questionFields?.exposure || "",
+    comparator: questionFields?.comparator || "",
+    outcome: questionFields?.outcome || "",
+    time_window: questionFields?.timeWindow || "",
+    unit_of_analysis: questionFields?.unitOfAnalysis || "",
+    estimand: questionFields?.estimand || analysisStrategyDraft?.estimand?.label || "",
+  };
+  const selectedRun = primaryEstimationRun || null;
+
+  return {
+    project: {
+      title: "Causal Design Agent Review Package",
+      research_objective: objective || questionFields?.question || "",
+      dataset_filename: realDatasetFilename(dataset) || dataset.name || "",
+      document_status: {
+        data_dictionary_uploaded: Boolean(dictionary),
+        protocol_uploaded: Boolean(protocol),
+        research_paper_count: papers.length,
+        guidance_document_count: guidelines.length,
+      },
+      rag_status: ingestionInfo || { summary: ragSummary || "No RAG status attached." },
+    },
+    phase_2_data_foundation: {
+      schema_summary: {
+        filename: realDatasetFilename(dataset) || dataset.name,
+        number_of_rows: schema.number_of_rows || dataset.rows,
+        number_of_columns: schema.number_of_columns || dataset.cols,
+        column_names: schema.column_names || [],
+        possible_id_columns: schema.possible_id_columns || (dataset.participantField ? [dataset.participantField] : []),
+        possible_timestamp_date_columns: schema.possible_timestamp_date_columns || dataset.timestampFields || [],
+        warnings: schema.warnings || [],
+      },
+      data_quality_summary: {
+        warnings: schema.warnings || [],
+        high_missingness: topMissingness(schema, 8).filter((item) => item.pct >= 30),
+      },
+      clarifications: dictionary && dictionary.described < dictionary.total
+        ? [`${dictionary.total - dictionary.described} variable definition(s) still need clarification.`]
+        : [],
+    },
+    phase_3_broad_exploration: {
+      saved_views: broadExploration ? [broadExploration] : [],
+      promoted_patterns: promotedPatterns,
+      exploration_warnings: [
+        broadExploration?.exploration_warning,
+        ...(broadExploration?.data_quality_warnings || []),
+      ].filter(Boolean),
+    },
+    phase_4_question_variables: {
+      confirmed_question: confirmedQuestion,
+      candidate_questions: questionCandidates,
+      candidate_variables: candidateVariables,
+      derived_features: [
+        ...(derivedFeatureCandidates || []),
+        ...(derivedFeatures || []).filter((item) => item.selected),
+      ],
+      confirmed_roles: roleTable,
+    },
+    phase_5_feasibility: {
+      feasibility_result: targetedFeasibilityResult || feasibility,
+    },
+    phase_6_graph: {
+      confirmed_graph: confirmedGraph || {
+        graph_type: "DAG",
+        nodes: (graphNodes || []).map((node) => ({ id: node.id, label: node.label, role: node.role || variableRoles[node.id] })),
+        edges: (graphEdges || []).map((edge) => ({ source: edge.from, target: edge.to, type: edge.type || edge.edgeType })),
+      },
+      graph_validation_result: graphValidationResult || confirmedGraph?.validation || {},
+      alternative_graphs: graphAlternatives || [],
+    },
+    phase_7_strategy: {
+      identification_result: analysisStrategyResult?.identification || analysisStrategyResult || {},
+      adjustment_set: fallbackAdjustmentSet,
+      estimand: analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || { label: questionFields?.estimand || "Estimand requires review." },
+      strategy: analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {
+        estimator_family: state.estimatorFamily,
+        effect_type: state.effectType,
+        adjustment_set: fallbackAdjustmentSet,
+        mediators_for_direct_effect: mediators,
+      },
+      assumption_checklist: analysisStrategyResult?.assumption_checklist || analysisStrategyConfirmed?.assumption_checklist || [],
+      validation: analysisStrategyValidation || {},
+    },
+    phase_8_estimation: {
+      selected_primary_run: selectedRun,
+      estimation_runs: [selectedRun, latestEstimationRun].filter(Boolean),
+    },
+    rag_evidence: [
+      ...(ragSummary ? [{ summary: ragSummary, document_type: "rag_summary" }] : []),
+      ...papers.map((item) => ({ source_filename: item.name || item.title, document_type: "research_paper" })),
+      ...guidelines.map((item) => ({ source_filename: item.name, document_type: "domain_guidance" })),
+    ],
+    user_notes: "Generated from the Causal Design Agent workflow. Human review required before external use.",
+    report_preferences: {
+      audience: "researcher",
+      include_appendix: true,
+      include_reproducibility: true,
+      include_evidence_table: true,
+      ...reportPreferences,
+    },
+  };
+}
+
 function reportToMarkdown(report, state) {
   const primaryRun = state.primaryEstimationRun;
   const estimate = primaryRun?.results || {};
@@ -6049,24 +6202,29 @@ function ReviewView({ state, actions }) {
 
   async function handleGenerateReport() {
     setReportLoading(true);
-    const payload = reportPayloadFromState(state, claimAudit);
+    const payload = reviewExportPayloadFromState(state);
     try {
       if (!backendStatus.connected) throw new Error("Backend unavailable - generated local incomplete draft.");
-      const report = await generateReport(payload);
+      const report = await assembleReviewPackage(payload);
       setReportDraft(report);
-      pushAssistantNote("The report draft is ready. Please review the estimation run, diagnostics, assumptions, and claim boundaries before exporting.");
-      showToast("Report draft generated.");
+      pushAssistantNote("The Phase 9 review package is assembled. Review missing items, estimation diagnostics, evidence limits, and claim boundaries before exporting.");
+      showToast("Review package assembled.");
     } catch (error) {
       const localDraft = {
-        title: "Causal Design, Estimation, and Evidence Report",
-        status: selectedRun ? "ready_with_warnings" : "blocked",
-        warnings: [friendlyError(error), ...(!selectedRun ? ["Phase 8 estimation has not been completed or selected as primary."] : [])],
-        sections: {
-          estimation_and_calculation: selectedRun?.results || null,
-          diagnostics_and_sensitivity: selectedRun?.results?.diagnostics || null,
-          reproducibility_log: selectedRun?.config || null,
-        },
-        export_options: { json: true, markdown: true, pdf: false },
+        package_title: "Causal Design Agent Review Package",
+        status: selectedRun ? "fallback" : "fallback",
+        executive_summary: "Local draft only. Backend assembly was unavailable.",
+        warnings: [friendlyError(error), ...(!selectedRun ? ["No primary estimation run has been selected."] : [])],
+        sections: [
+          { section_id: "selected_estimation", title: "Selected primary estimation run", status: selectedRun ? "complete" : "missing", content: JSON.stringify(selectedRun?.results || {}, null, 2) },
+          { section_id: "diagnostics", title: "Diagnostics", status: selectedRun ? "warning" : "missing", content: JSON.stringify(selectedRun?.results?.diagnostics || {}, null, 2) },
+        ],
+        selected_estimation_summary: selectedRun?.results || null,
+        unresolved_warnings: estimationRunWarnings(selectedRun),
+        limitations: ["Local fallback. This package does not prove causality."],
+        missing_required_items: selectedRun ? [] : ["selected_primary_estimation_run"],
+        ready_for_export: Boolean(selectedRun),
+        requires_user_review: true,
       };
       setReportDraft(localDraft);
       pushAssistantNote("I created a local incomplete report preview because the backend report endpoint was unavailable. Review it as a draft only.");
@@ -6078,41 +6236,66 @@ function ReviewView({ state, actions }) {
 
   async function handleClaimAudit() {
     setAuditLoading(true);
-    const claims = [
-      "The analysis evaluates the estimated association under the specified causal graph, adjustment set, model, and assumptions.",
-      "This estimate proves sleep affects alcohol use.",
-      "Participants will relapse if sleep drops below 5 hours.",
-      "The graph confirms the true causal structure.",
-    ];
     try {
+      const assembled = reportDraft || await assembleReviewPackage(reviewExportPayloadFromState(state));
+      if (!reportDraft) setReportDraft(assembled);
       const payload = {
-        claims,
-        confirmed_question: questionFields?.question,
-        final_graph: reportPayloadFromState(state).graph,
-        identification_result: reportPayloadFromState(state).identification_result,
-        analysis_strategy: reportPayloadFromState(state).analysis_strategy,
-        assumptions_review: reportPayloadFromState(state).assumptions_review,
-        selected_primary_estimation_run: selectedRun,
-        rag_evidence: reportPayloadFromState(state).rag_evidence,
+        report_text: reportToMarkdown(assembled, { ...state, reportClaimAudit: claimAudit }),
+        final_design_summary: assembled.final_design_summary || {},
+        selected_estimation_summary: assembled.selected_estimation_summary || {},
+        assumption_checklist: reviewExportPayloadFromState(state).phase_7_strategy.assumption_checklist,
+        unresolved_warnings: assembled.unresolved_warnings || [],
+        rag_evidence: reviewExportPayloadFromState(state).rag_evidence,
       };
-      const audit = backendStatus.connected ? await auditClaims(payload) : {
-        status: "blocked",
-        linked_claims: [],
-        needs_review_claims: [{ claim: claims[0], reason: "Backend unavailable - human review required." }],
-        blocked_claims: claims.slice(1).map((claim) => ({ claim, reason: "Unsafe causal, proof, graph-truth, or clinical prediction language." })),
-        safe_rewrites: [{ original_claim: claims[1], safe_rewrite: "The analysis evaluates the estimated association under the specified graph, adjustment set, model, and assumptions." }],
-        warnings: ["Backend unavailable - local deterministic fallback used."],
+      const audit = backendStatus.connected ? await runClaimAudit(payload) : {
+        status: "fail",
+        flagged_claims: [{ text: "Claim audit unavailable", issue_type: "missing_limitation", severity: "blocking", explanation: "Backend unavailable - human review required.", suggested_revision: "Run backend claim audit before export." }],
+        blocked_phrases: ["backend unavailable"],
+        safe_language_suggestions: ["under the specified model and assumptions", "requires expert review"],
+        ready_for_export: false,
       };
       setClaimAudit(audit);
-      pushAssistantNote(`I found ${audit.blocked_claims?.length || 0} blocked claims and ${audit.needs_review_claims?.length || 0} claims that need review. These should be revised before export.`);
+      const blockingCount = (audit.flagged_claims || []).filter((item) => item.severity === "blocking").length;
+      pushAssistantNote(`Claim audit returned ${audit.status}. ${blockingCount} blocking issue(s) must be revised before external export.`);
       showToast("Claim audit complete.");
     } catch (error) {
-      setClaimAudit({ status: "blocked", linked_claims: [], needs_review_claims: [], blocked_claims: [{ claim: "Claim audit request", reason: friendlyError(error) }], safe_rewrites: [], warnings: [] });
+      setClaimAudit({ status: "fail", flagged_claims: [{ text: "Claim audit request", issue_type: "diagnostic_conflict", severity: "blocking", explanation: friendlyError(error), suggested_revision: "Fix the audit request and rerun before export." }], blocked_phrases: [], safe_language_suggestions: [], ready_for_export: false });
       pushAssistantNote(`Claim audit failed: ${friendlyError(error)} Keep report language conservative until this is resolved.`);
       showToast("Claim audit failed.");
     } finally {
       setAuditLoading(false);
     }
+  }
+
+  async function handleExportReviewPackage(format) {
+    if (format === "pdf") {
+      showToast("PDF export is planned but not implemented in this proof of concept.");
+      pushAssistantNote("PDF export is planned later. Use JSON or Markdown for this proof of concept.");
+      return;
+    }
+    const assembled = reportDraft || await assembleReviewPackage(reviewExportPayloadFromState(state));
+    if (!reportDraft) setReportDraft(assembled);
+    const audit = claimAudit || {
+      status: "warning",
+      flagged_claims: [{ text: "claim audit", issue_type: "missing_limitation", severity: "medium", explanation: "Run claim audit before export.", suggested_revision: "Run claim audit before external use." }],
+      ready_for_export: false,
+    };
+    const result = backendStatus.connected
+      ? await exportReviewPackage({
+          assembled_package: assembled,
+          claim_audit_result: audit,
+          format,
+          include_appendix: true,
+          include_reproducibility: true,
+        })
+      : {
+          filename: `causal_design_agent_review_export.${format === "markdown" ? "md" : "json"}`,
+          content: format === "markdown" ? reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }) : JSON.stringify({ assembled_package: assembled, claim_audit_result: audit }, null, 2),
+          warnings: ["Backend unavailable - local export generated."],
+        };
+    const filename = exportReport(format === "markdown" ? { markdown: result.content } : JSON.parse(result.content), format);
+    (result.warnings || []).forEach((warning) => pushAssistantNote(warning));
+    showToast(`Exported ${result.filename || filename}`);
   }
 
   return (
@@ -6319,19 +6502,20 @@ function ReviewView({ state, actions }) {
         {claimAudit ? (
           <>
             <div className="mini-stat-row">
-              <div className="mini-stat"><span className="mini-stat-label">Audit status</span><span className="mini-stat-value"><span className={claimAudit.status === "blocked" ? "chip chip-danger" : claimAudit.status === "warnings" ? "chip chip-warning" : "chip chip-success"}>{claimAudit.status}</span></span></div>
-              <div className="mini-stat"><span className="mini-stat-label">Linked</span><span className="mini-stat-value">{claimAudit.linked_claims?.length || 0}</span></div>
-              <div className="mini-stat"><span className="mini-stat-label">Needs review</span><span className="mini-stat-value">{claimAudit.needs_review_claims?.length || 0}</span></div>
-              <div className="mini-stat"><span className="mini-stat-label">Blocked</span><span className="mini-stat-value">{claimAudit.blocked_claims?.length || 0}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Audit status</span><span className="mini-stat-value"><span className={claimAudit.status === "fail" ? "chip chip-danger" : claimAudit.status === "warning" ? "chip chip-warning" : "chip chip-success"}>{claimAudit.status}</span></span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Flagged</span><span className="mini-stat-value">{claimAudit.flagged_claims?.length || 0}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Blocking</span><span className="mini-stat-value">{(claimAudit.flagged_claims || []).filter((item) => item.severity === "blocking").length}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Ready</span><span className="mini-stat-value">{claimAudit.ready_for_export ? "Yes" : "No"}</span></div>
             </div>
-            {(claimAudit.blocked_claims || []).map((item, index) => (
+            {(claimAudit.flagged_claims || []).map((item, index) => (
               <div className="inconsistency-card" key={`blocked-${index}`} style={{ marginTop: 8 }}>
-                <p style={{ margin: 0 }}><strong>Blocked:</strong> {item.claim}</p>
-                <p style={{ margin: "4px 0 0" }}>{item.reason}</p>
+                <p style={{ margin: 0 }}><strong>{item.severity}:</strong> {item.text}</p>
+                <p style={{ margin: "4px 0 0" }}>{item.explanation}</p>
+                {item.suggested_revision && <p style={{ margin: "4px 0 0" }}><strong>Safer wording:</strong> {item.suggested_revision}</p>}
               </div>
             ))}
-            {(claimAudit.safe_rewrites || []).map((item, index) => (
-              <div className="helper" key={`rewrite-${index}`} style={{ marginTop: 8 }}><CheckCircle2 size={13} color="var(--success)" /> Safer rewrite: {item.safe_rewrite}</div>
+            {(claimAudit.safe_language_suggestions || []).map((item, index) => (
+              <div className="helper" key={`rewrite-${index}`} style={{ marginTop: 8 }}><CheckCircle2 size={13} color="var(--success)" /> Safe language: {item}</div>
             ))}
           </>
         ) : (
@@ -6346,16 +6530,16 @@ function ReviewView({ state, actions }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
-          <button className="btn" onClick={() => { const payload = reportDraft || reportPayloadFromState(state, claimAudit); const filename = exportReport(payload, "json"); showToast(`Exported ${filename}`); }}><Save size={13} /> Export JSON</button>
-          <button className="btn" onClick={() => { const markdown = reportToMarkdown(reportDraft, { ...state, reportClaimAudit: claimAudit }); const filename = exportReport({ markdown }, "markdown"); showToast(`Exported ${filename}`); }}><FileText size={13} /> Export Markdown</button>
-          <button className="btn" disabled title="Backend PDF export is planned; browser print preview remains available."><Lock size={13} /> Export PDF planned</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("json")}><Save size={13} /> Export JSON</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("markdown")}><FileText size={13} /> Export Markdown</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("pdf")}><Lock size={13} /> Export PDF placeholder</button>
         </div>
         {reportDraft ? (
           <>
-            <div className="pattern-row"><span>Report title</span><span>{reportDraft.title || reportDraft.report_title}</span></div>
-            <div className="pattern-row"><span>Status</span><span className={reportDraft.status === "blocked" ? "chip chip-danger" : reportDraft.status === "ready_with_warnings" ? "chip chip-warning" : "chip chip-success"}>{reportDraft.status || "draft"}</span></div>
-            <div className="pattern-row"><span>Sections</span><span className="mono">{Object.keys(reportDraft.sections || {}).length}</span></div>
-            {(reportDraft.warnings || []).map((warning, index) => (
+            <div className="pattern-row"><span>Report title</span><span>{reportDraft.package_title || reportDraft.title || reportDraft.report_title}</span></div>
+            <div className="pattern-row"><span>Status</span><span className={reportDraft.ready_for_export ? "chip chip-success" : "chip chip-warning"}>{reportDraft.status || "draft"}</span></div>
+            <div className="pattern-row"><span>Sections</span><span className="mono">{Array.isArray(reportDraft.sections) ? reportDraft.sections.length : Object.keys(reportDraft.sections || {}).length}</span></div>
+            {(reportDraft.unresolved_warnings || reportDraft.warnings || []).map((warning, index) => (
               <div className="helper" style={{ marginTop: 6 }} key={`${warning}-${index}`}><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>
             ))}
           </>
@@ -6376,7 +6560,7 @@ function ReviewView({ state, actions }) {
           ["Assumptions reviewed", checkedAssumptions.length > 0],
           ["Estimation run selected", Boolean(selectedRun)],
           ["Diagnostics reviewed", Boolean(selectedRun && !severeDiagnostics.length)],
-          ["Claim audit passed", Boolean(claimAudit && claimAudit.status !== "blocked")],
+          ["Claim audit passed", Boolean(claimAudit && claimAudit.status !== "fail")],
           ["Evidence reviewed", Boolean(ragSummary || papers.length || guidelines.length)],
           ["Limitations documented", true],
         ].map(([label, ok]) => (
@@ -6426,8 +6610,8 @@ function ReviewView({ state, actions }) {
         <button className="btn" onClick={() => { pushAssistantNote("Return to the previous phase to revise the selected estimation run, diagnostics, assumptions, or analysis strategy before final export."); showToast("Use the sidebar to return to Phase 8."); }}><ArrowRight size={14} /> Return to Previous Phase</button>
         <button
           className="btn btn-primary"
-          disabled={signoffBlockers.length > 0 || claimAudit?.status === "blocked"}
-          style={{ opacity: signoffBlockers.length > 0 || claimAudit?.status === "blocked" ? 0.55 : 1 }}
+          disabled={signoffBlockers.length > 0 || claimAudit?.status === "fail"}
+          style={{ opacity: signoffBlockers.length > 0 || claimAudit?.status === "fail" ? 0.55 : 1 }}
           onClick={() => {
             downloadPDFReport(state);
             showToast("Report opened - use your browser's Print dialog to save as PDF.");
@@ -7683,6 +7867,18 @@ export default function CausalStudioApp() {
         warnings: estimationRunWarnings(primaryEstimationRun || latestEstimationRun),
       };
     }
+    if (pageKey === "review") {
+      return {
+        prompt,
+        selected_primary_estimation_run: primaryEstimationRun,
+        final_design_summary: {
+          confirmed_question: questionFields?.question,
+          graph_confirmed: Boolean(confirmedGraph),
+          strategy_confirmed: Boolean(analysisStrategyConfirmed),
+        },
+        warnings: estimationRunWarnings(primaryEstimationRun || latestEstimationRun),
+      };
+    }
     return { prompt };
   }
 
@@ -7701,7 +7897,7 @@ export default function CausalStudioApp() {
   }
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation"].includes(page);
+    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation", "review"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {

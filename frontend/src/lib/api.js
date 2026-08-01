@@ -222,6 +222,33 @@ export async function auditClaims(payload) {
   return parseJsonResponse(response, "Claim audit failed.");
 }
 
+export async function assembleReviewPackage(payload) {
+  const response = await fetch(`${API_BASE_URL}/review-export/assemble`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Review package assembly failed.");
+}
+
+export async function runClaimAudit(payload) {
+  const response = await fetch(`${API_BASE_URL}/review-export/claim-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Review claim audit failed.");
+}
+
+export async function exportReviewPackage(payload) {
+  const response = await fetch(`${API_BASE_URL}/review-export/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Review package export failed.");
+}
+
 export function exportReport(payload, format = "json") {
   const extension = format === "markdown" ? "md" : "json";
   const date = new Date().toISOString().slice(0, 10);

@@ -17,6 +17,7 @@ from app.api.feasibility import router as feasibility_router
 from app.api.identification import router as identification_router
 from app.api.questions import router as questions_router
 from app.api.rag import router as rag_router
+from app.api.review_export import router as review_export_router
 from app.api.reports import router as reports_router
 from app.api.variables import router as variables_router
 from app.api.workflow import router as workflow_router
@@ -60,6 +61,7 @@ app.include_router(identification_router)
 app.include_router(analysis_strategy_router)
 app.include_router(assumptions_router)
 app.include_router(estimation_router)
+app.include_router(review_export_router)
 app.include_router(reports_router)
 app.include_router(workflow_router)
 app.include_router(debug_router)

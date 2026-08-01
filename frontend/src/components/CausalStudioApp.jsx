@@ -37,6 +37,7 @@ import {
   checkBackendHealth,
   exportReport,
   generateCausalGraph,
+  generateAnalysisStrategy,
   generateReport,
   interpretEstimation,
   listEstimationRuns,
@@ -51,6 +52,7 @@ import {
   uploadDataset,
   uploadDocument,
   runEstimation as runBackendEstimation,
+  validateAnalysisStrategy,
   validateCausalGraph,
 } from "../lib/api.js";
 
@@ -4689,6 +4691,197 @@ function StrategyView({ state, actions, onGoNext }) {
   );
 }
 
+function StrategyViewPhase7({ state, actions, onGoNext }) {
+  const {
+    questionFields,
+    graphNodes,
+    graphValidationResult,
+    targetedFeasibilityResult,
+    feasibility,
+    analysisStrategyResult,
+    analysisStrategyValidation,
+    analysisStrategyDraft,
+    editableAdjustmentSet,
+    analysisStrategyConfirmed,
+    analysisStrategyStatus,
+  } = state;
+  const {
+    handleGenerateAnalysisStrategy,
+    handleValidateAnalysisStrategy,
+    updateAnalysisDraft,
+    setEditableAdjustmentSet,
+    confirmAnalysisStrategy,
+    runAssistantAction,
+  } = actions;
+  const [newAdjustmentVar, setNewAdjustmentVar] = useState("");
+  const identification = analysisStrategyResult?.identification || {};
+  const estimand = analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {};
+  const strategy = analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {};
+  const availableVariables = useMemo(() => [...new Set((graphNodes || []).map((n) => n.id).filter(Boolean))], [graphNodes]);
+  const exposure = estimand.exposure || graphNodes?.find((n) => (n.role || "").toLowerCase() === "exposure")?.id || "acc_mean_magnitude";
+  const outcome = estimand.outcome || graphNodes?.find((n) => (n.role || "").toLowerCase() === "outcome")?.id || "label";
+  const graphStatus = graphValidationResult?.status || "not validated";
+  const validationStatus = analysisStrategyValidation?.status || "not validated";
+  const canConfirm = Boolean(analysisStrategyResult && analysisStrategyValidation && analysisStrategyValidation.status !== "invalid" && graphValidationResult?.status !== "invalid");
+
+  function addAdjustmentVar() {
+    if (!newAdjustmentVar || editableAdjustmentSet.includes(newAdjustmentVar)) return;
+    setEditableAdjustmentSet([...editableAdjustmentSet, newAdjustmentVar]);
+    setNewAdjustmentVar("");
+  }
+
+  function removeAdjustmentVar(variable) {
+    setEditableAdjustmentSet(editableAdjustmentSet.filter((item) => item !== variable));
+  }
+
+  return (
+    <>
+      <div className="ps-header">
+        <h1>Identification and analysis strategy</h1>
+        <p>{questionFields?.question ? <>For: <strong style={{ color: "var(--navy)" }}>{questionFields.question}</strong></> : "No research question selected yet."}</p>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div>
+            <div className="card-title">Phase 7 backend workflow</div>
+            <p className="card-desc">Phase 7 defines the analysis plan. It does not calculate treatment effects. Identification and adjustment-set results require user review.</p>
+          </div>
+          <span className={`chip ${analysisStrategyConfirmed ? "chip-success" : "chip-warning"}`}>{analysisStrategyConfirmed ? "Confirmed" : "Requires review"}</span>
+        </div>
+        <div className="btn-row" style={{ flexWrap: "wrap" }}>
+          <button className="btn btn-primary" onClick={() => handleGenerateAnalysisStrategy("generate")}><Play size={13} /> Run Identification</button>
+          <button className="btn" onClick={() => runAssistantAction("Interpret Identification Results")}><Info size={13} /> Interpret Identification Results</button>
+          <button className="btn" onClick={() => runAssistantAction("Explain Adjustment Set")}><Search size={13} /> Explain Adjustment Set</button>
+          <button className="btn btn-secondary" onClick={handleValidateAnalysisStrategy}><CheckCircle2 size={13} /> Validate My Adjustment Set</button>
+          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("rerun", "Re-run identification with the current graph and edited strategy.")}><RefreshCw size={13} /> Re-run Identification</button>
+          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("alternative", "Generate an alternative defensible strategy for expert review.")}><Wand2 size={13} /> Generate Alternative Strategy</button>
+          <button className="btn" onClick={() => runAssistantAction("Reprocess Analysis Plan")}><Sparkles size={13} /> Reprocess Analysis Plan</button>
+          <button className="btn btn-primary" disabled={!canConfirm} onClick={confirmAnalysisStrategy}><Save size={13} /> Confirm Analysis Strategy</button>
+        </div>
+        {analysisStrategyStatus && <div className={`status-box status-${analysisStrategyStatus.kind}`} style={{ marginTop: 10 }}>{analysisStrategyStatus.message}</div>}
+        <div className="helper" style={{ marginTop: 10 }}><ShieldAlert size={13} /> Backend checks support validation, but they do not prove causal validity.</div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-head"><div className="card-title">Design inputs</div><CardInfo text="Inputs carried from the graph, feasibility check, and confirmed question." /></div>
+          <table className="mini-table"><tbody>
+            <tr><td>Exposure</td><td className="mono">{exposure}</td></tr>
+            <tr><td>Outcome</td><td className="mono">{outcome}</td></tr>
+            <tr><td>Comparator</td><td>{estimand.comparator || questionFields?.comparator || "Not specified"}</td></tr>
+            <tr><td>Time window</td><td>{estimand.time_window || questionFields?.timeWindow || "Not specified"}</td></tr>
+            <tr><td>Graph status</td><td><span className="chip chip-muted">{graphStatus}</span></td></tr>
+            <tr><td>Feasibility status</td><td><span className="chip chip-muted">{targetedFeasibilityResult?.status || feasibility?.verdict || "not run"}</span></td></tr>
+          </tbody></table>
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">Identification status</div><CardInfo text="Deterministic graph checks and simple adjustment-set heuristics. Full formal identification is not implemented yet." /></div>
+          <span className={`chip ${identification.status === "not_identified" ? "chip-danger" : "chip-warning"}`}>{identification.status || "not run"}</span>
+          <p className="card-desc" style={{ marginTop: 10 }}>{identification.summary || "Run Identification to inspect paths, candidate adjustment sets, warnings, and assumptions."}</p>
+          {analysisStrategyValidation && <div className="helper"><CheckCircle2 size={13} /> Adjustment validation: {validationStatus}</div>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Backdoor paths and candidate adjustment sets</div><CardInfo text="Heuristic paths and sets returned by the backend. Review before using them downstream." /></div>
+        {(identification.backdoor_paths || []).length ? (
+          (identification.backdoor_paths || []).map((path, idx) => (
+            <div className="pattern-row" key={`${Array.isArray(path) ? path.join("-") : path}-${idx}`}><span className="mono">{Array.isArray(path) ? path.join(" ") : String(path)}</span><span className="chip chip-warning">Review</span></div>
+          ))
+        ) : <div className="helper"><Info size={13} /> No measured backdoor paths were returned, or identification has not run yet.</div>}
+        <div className="filter-pills" style={{ marginTop: 12 }}>
+          {(identification.candidate_adjustment_sets || []).map((set, idx) => (
+            <span key={idx} className="chip chip-muted mono">{Array.isArray(set) && set.length ? set.join(", ") : "empty set"}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Editable adjustment set</div><span className="chip chip-accent">User edited</span></div>
+        <div className="filter-pills">
+          {editableAdjustmentSet.length ? editableAdjustmentSet.map((variable) => (
+            <button key={variable} className="chip chip-accent mono" onClick={() => removeAdjustmentVar(variable)} title="Remove from adjustment set">{variable} x</button>
+          )) : <span className="helper">No adjustment variables selected.</span>}
+        </div>
+        <div className="form-row" style={{ marginTop: 12 }}>
+          <select value={newAdjustmentVar} onChange={(e) => setNewAdjustmentVar(e.target.value)}>
+            <option value="">Add variable...</option>
+            {availableVariables.filter((v) => !editableAdjustmentSet.includes(v)).map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <button className="btn" onClick={addAdjustmentVar}>Add</button>
+          <button className="btn btn-secondary" onClick={handleValidateAnalysisStrategy}>Validate edited set</button>
+        </div>
+        {(identification.variables_not_to_adjust_for || []).length > 0 && (
+          <div className="helper" style={{ marginTop: 10 }}>
+            <AlertTriangle size={13} color="var(--warning)" /> Avoid adjusting for: {(identification.variables_not_to_adjust_for || []).map((item) => `${item.variable} (${item.reason})`).join("; ")}
+          </div>
+        )}
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-head"><div className="card-title">Estimand</div><CardInfo text="Editable draft of the target causal quantity. This is a plan, not an estimate." /></div>
+          <label className="field-label">Label</label>
+          <input value={estimand.label || ""} onChange={(e) => updateAnalysisDraft("estimand", "label", e.target.value)} />
+          <label className="field-label">Effect type</label>
+          <select value={estimand.effect_type || "total_effect"} onChange={(e) => updateAnalysisDraft("estimand", "effect_type", e.target.value)}>
+            <option value="total_effect">Total effect</option>
+            <option value="direct_effect">Direct effect</option>
+            <option value="controlled_direct_effect">Controlled direct effect</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <label className="field-label">Unit of analysis</label>
+          <input value={estimand.unit_of_analysis || ""} onChange={(e) => updateAnalysisDraft("estimand", "unit_of_analysis", e.target.value)} />
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">Estimator recommendation</div><CardInfo text="Editable statistical-model family and repeated-measures strategy for Phase 8." /></div>
+          <label className="field-label">Estimator family</label>
+          <input value={strategy.estimator_family || ""} onChange={(e) => updateAnalysisDraft("strategy", "estimator_family", e.target.value)} />
+          <label className="field-label">Repeated-measures strategy</label>
+          <textarea rows={3} value={strategy.repeated_measures_strategy || ""} onChange={(e) => updateAnalysisDraft("strategy", "repeated_measures_strategy", e.target.value)} />
+          <label className="field-label">Missing-data strategy</label>
+          <textarea rows={3} value={strategy.missing_data_strategy || ""} onChange={(e) => updateAnalysisDraft("strategy", "missing_data_strategy", e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-head"><div className="card-title">Sensitivity and robustness plan</div><CardInfo text="Planned checks for Phase 8 and final reporting. These are not effect estimates." /></div>
+          <h4>Sensitivity plan</h4>
+          <ul className="compact-list">{(strategy.sensitivity_plan || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
+          <h4>Robustness checks</h4>
+          <ul className="compact-list">{(strategy.robustness_checks || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">Assumption checklist</div><CardInfo text="Each item requires user review before estimation and reporting." /></div>
+          {(analysisStrategyResult?.assumption_checklist || []).length ? (
+            (analysisStrategyResult.assumption_checklist || []).map((item) => (
+              <div className="pattern-row" key={item.assumption}>
+                <span>{item.assumption}<br /><small>{item.rationale}</small></span>
+                <span className={`chip ${item.status === "supported" ? "chip-success" : "chip-warning"}`}>{item.status}</span>
+              </div>
+            ))
+          ) : <div className="helper">Run Identification to generate the assumption checklist.</div>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">Warnings and next actions</div><CardInfo text="Warnings carry forward to Phase 8 and Review. They are not hidden by confirmation." /></div>
+        {(analysisStrategyResult?.warnings || []).map((warning, idx) => <div key={idx} className="helper"><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
+        {(analysisStrategyValidation?.errors || []).map((error, idx) => <div key={`e-${idx}`} className="status-box status-error">{error}</div>)}
+        {(analysisStrategyValidation?.warnings || []).map((warning, idx) => <div key={`v-${idx}`} className="helper"><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
+        <ul className="compact-list">{(analysisStrategyResult?.recommended_next_actions || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
+      </div>
+
+      <div className="next-bar">
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> Phase 8 can run only after this plan is reviewed and validated. No numerical effects are produced in Phase 7.</p>
+        <button className="btn btn-primary" disabled={!canConfirm} onClick={onGoNext}>Estimation & calculation <ArrowRight size={14} /></button>
+      </div>
+    </>
+  );
+}
+
 function buildGraphSVG(graphNodes, graphEdges, variableRoles) {
   const COLORS = { Exposure: "#2F5D8A", Outcome: "#B8382B", Confounder: "#A6650E", Mediator: "#6B4A9E", Proxy: "#8A93A3", Unassigned: "#8A93A3" };
   const getRole = (id) => {
@@ -6211,6 +6404,12 @@ export default function CausalStudioApp() {
   const [effectType, setEffectType] = useState("total");
   const [estimatorFamily, setEstimatorFamily] = useState("mixed_logistic");
   const [repeatedMeasuresChecks, setRepeatedMeasuresChecks] = useState({ randomIntercept: true, multipleImputation: false, robustSE: false });
+  const [analysisStrategyResult, setAnalysisStrategyResult] = useState(null);
+  const [analysisStrategyValidation, setAnalysisStrategyValidation] = useState(null);
+  const [analysisStrategyDraft, setAnalysisStrategyDraft] = useState(null);
+  const [editableAdjustmentSet, setEditableAdjustmentSet] = useState([]);
+  const [analysisStrategyConfirmed, setAnalysisStrategyConfirmed] = useState(null);
+  const [analysisStrategyStatus, setAnalysisStrategyStatus] = useState(null);
   const [latestEstimationRun, setLatestEstimationRun] = useState(null);
   const [primaryEstimationRun, setPrimaryEstimationRun] = useState(null);
 
@@ -6956,6 +7155,131 @@ export default function CausalStudioApp() {
       ...extra,
     };
   }
+  function analysisStrategyPayload(extra = {}) {
+    const base = graphBackendPayload();
+    return {
+      confirmed_question: base.confirmed_question,
+      graph: {
+        graph_type: base.graph_type,
+        nodes: base.nodes,
+        edges: base.edges,
+      },
+      exposure: base.exposure,
+      outcome: base.outcome,
+      comparator: base.comparator,
+      time_window: base.time_window,
+      selected_variables: base.selected_variables,
+      provisional_roles: base.provisional_roles,
+      confirmed_roles: base.provisional_roles,
+      feasibility_result: base.feasibility_result,
+      schema_summary: base.schema_summary,
+      rag_evidence: ragSummary ? [{ source: "rag_search", summary: ragSummary }] : [],
+      user_feedback: "",
+      locked_decisions: {
+        ...lockedContent,
+        effect_type: effectType,
+        estimator_family: estimatorFamily,
+        unit_of_analysis: questionFields?.unitOfAnalysis || "participant-window observation",
+      },
+      ...extra,
+    };
+  }
+  async function handleGenerateAnalysisStrategy(mode = "generate", userFeedback = "") {
+    if (!backendStatus.connected) {
+      setAnalysisStrategyStatus({ kind: "error", message: "Backend unavailable - start FastAPI to run Phase 7 identification." });
+      pushAssistantNote("Phase 7 needs the FastAPI backend. This page can still display draft guidance, but backend identification and validation are unavailable.");
+      return;
+    }
+    setAnalysisStrategyStatus({ kind: "loading", message: mode === "alternative" ? "Generating alternative strategy..." : "Running identification and strategy checks..." });
+    try {
+      const response = await generateAnalysisStrategy(analysisStrategyPayload({ user_feedback: userFeedback }));
+      setAnalysisStrategyResult(response);
+      const recommended = response.identification?.recommended_adjustment_set || [];
+      setEditableAdjustmentSet(recommended);
+      setAnalysisStrategyDraft({ estimand: response.estimand || {}, strategy: response.strategy || {} });
+      setAnalysisStrategyValidation(null);
+      setAnalysisStrategyConfirmed(null);
+      const warningCount = (response.warnings || []).length + (response.identification?.warnings || []).length;
+      setAnalysisStrategyStatus({ kind: response.identification?.status === "not_identified" ? "error" : "success", message: `Identification ${response.identification?.status || "reviewed"} with ${warningCount} warning${warningCount === 1 ? "" : "s"}.` });
+      pushAssistantNote("Phase 7 identification checks are complete. This defines an analysis plan only; it does not estimate effects or prove causal validity.");
+    } catch (error) {
+      setAnalysisStrategyStatus({ kind: "error", message: friendlyError(error, "Analysis strategy generation failed.") });
+      pushAssistantNote(`Phase 7 strategy generation failed: ${friendlyError(error)}`);
+    }
+  }
+  async function handleValidateAnalysisStrategy() {
+    if (!backendStatus.connected) {
+      setAnalysisStrategyStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
+      return;
+    }
+    setAnalysisStrategyStatus({ kind: "loading", message: "Validating edited adjustment set..." });
+    try {
+      const base = analysisStrategyPayload();
+      const response = await validateAnalysisStrategy({
+        graph: base.graph,
+        exposure: base.exposure,
+        outcome: base.outcome,
+        adjustment_set: editableAdjustmentSet,
+        estimand: analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {},
+        strategy: analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {},
+        feasibility_result: base.feasibility_result,
+        schema_summary: base.schema_summary,
+      });
+      setAnalysisStrategyValidation(response);
+      setAnalysisStrategyStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Adjustment validation ${response.status}.` });
+      pushAssistantNote(response.status === "invalid"
+        ? "Adjustment-set validation found blocking issues. Fix them before Phase 8."
+        : "Adjustment-set validation completed. If it requires review, document the warning before continuing to estimation.");
+    } catch (error) {
+      setAnalysisStrategyStatus({ kind: "error", message: friendlyError(error, "Analysis strategy validation failed.") });
+      pushAssistantNote(`Phase 7 validation failed: ${friendlyError(error)}`);
+    }
+  }
+  function updateAnalysisDraft(section, key, value) {
+    setAnalysisStrategyDraft((draft) => ({
+      estimand: { ...(analysisStrategyResult?.estimand || {}), ...(draft?.estimand || {}) },
+      strategy: { ...(analysisStrategyResult?.strategy || {}), ...(draft?.strategy || {}) },
+      ...draft,
+      [section]: {
+        ...((section === "estimand" ? analysisStrategyResult?.estimand : analysisStrategyResult?.strategy) || {}),
+        ...(draft?.[section] || {}),
+        [key]: value,
+      },
+    }));
+    setAnalysisStrategyValidation(null);
+    setAnalysisStrategyConfirmed(null);
+  }
+  function confirmAnalysisStrategy() {
+    const validation = analysisStrategyValidation;
+    const checks = validation?.checks || {};
+    if (!analysisStrategyResult) {
+      showToast("Run Identification before confirming Phase 7.");
+      return;
+    }
+    if (!validation) {
+      showToast("Validate the adjustment set before confirming Phase 7.");
+      return;
+    }
+    if (validation.status === "invalid" || graphValidationResult?.status === "invalid") {
+      showToast("Phase 7 cannot be confirmed while validation is invalid.");
+      return;
+    }
+    if (!checks.exposure_present || !checks.outcome_present || !checks.outcome_not_adjusted_for || !checks.exposure_not_adjusted_for) {
+      showToast("Fix exposure/outcome adjustment-set issues before confirming Phase 7.");
+      return;
+    }
+    if (validation.status === "requires_review" || analysisStrategyResult.requires_user_review) {
+      showToast("This strategy requires expert review before estimation.");
+    }
+    setAnalysisStrategyConfirmed({
+      result: analysisStrategyResult,
+      validation,
+      adjustmentSet: editableAdjustmentSet,
+      draft: analysisStrategyDraft,
+      confirmedAt: new Date().toISOString(),
+    });
+    pushAssistantNote("Analysis strategy confirmed for Phase 8. This confirms a reviewed plan, not a causal conclusion.");
+  }
   async function generateFirstPassGraph(versionLabel = "Version 1", userFeedback = "") {
     if (!backendStatus.connected) {
       setGraphActionStatus({ kind: "error", message: "Backend unavailable - graph generation needs FastAPI." });
@@ -7228,6 +7552,13 @@ export default function CausalStudioApp() {
       graph_validation_result: graphValidationResult,
       confirmed_graph: confirmedGraph,
       graph_alternative_count: graphAlternatives.length,
+      identification_result: analysisStrategyResult?.identification,
+      adjustment_set: editableAdjustmentSet,
+      estimand: analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand,
+      strategy: analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy,
+      assumption_checklist: analysisStrategyResult?.assumption_checklist || [],
+      analysis_strategy_validation: analysisStrategyValidation,
+      analysis_strategy_confirmed: Boolean(analysisStrategyConfirmed),
       selected_node_id: selectedNodeId,
       selected_edge_id: selectedEdgeId,
       effect_type: effectType,
@@ -7278,7 +7609,7 @@ export default function CausalStudioApp() {
   }
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph"].includes(page);
+    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {
@@ -7344,6 +7675,7 @@ export default function CausalStudioApp() {
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
     updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant,
     setGraphType, generateFirstPassGraph, validateCurrentGraph, generateAlternativeGraph, saveGraphAlternative, confirmGraph, reverseGraphEdge, toggleEdgeLock,
+    handleGenerateAnalysisStrategy, handleValidateAnalysisStrategy, updateAnalysisDraft, setEditableAdjustmentSet, confirmAnalysisStrategy,
     setEffectType, setEstimatorFamily, toggleRepeatedMeasures,
     setLatestEstimationRun, setPrimaryEstimationRun,
     pushAssistantNote,
@@ -7355,6 +7687,7 @@ export default function CausalStudioApp() {
     variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
     lagHours, exposureThreshold, sensitivityChecks, feasibility, targetedFeasibilityResult,
     graphNodes, graphEdges, selectedNodeId, selectedEdgeId, graphType, graphValidationResult, graphAlternatives, confirmedGraph, graphVersionLabel, graphActionStatus,
+    analysisStrategyResult, analysisStrategyValidation, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyConfirmed, analysisStrategyStatus,
     effectType, estimatorFamily, repeatedMeasuresChecks, latestEstimationRun, primaryEstimationRun,
     lockedContent,
   };
@@ -7391,7 +7724,7 @@ export default function CausalStudioApp() {
           <GraphView state={state} actions={actions} onGoNext={() => goToPage("strategy")} />
         )}
         {page === "strategy" && (
-          <StrategyView state={state} actions={actions} onGoNext={() => goToPage("estimation")} />
+          <StrategyViewPhase7 state={state} actions={actions} onGoNext={() => goToPage("estimation")} />
         )}
         {page === "estimation" && (
           <EstimationView state={state} actions={actions} onGoNext={() => goToPage("review")} />

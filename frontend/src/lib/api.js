@@ -145,6 +145,24 @@ export async function validateCausalGraph(payload) {
   return parseJsonResponse(response, "Causal graph validation failed.");
 }
 
+export async function generateAnalysisStrategy(payload) {
+  const response = await fetch(`${API_BASE_URL}/analysis-strategy/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Analysis strategy generation failed.");
+}
+
+export async function validateAnalysisStrategy(payload) {
+  const response = await fetch(`${API_BASE_URL}/analysis-strategy/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Analysis strategy validation failed.");
+}
+
 export async function runEstimation(payload) {
   const response = await fetch(`${API_BASE_URL}/estimation/run`, {
     method: "POST",

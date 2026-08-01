@@ -2416,8 +2416,21 @@ function QuestionView({ state, actions, onGoNext }) {
           <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")} disabled={!hasParsedDataset}>
             <RefreshCw size={13} /> Generate Alternatives
           </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              runAssistantAction?.("Reprocess with Feedback");
+              handleGenerateQuestionCandidates("feedback");
+            }}
+            disabled={!hasParsedDataset || !phase4Feedback.trim()}
+          >
+            <Sparkles size={13} /> Reprocess with Feedback
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={handleRecommendCandidateVariables} disabled={!hasParsedDataset || !hasQuestionDraft}>
             <Database size={13} /> Recommend Candidate Variables
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={handleRecommendCandidateVariables} disabled={!hasParsedDataset || !hasQuestionDraft}>
+            <Wand2 size={13} /> Recommend Derived Features
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Variable Recommendations")}>
             <Info size={13} /> Interpret Variable Recommendations
@@ -2427,7 +2440,7 @@ function QuestionView({ state, actions, onGoNext }) {
           </button>
         </div>
         <div className="helper" style={{ marginTop: 10 }}>
-          <AlertTriangle size={13} /> These are Phase 4 drafts only. Backend validation happens later; causal validity is not established here.
+          <AlertTriangle size={13} /> Candidate questions are AI-generated drafts and require user review. Variable roles are provisional until graph validation and user confirmation. This phase does not establish causal validity.
         </div>
       </div>
 
@@ -2480,6 +2493,15 @@ function QuestionView({ state, actions, onGoNext }) {
                 <div className="button-row">
                   <button className="btn btn-primary btn-sm" onClick={() => selectGeneratedQuestion(q)}>Select This Question</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => selectGeneratedQuestion({ ...q, status: "user_edited" })}>Edit / Use Parts</button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      selectGeneratedQuestion(q);
+                      confirmCurrentQuestion(q);
+                    }}
+                  >
+                    Confirm Question
+                  </button>
                   <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")}>Generate Alternative</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("View Supporting Evidence")}>View Supporting Evidence</button>
                 </div>
@@ -7095,8 +7117,13 @@ export default function CausalStudioApp() {
     )));
   }
 
-  function confirmCurrentQuestion() {
-    if (!questionFields?.question) {
+  function confirmCurrentQuestion(candidate = null) {
+    const fields = candidate ? questionCandidateToFields(candidate) : questionFields;
+    if (candidate) {
+      setSelectedQuestionId(candidate.id);
+      setQuestionFields(fields);
+    }
+    if (!fields?.question) {
       showToast("Choose or write a question first.");
       return;
     }

@@ -183,8 +183,8 @@ const STEPS = [
   { key: "question", short: "Question & Variables", full: "Causal Question and Provisional Variable Design", icon: GitBranch },
   { key: "feasibility", short: "Feasibility", full: "Targeted Variable Exploration and Feasibility Check", icon: Clock },
   { key: "graph", short: "Causal Graph", full: "Causal Graph and Final Role Validation", icon: GitBranch },
-  { key: "strategy", short: "Analysis Strategy", full: "Identification and Estimation Strategy", icon: FileCheck2 },
-  { key: "estimation", short: "Estimation & Calculation", full: "Phase 8: Estimation & Calculation", icon: Play },
+  { key: "strategy", short: "Analysis Strategy", full: "Identification and Analysis Strategy", icon: FileCheck2 },
+  { key: "estimation", short: "Estimation & Calculation", full: "Estimation and Calculation", icon: Play },
   { key: "review", short: "Review & Export", full: "Review and Export", icon: FileCheck2 },
 ];
 const BUILT_PAGES = ["setup", "data-foundation", "explore", "question", "feasibility", "graph", "strategy", "estimation", "review"];
@@ -471,7 +471,7 @@ const PAGE_INTRO_MESSAGES = {
 
   strategy: "Almost there — let's set up how the analysis will actually run. ⚙️ Choose your effect type, pick an estimator, enable the random intercept, and flag any sensitivity checks you want. Each choice here flows directly into the estimation step, so take a moment to make sure it reflects your design.",
 
-  estimation: "This is the moment of truth — let's run the analysis! 🚀 Check the config summary looks right, then hit Run Estimation. Once results come in, review the diagnostics (SMD values should be under 0.10), and select your primary result when you're happy with it.",
+  estimation: "This is the calculation step. Check the config summary, validate it, then run estimation in Python. Once results come back, review the backend-returned diagnostics and warnings before selecting a primary result.",
 
   review: "You made it to the final step — well done! 🎉 Take a moment to read through the assumption boundaries; they spell out exactly what you can and can't claim from this analysis. If anything needs tweaking, you can navigate back and it'll update here automatically. When you're satisfied, go ahead and export.",
 };
@@ -2375,6 +2375,8 @@ function QuestionView({ state, actions, onGoNext }) {
   const [customVars, setCustomVars] = useState([]);
   const [newVarDraft, setNewVarDraft] = useState({ name: "", source: "", values: "", role: "Unassigned" });
   const [addingVar, setAddingVar] = useState(false);
+  const hasParsedDataset = Boolean(firstRealDataset(datasets)?.schema);
+  const hasQuestionDraft = Boolean(questionFields?.question || questionCandidates.length);
 
   return (
     <>
@@ -2402,14 +2404,19 @@ function QuestionView({ state, actions, onGoNext }) {
           value={phase4Feedback}
           onChange={(e) => setPhase4Feedback(e.target.value)}
         />
+        {!hasParsedDataset && (
+          <div className="status-box status-error" style={{ marginBottom: 10 }}>
+            Upload and parse a dataset before generating candidate questions.
+          </div>
+        )}
         <div className="button-row">
-          <button className="btn btn-primary btn-sm" onClick={() => handleGenerateQuestionCandidates("generate")}>
+          <button className="btn btn-primary btn-sm" onClick={() => handleGenerateQuestionCandidates("generate")} disabled={!hasParsedDataset}>
             <Sparkles size={13} /> Generate Question Candidates
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")}>
+          <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")} disabled={!hasParsedDataset}>
             <RefreshCw size={13} /> Generate Alternatives
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleRecommendCandidateVariables}>
+          <button className="btn btn-secondary btn-sm" onClick={handleRecommendCandidateVariables} disabled={!hasParsedDataset || !hasQuestionDraft}>
             <Database size={13} /> Recommend Candidate Variables
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Variable Recommendations")}>
@@ -2998,6 +3005,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
   const backendDataset = firstRealDataset(datasets);
   const resolvedExposure = resolveDatasetColumn(backendDataset, [questionFields?.exposure, ...Object.entries(variableRoles).filter(([, role]) => role === "Exposure").map(([name]) => name), "acc_mean_magnitude", "sleep_quality"]);
   const resolvedOutcome = resolveDatasetColumn(backendDataset, [questionFields?.outcome, ...Object.entries(variableRoles).filter(([, role]) => role === "Outcome").map(([name]) => name), "label", "alcohol_use_event"]);
+  const canRunFeasibility = Boolean(questionFields?.question && backendDataset?.savedFilename && resolvedExposure && resolvedOutcome);
   const feasibilityStatus = targetedFeasibilityResult?.status || "not_run";
   const statusClass = feasibilityStatus === "ready"
     ? "chip-success"
@@ -3081,7 +3089,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
           <div className="question-field"><span className="filter-label">Selected variables</span><div className="helper" style={{ margin: 0 }}>{targetedVars.join(", ")}</div></div>
         </div>
         <div className="button-row" style={{ marginTop: 10 }}>
-          <button className="btn btn-primary btn-sm" onClick={handleRunFeasibilityCheck} disabled={actionStatus.targetedFeasibility?.kind === "loading"}>
+          <button className="btn btn-primary btn-sm" onClick={handleRunFeasibilityCheck} disabled={!canRunFeasibility || actionStatus.targetedFeasibility?.kind === "loading"}>
             <RefreshCw size={13} className={actionStatus.targetedFeasibility?.kind === "loading" ? "spin" : ""} /> Run Feasibility Checks
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Feasibility Results")}>
@@ -3090,7 +3098,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Explain This Warning")}>
             <AlertTriangle size={13} /> Explain This Warning
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleRunFeasibilityCheck}>
+          <button className="btn btn-secondary btn-sm" onClick={handleRunFeasibilityCheck} disabled={!canRunFeasibility || actionStatus.targetedFeasibility?.kind === "loading"}>
             <RefreshCw size={13} /> Recalculate
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => actions.showToast("Go back to Phase 4 using the left navigation to revise the confirmed question.")}>
@@ -3103,6 +3111,11 @@ function FeasibilityView({ state, actions, onGoNext }) {
         {statusMessage(actionStatus.targetedFeasibility) && (
           <div className={`action-note ${actionStatus.targetedFeasibility.kind === "error" ? "action-note-error" : actionStatus.targetedFeasibility.kind === "success" ? "action-note-success" : ""}`}>
             {statusMessage(actionStatus.targetedFeasibility)}
+          </div>
+        )}
+        {!canRunFeasibility && (
+          <div className="status-box status-warning" style={{ marginTop: 10 }}>
+            Confirm a question and variables before running feasibility checks.
           </div>
         )}
         <div className={`helper ${feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision" ? "" : ""}`} style={{ marginTop: 10 }}>
@@ -3914,6 +3927,7 @@ function GraphView({ state, actions, onGoNext }) {
     graphAlternatives,
     confirmedGraph,
     graphActionStatus,
+    targetedFeasibilityResult,
   } = state;
   const {
     updateNodePos,
@@ -4040,6 +4054,7 @@ function GraphView({ state, actions, onGoNext }) {
   const supportedCount = graphEdges.filter((e) => e.type === "supported").length;
   const uncertainCount = graphEdges.length - supportedCount;
   const validationBadge = graphValidationBadge(graphValidationResult);
+  const canUseGraphBackend = Boolean(targetedFeasibilityResult);
 
   return (
     <div className="graph-page">
@@ -4060,19 +4075,19 @@ function GraphView({ state, actions, onGoNext }) {
           <select className="select-input" value={graphType} onChange={(e) => setGraphType(e.target.value)} title="Graph type">
             {GRAPH_TYPE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
-          <button className="btn btn-primary btn-sm" onClick={() => generateFirstPassGraph()} disabled={graphActionStatus?.kind === "loading"}>
+          <button className="btn btn-primary btn-sm" onClick={() => generateFirstPassGraph()} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
             <Wand2 size={13} /> Generate First-Pass Graph
           </button>
-          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Regenerated Graph")} disabled={graphActionStatus?.kind === "loading"}>
+          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Regenerated Graph")} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
             <RefreshCw size={13} /> Regenerate Graph
           </button>
-          <button className="btn btn-sm" onClick={generateAlternativeGraph} disabled={graphActionStatus?.kind === "loading"}>
+          <button className="btn btn-sm" onClick={generateAlternativeGraph} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
             <Sparkles size={13} /> Generate Alternative Graph
           </button>
-          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Reprocessed User Edits", "Keep my locked/user-edited edges where possible.")} disabled={graphActionStatus?.kind === "loading"}>
+          <button className="btn btn-sm" onClick={() => generateFirstPassGraph("Reprocessed User Edits", "Keep my locked/user-edited edges where possible.")} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
             <Play size={13} /> Reprocess Using My Edits
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={validateCurrentGraph} disabled={graphActionStatus?.kind === "loading"}>
+          <button className="btn btn-secondary btn-sm" onClick={validateCurrentGraph} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
             <ShieldAlert size={13} /> Validate My Changes
           </button>
           <button className={`btn btn-sm ${edgeMode ? "btn-secondary" : ""}`} onClick={() => { setEdgeMode((m) => !m); setEdgeFrom(null); }}>
@@ -4100,6 +4115,7 @@ function GraphView({ state, actions, onGoNext }) {
         )}
         {confirmedGraph && <span className="chip chip-success">Confirmed graph saved for downstream review</span>}
         {graphAlternatives?.length > 0 && <span className="chip chip-muted">{graphAlternatives.length} saved alternative{graphAlternatives.length === 1 ? "" : "s"}</span>}
+        {!canUseGraphBackend && <span className="chip chip-warning">Run feasibility checks before generating a graph.</span>}
       </div>
 
       {/* ── Graph Regenerate / Version / Lock toolbar ── */}
@@ -4707,6 +4723,7 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
     editableAdjustmentSet,
     analysisStrategyConfirmed,
     analysisStrategyStatus,
+    confirmedGraph,
   } = state;
   const {
     handleGenerateAnalysisStrategy,
@@ -4725,6 +4742,7 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
   const outcome = estimand.outcome || graphNodes?.find((n) => (n.role || "").toLowerCase() === "outcome")?.id || "label";
   const graphStatus = graphValidationResult?.status || "not validated";
   const validationStatus = analysisStrategyValidation?.status || "not validated";
+  const canRunStrategy = Boolean(confirmedGraph);
   const canConfirm = Boolean(analysisStrategyResult && analysisStrategyValidation && analysisStrategyValidation.status !== "invalid" && graphValidationResult?.status !== "invalid");
 
   function addAdjustmentVar() {
@@ -4753,15 +4771,20 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
           <span className={`chip ${analysisStrategyConfirmed ? "chip-success" : "chip-warning"}`}>{analysisStrategyConfirmed ? "Confirmed" : "Requires review"}</span>
         </div>
         <div className="btn-row" style={{ flexWrap: "wrap" }}>
-          <button className="btn btn-primary" onClick={() => handleGenerateAnalysisStrategy("generate")}><Play size={13} /> Run Identification</button>
+          <button className="btn btn-primary" onClick={() => handleGenerateAnalysisStrategy("generate")} disabled={!canRunStrategy}><Play size={13} /> Run Identification</button>
           <button className="btn" onClick={() => runAssistantAction("Interpret Identification Results")}><Info size={13} /> Interpret Identification Results</button>
           <button className="btn" onClick={() => runAssistantAction("Explain Adjustment Set")}><Search size={13} /> Explain Adjustment Set</button>
-          <button className="btn btn-secondary" onClick={handleValidateAnalysisStrategy}><CheckCircle2 size={13} /> Validate My Adjustment Set</button>
-          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("rerun", "Re-run identification with the current graph and edited strategy.")}><RefreshCw size={13} /> Re-run Identification</button>
-          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("alternative", "Generate an alternative defensible strategy for expert review.")}><Wand2 size={13} /> Generate Alternative Strategy</button>
+          <button className="btn btn-secondary" onClick={handleValidateAnalysisStrategy} disabled={!canRunStrategy}><CheckCircle2 size={13} /> Validate My Adjustment Set</button>
+          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("rerun", "Re-run identification with the current graph and edited strategy.")} disabled={!canRunStrategy}><RefreshCw size={13} /> Re-run Identification</button>
+          <button className="btn" onClick={() => handleGenerateAnalysisStrategy("alternative", "Generate an alternative defensible strategy for expert review.")} disabled={!canRunStrategy}><Wand2 size={13} /> Generate Alternative Strategy</button>
           <button className="btn" onClick={() => runAssistantAction("Reprocess Analysis Plan")}><Sparkles size={13} /> Reprocess Analysis Plan</button>
           <button className="btn btn-primary" disabled={!canConfirm} onClick={confirmAnalysisStrategy}><Save size={13} /> Confirm Analysis Strategy</button>
         </div>
+        {!canRunStrategy && (
+          <div className="status-box status-warning" style={{ marginTop: 10 }}>
+            Confirm a graph before running identification.
+          </div>
+        )}
         {analysisStrategyStatus && <div className={`status-box status-${analysisStrategyStatus.kind}`} style={{ marginTop: 10 }}>{analysisStrategyStatus.message}</div>}
         <div className="helper" style={{ marginTop: 10 }}><ShieldAlert size={13} /> Backend checks support validation, but they do not prove causal validity.</div>
       </div>
@@ -5241,6 +5264,15 @@ function EstimationView({ state, actions, onGoNext }) {
   const phase7Estimand = analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {};
   const phase7Strategy = analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {};
   const phase7Adjustment = editableAdjustmentSet?.length ? editableAdjustmentSet : estimationAdjustment.length ? estimationAdjustment : adjustmentSet.filter((name) => estimationColumns.includes(name));
+  const canValidateEstimation = Boolean(
+    backendStatus.connected
+    && estimationDataset?.savedFilename
+    && (analysisStrategyConfirmed || analysisStrategyValidation?.safe_to_continue_to_estimation)
+  );
+  const canRunEstimation = Boolean(
+    canValidateEstimation
+    && (!estimationValidation || estimationValidation.safe_to_run_estimation !== false)
+  );
 
   function buildEstimationPayload(tag = "Primary") {
     const dataset = firstRealDataset(datasets);
@@ -5315,35 +5347,6 @@ function EstimationView({ state, actions, onGoNext }) {
     }
   }
 
-  function generateResult() {
-    const n = feasibility.finalSample;
-    const se = parseFloat((1.4 / Math.sqrt(Math.max(n, 100))).toFixed(4));
-    const base = estimatorFamily === "msm" ? -0.18 : estimatorFamily === "gee" ? -0.14 : -0.16;
-    const point = parseFloat((base + adjustmentSet.length * -0.01).toFixed(3));
-    const ciLower = parseFloat((point - 1.96 * se).toFixed(3));
-    const ciUpper = parseFloat((point + 1.96 * se).toFixed(3));
-    const warnings = [];
-    if (feasibility.overlapPct < 60) warnings.push("Overlap < 60% — positivity may be borderline. Consider trimming or overlap weighting.");
-    if (n < 2000) warnings.push("Sample size below 2,000 participant-days — estimates may be unstable; bootstrap CIs recommended.");
-    if (repeatedMeasuresChecks.randomIntercept && estimatorFamily === "msm") warnings.push("Random intercept + MSM: ensure IPTW weights are stabilised before applying random effects.");
-    const balanceDiagnostics = adjustmentSet.map((v) => ({
-      variable: v,
-      smdBefore: parseFloat((0.18 + (v.charCodeAt(0) % 10) * 0.02).toFixed(3)),
-      smdAfter: parseFloat((0.03 + (v.charCodeAt(0) % 5) * 0.01).toFixed(3)),
-    }));
-    const sensitivityResults = [];
-    if (sensitivityChecks.unmeasuredConf) sensitivityResults.push({ label: "E-value", value: parseFloat((Math.abs(point / se) + 1).toFixed(2)), desc: "Minimum confounding RR needed to fully explain away the estimate" });
-    if (sensitivityChecks.missingData) sensitivityResults.push({ label: "Multiple imputation vs. complete-case", value: `${point} vs ${parseFloat((point + 0.02).toFixed(3))}`, desc: "Difference is small — missingness has low impact on the estimate" });
-    if (sensitivityChecks.positivity) sensitivityResults.push({ label: "Overlap-weighted estimate", value: parseFloat((point - 0.012).toFixed(3)), desc: "Marginal difference after trimming <5th / >95th propensity percentiles" });
-    return {
-      pointEstimate: point, se, ciLower, ciUpper, n,
-      convergence: "Converged (REML, 47 iterations)",
-      warnings, balanceDiagnostics, sensitivityResults,
-      estimandLabel: effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)",
-      comparatorDef: questionFields?.comparator || "No sleep disruption (\u22656h uninterrupted)",
-    };
-  }
-
   async function runEstimation(tag = "Primary") {
     if (isRunning) return;
     const dataset = firstRealDataset(datasets);
@@ -5357,6 +5360,12 @@ function EstimationView({ state, actions, onGoNext }) {
       showToast("Upload a dataset first.");
       return;
     }
+    if (!analysisStrategyConfirmed && !analysisStrategyValidation?.safe_to_continue_to_estimation) {
+      setEstimationStatus({ kind: "error", message: "Confirm an analysis strategy before running estimation." });
+      pushAssistantNote("Confirm an analysis strategy before running estimation. Phase 8 uses the Phase 7 plan and does not create its own causal design.");
+      return;
+    }
+
     setIsRunning(true);
     setRunProgress(0);
     setInterpretVersions([]);
@@ -5403,60 +5412,6 @@ function EstimationView({ state, actions, onGoNext }) {
     } finally {
       setIsRunning(false);
     }
-    return;
-    setIsRunning(true);
-    setRunProgress(0);
-    setInterpretVersions([]);
-    setInterpretLockedIdx(null);
-    pushAssistantNote("Estimation running — the backend is fitting the model using the adjustment set, estimator, and repeated-measures settings you confirmed in Analysis Strategy. I will report the result, diagnostics, and any warnings as soon as it completes.");
-    let p = 0;
-    const interval = setInterval(() => {
-      p = Math.min(p + 18, 90);
-      setRunProgress(p);
-      if (p >= 90) clearInterval(interval);
-    }, 380);
-    setTimeout(() => {
-      clearInterval(interval);
-      setRunProgress(100);
-      const result = generateResult();
-      const runId = `run-${Date.now()}`;
-      const newRun = {
-        id: runId, tag, timestamp: new Date().toLocaleString(),
-        config: {
-          question: questionFields?.question || "(not set)",
-          estimand: result.estimandLabel,
-          exposure: questionFields?.exposure || "sleep_disruption_flag",
-          comparator: questionFields?.comparator || "No disruption",
-          outcome: questionFields?.outcome || "alcohol_craving_ema",
-          timeWindow: `${lagHours}h lag`,
-          adjustmentSet: adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)",
-          effectType: effectType === "direct" ? "Direct effect" : "Total effect",
-          estimator: chosenEstimator.label,
-          library: estimatorFamily === "msm" ? "causalml / DoWhy (IPTW)" : estimatorFamily === "gee" ? "statsmodels.genmod.GEE" : "statsmodels.formula.MixedLM / DoWhy",
-          randomIntercept: repeatedMeasuresChecks.randomIntercept ? "Yes" : "No",
-          multipleImputation: repeatedMeasuresChecks.multipleImputation ? "Yes (M=20 imputations)" : "No \u2014 complete-case",
-          robustSE: repeatedMeasuresChecks.robustSE ? "Yes (cluster-robust)" : "No",
-          missingDataHandling: sensitivityChecks.missingData ? "MI + complete-case comparison" : "Complete-case only",
-          sampleSize: feasibility.finalSample,
-          exclusions: `${Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)`,
-          personTime: `${Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks`,
-          seed: 42,
-          softwareVersion: "Python 3.11",
-          packages: ["dowhy==0.11.2", "statsmodels==0.14.1", "numpy==1.26.4", "pandas==2.2.1"],
-        },
-        results: result,
-      };
-      setRuns((prev) => [...prev, newRun]);
-      setActiveRunId(runId);
-      setIsRunning(false);
-      if (result.warnings.length) {
-        pushAssistantNote(`Estimation complete — ${result.warnings.length} warning(s) flagged. Results: point estimate ${result.pointEstimate} (95% CI: ${result.ciLower}, ${result.ciUpper}), SE ${result.se}, N=${result.n.toLocaleString()}. Interpretation: warnings do not automatically invalidate the estimate, but they must be reviewed and addressed before you select a primary result — each warning describes a specific condition that could affect reliability. Recommendation: read each warning in the diagnostics section, use "Explain This Warning" for plain-language guidance, and consider whether an alternative estimator or adjusted set resolves the issue before finalising.`);
-        advanceGuidance("estimation", "run_complete", "Results are in — but there are some warnings worth reviewing ↑. Take a look at each one and decide if they're acceptable. When you're ready, click \"Interpret Current Estimate\" and I'll walk you through what the numbers mean.");
-      } else {
-        pushAssistantNote(`Estimation complete ✓. Results: point estimate ${result.pointEstimate} (95% CI: ${result.ciLower}, ${result.ciUpper}), SE ${result.se}, N=${result.n.toLocaleString()}. Interpretation: no convergence warnings — the model fitted within the expected iteration count. Recommendation: review the covariate balance table (SMD values should be below 0.10 after adjustment) and the sensitivity results before selecting this as your primary result. Use "Interpret Current Estimate" for a full plain-language explanation of the direction and inferential status.`);
-        advanceGuidance("estimation", "run_complete", "Clean run — no warnings! 🎉 Click \"Interpret Current Estimate\" below and I'll give you a plain-language explanation of what the result means. Also check the covariate balance table — SMDs should all be under 0.10.");
-      }
-    }, 2800);
   }
 
   async function interpretEstimate() {
@@ -5473,30 +5428,21 @@ function EstimationView({ state, actions, onGoNext }) {
     } finally {
       setInterpretLoading(false);
     }
-    return;
-    setTimeout(() => {
-      const r = activeRun.results;
-      const dir = r.pointEstimate < 0 ? "reduction" : "increase";
-      const ciExcludesZero = (r.ciLower < 0 && r.ciUpper < 0) || (r.ciLower > 0 && r.ciUpper > 0);
-      const text =
-        `The point estimate of ${r.pointEstimate} (95% CI: ${r.ciLower} to ${r.ciUpper}) represents the estimated ${r.estimandLabel} of sleep disruption on next-day alcohol craving. The direction is a ${dir} in craving associated with the exposure, after adjusting for the specified confounders.\n\nThe 95% CI ${ciExcludesZero ? "does not include zero, which means the data are inconsistent with no effect at the 5% significance level" : "includes zero, meaning the evidence is consistent with a null effect and the result should be interpreted cautiously"}.\n\nThis does not confirm causation — unmeasured confounding remains possible. Consult the E-value (if computed) to assess how strong confounding would need to be to explain away this estimate. Do not overstate the finding beyond what the adjustment set and study design can support.`;
-      setInterpretVersions(prev => [...prev, text]);
-      setInterpretLoading(false);
-      pushAssistantNote(`Interpretation ready. Direction: ${r.pointEstimate < 0 ? "negative — higher exposure associated with lower outcome probability" : "positive — higher exposure associated with higher outcome probability"}. CI ${(r.ciLower < 0 && r.ciUpper < 0) || (r.ciLower > 0 && r.ciUpper > 0) ? "excludes zero — data inconsistent with no effect at the 5% level" : "includes zero — cannot rule out a null effect from this data alone"}. Limitation: this does not confirm causation — unmeasured confounding remains possible. See the interpretation panel for the full plain-language explanation. Recommendation: if the E-value was computed, check whether it implies a plausible confounding scenario before reporting this result.`);
-      advanceGuidance("estimation", "interpreted", "Interpretation done! Now click \"Explain Diagnostics\" to check the covariate balance and convergence. Once you're happy with everything, you're all set — head to Review & Export to pull together the final study report. Almost there! 🏁");
-    }, 900);
   }
-
   function interpretDiagnostics() {
     if (!activeRun) return;
-    const smdOk = activeRun.results.balanceDiagnostics.every((d) => d.smdAfter < 0.1);
-    pushAssistantNote(
-      smdOk
-        ? "Diagnostics: all post-adjustment SMDs are below 0.10 ✓. Interpretation: an SMD below 0.10 after adjustment means the covariate's distribution is sufficiently balanced between exposed and unexposed participant-days — the adjustment is doing its job. Convergence passed within the expected iteration count, meaning the model likelihood reached a stable solution. Limitation: SMD balance does not guarantee that unmeasured confounders are balanced. Recommendation: now review the sensitivity results below (E-value, MI comparison) before selecting a primary result."
-        : "Diagnostics: one or more post-adjustment SMDs exceed 0.10. Interpretation: an SMD above 0.10 means that even after adjustment, the covariate's distribution differs meaningfully between exposed and unexposed groups — the model is not fully blocking that backdoor path. This can bias the effect estimate in the direction of the covariate's effect on the outcome. Recommendation: consider (1) switching to overlap weighting (which directly targets balance rather than outcome modelling), (2) adding the poorly-balanced variable to the adjustment set if it is not already there, or (3) trimming extreme propensity values. Do not select this as the primary result until balance is adequate."
-    );
+    const diagnostics = activeRun.results?.diagnostics || {};
+    const warnings = activeRun.results?.warnings || [];
+    pushAssistantNote([
+      "Diagnostics are backend-computed metadata for the selected run.",
+      `Rows after filtering: ${diagnostics.rows_after_filtering ?? activeRun.results?.n ?? "not returned"}.`,
+      `Convergence: ${diagnostics.convergence || activeRun.results?.convergence || "not returned"}.`,
+      warnings.length
+        ? `Warnings to review: ${warnings.join("; ")}`
+        : "No backend warnings were attached to this run.",
+      "If a diagnostic was not returned, treat it as not evaluated in this proof of concept. Do not infer balance, overlap, or sensitivity results that Python did not calculate.",
+    ].join("\n"));
   }
-
   function exportRunLog() {
     const lines = runs.map((r, i) =>
       [
@@ -5607,6 +5553,11 @@ function EstimationView({ state, actions, onGoNext }) {
             {(estimationValidation.warnings || []).map((warning, idx) => <div key={`warn-${idx}`} className="helper" style={{ marginTop: 6 }}><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
           </div>
         )}
+        {!canValidateEstimation && (
+          <div className="status-box status-warning" style={{ marginTop: 10 }}>
+            Confirm an analysis strategy before running estimation.
+          </div>
+        )}
       </div>
 
       {/* ── Section 2: Backend Execution ── */}
@@ -5617,16 +5568,16 @@ function EstimationView({ state, actions, onGoNext }) {
         </div>
         <p className="card-desc">Validate the configuration first, then run estimation. These estimates are conditional on the selected design, model, assumptions, and data limitations. This phase does not prove causality.</p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
-          <button className="btn btn-secondary" onClick={validateConfig} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button className="btn btn-secondary" onClick={validateConfig} disabled={!canValidateEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <CheckCircle2 size={13} /> Validate Estimation Config
           </button>
-          <button className="btn btn-primary" onClick={() => runEstimation("Primary")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button className="btn btn-primary" onClick={() => runEstimation("Primary")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <Play size={13} /> {isRunning ? "Running\u2026" : runs.length === 0 ? "Run Estimation" : "Re-run with Updated Settings"}
           </button>
           {runs.length > 0 && !isRunning && (
             <>
-              <button className="btn" onClick={() => runEstimation("Exploratory")} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
-              <button className="btn" onClick={() => runEstimation("Robustness")} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+              <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+              <button className="btn" onClick={() => runEstimation("Robustness")} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
             </>
           )}
         </div>
@@ -5771,9 +5722,9 @@ function EstimationView({ state, actions, onGoNext }) {
             />
           )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, borderTop: "1px solid #EDEFF3", paddingTop: 10 }}>
-            <button className="btn" onClick={() => runEstimation("Primary")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Re-run with Updated Settings</button>
-            <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
-            <button className="btn" onClick={() => runEstimation("Robustness")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+            <button className="btn" onClick={() => runEstimation("Primary")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Re-run with Updated Settings</button>
+            <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+            <button className="btn" onClick={() => runEstimation("Robustness")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
             <button className="btn" onClick={() => pushAssistantNote("To adjust your identification or estimation strategy, use the sidebar to navigate back to Analysis Strategy, then return here to re-run.")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <ArrowRight size={12} /> Return to Strategy
             </button>
@@ -6199,6 +6150,7 @@ function ReviewView({ state, actions }) {
   const [claimAudit, setClaimAudit] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const exportReady = Boolean(selectedRun && reportDraft && claimAudit && claimAudit.status !== "fail");
 
   async function handleGenerateReport() {
     setReportLoading(true);
@@ -6237,7 +6189,16 @@ function ReviewView({ state, actions }) {
   async function handleClaimAudit() {
     setAuditLoading(true);
     try {
-      const assembled = reportDraft || await assembleReviewPackage(reviewExportPayloadFromState(state));
+      const assembled = reportDraft || (backendStatus.connected
+        ? await assembleReviewPackage(reviewExportPayloadFromState(state))
+        : {
+            package_title: "Causal Design Agent Review Package",
+            status: selectedRun ? "fallback" : "missing_primary_estimation_run",
+            selected_estimation_summary: selectedRun?.results || null,
+            final_design_summary: {},
+            unresolved_warnings: selectedRun ? [] : ["No primary estimation run has been selected."],
+            ready_for_export: false,
+          });
       if (!reportDraft) setReportDraft(assembled);
       const payload = {
         report_text: reportToMarkdown(assembled, { ...state, reportClaimAudit: claimAudit }),
@@ -6273,7 +6234,17 @@ function ReviewView({ state, actions }) {
       pushAssistantNote("PDF export is planned later. Use JSON or Markdown for this proof of concept.");
       return;
     }
-    const assembled = reportDraft || await assembleReviewPackage(reviewExportPayloadFromState(state));
+    if (!selectedRun) {
+      showToast("Select a primary estimation run before export.");
+      pushAssistantNote("Select a primary estimation run before exporting the complete design and analysis package.");
+      return;
+    }
+    if (!reportDraft || !claimAudit) {
+      showToast("Generate the report and run claim audit before export.");
+      pushAssistantNote("Generate the report and run claim audit before export so the package includes diagnostics, warnings, and claim-safety checks.");
+      return;
+    }
+    const assembled = reportDraft || (backendStatus.connected ? await assembleReviewPackage(reviewExportPayloadFromState(state)) : reportDraft);
     if (!reportDraft) setReportDraft(assembled);
     const audit = claimAudit || {
       status: "warning",
@@ -6432,7 +6403,8 @@ function ReviewView({ state, actions }) {
           </>
         ) : (
           <div className="inconsistency-card">
-            <p style={{ margin: 0 }}>No primary estimation run has been selected. Return to Phase 8 to run estimation and select a primary run.</p>
+            <p style={{ margin: 0 }}>Select a primary estimation run before exporting the complete design and analysis package.</p>
+            <p style={{ margin: "8px 0 0" }}>Return to Phase 8 to run estimation and select a primary run.</p>
             {latestDraftRun && <p style={{ margin: "8px 0 0" }}>A latest draft run exists ({latestDraftRun.id}), but it has not been selected as primary.</p>}
           </div>
         )}
@@ -6530,10 +6502,15 @@ function ReviewView({ state, actions }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("json")}><Save size={13} /> Export JSON</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("markdown")}><FileText size={13} /> Export Markdown</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("json")} disabled={!exportReady}><Save size={13} /> Export JSON</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("markdown")} disabled={!exportReady}><FileText size={13} /> Export Markdown</button>
           <button className="btn" onClick={() => handleExportReviewPackage("pdf")}><Lock size={13} /> Export PDF placeholder</button>
         </div>
+        {!exportReady && (
+          <div className="status-box status-warning" style={{ marginBottom: 12 }}>
+            Select a primary estimation run, generate the report, and run claim audit before exporting the complete design and analysis package.
+          </div>
+        )}
         {reportDraft ? (
           <>
             <div className="pattern-row"><span>Report title</span><span>{reportDraft.package_title || reportDraft.title || reportDraft.report_title}</span></div>

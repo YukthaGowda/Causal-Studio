@@ -100,6 +100,24 @@ export async function assistantAction(payload) {
   return parseJsonResponse(response, "Assistant action failed.");
 }
 
+export async function generateQuestionCandidates(payload) {
+  const response = await fetch(`${API_BASE_URL}/questions/generate-candidates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Question candidate generation failed.");
+}
+
+export async function recommendCandidateVariables(payload) {
+  const response = await fetch(`${API_BASE_URL}/variables/recommend-candidates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Candidate variable recommendation failed.");
+}
+
 export async function generateCausalGraph(payload) {
   const response = await fetch(`${API_BASE_URL}/causal-graph/generate-and-validate`, {
     method: "POST",

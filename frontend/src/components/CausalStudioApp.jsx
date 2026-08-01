@@ -42,7 +42,9 @@ import {
   listEstimationRuns,
   getDatasetSchema,
   getIngestionStatus,
+  generateQuestionCandidates,
   ingestDocuments,
+  recommendCandidateVariables,
   runBroadExploration,
   searchRag,
   uploadDataset,
@@ -1227,7 +1229,7 @@ const STYLE = `
   .assistant-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
   .assistant-head span { font-size: 13.5px; font-weight: 600; }
   .assistant-body { padding: 14px 14px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .msg { font-size: 12.5px; line-height: 1.5; padding: 9px 11px; border-radius: 10px; max-width: 92%; }
+  .msg { font-size: 12.5px; line-height: 1.5; padding: 9px 11px; border-radius: 10px; max-width: 92%; white-space: pre-line; }
   .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
   .msg-assistant { align-self: flex-start; background: #EFF1F5; color: var(--navy); border-bottom-left-radius: 3px; }
   .assistant-questions { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 4px; flex-shrink: 0; }
@@ -2323,8 +2325,16 @@ const DERIVED_FEATURE_OPTIONS = [
 ];
 
 function QuestionView({ state, actions, onGoNext }) {
-  const { promotedPatterns, variableRoles, selectedQuestionId, questionFields, derivedFeatures, datasets, lagHours, exposureThreshold } = state;
-  const { setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, toggleDerivedFeature, showToast, lockContent, unlockContent } = actions;
+  const {
+    promotedPatterns, variableRoles, selectedQuestionId, questionFields, questionCandidates,
+    candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures, datasets, lagHours, exposureThreshold,
+  } = state;
+  const {
+    setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, toggleDerivedFeature, showToast,
+    lockContent, unlockContent, handleGenerateQuestionCandidates, handleRecommendCandidateVariables,
+    selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion, phase4Feedback, setPhase4Feedback, applyVariableDecision,
+    runAssistantAction,
+  } = actions;
   const [showRefine, setShowRefine] = useState(false);
   const baseInfo = useMemo(() => computeFeasibility(datasets, 0, 0), [datasets]);
   const [varStatuses, setVarStatuses] = useState(() =>
@@ -2340,6 +2350,171 @@ function QuestionView({ state, actions, onGoNext }) {
         <h1>Causal question & provisional variable design</h1>
         <p>Start from a suggested variable role table and a few candidate questions built from what you promoted in Broad Exploration. Nothing here is locked \u2014 tweak any suggestion or write your own from scratch.</p>
       </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">AI-generated structured Phase 4 outputs</div>
+          {phase4Status && (
+            <span className={`chip ${phase4Status.kind === "error" ? "chip-danger" : phase4Status.kind === "warning" ? "chip-warning" : phase4Status.kind === "success" ? "chip-success" : "chip-muted"}`}>
+              {phase4Status.message}
+            </span>
+          )}
+        </div>
+        <p className="card-desc">
+          Generate editable draft questions, provisional variables, and derived-feature candidates from the current objective, schema, RAG evidence, and broad exploration context.
+        </p>
+        <textarea
+          className="objective-input"
+          style={{ minHeight: 54, marginBottom: 10 }}
+          placeholder="Optional feedback for reprocessing: what to preserve, what to change, variables/evidence to exclude, constraints to apply."
+          value={phase4Feedback}
+          onChange={(e) => setPhase4Feedback(e.target.value)}
+        />
+        <div className="button-row">
+          <button className="btn btn-primary btn-sm" onClick={() => handleGenerateQuestionCandidates("generate")}>
+            <Sparkles size={13} /> Generate Question Candidates
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")}>
+            <RefreshCw size={13} /> Generate Alternatives
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={handleRecommendCandidateVariables}>
+            <Database size={13} /> Recommend Candidate Variables
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Variable Recommendations")}>
+            <Info size={13} /> Interpret Variable Recommendations
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Validate Provisional Roles")}>
+            <ShieldAlert size={13} /> Validate Provisional Roles
+          </button>
+        </div>
+        <div className="helper" style={{ marginTop: 10 }}>
+          <AlertTriangle size={13} /> These are Phase 4 drafts only. Backend validation happens later; causal validity is not established here.
+        </div>
+      </div>
+
+      {questionCandidates.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Generated candidate questions</div>
+            <span className="chip chip-warning">Needs user review</span>
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {questionCandidates.map((q, index) => (
+              <div key={q.id || index} className="paper-row" style={{ alignItems: "stretch", flexDirection: "column" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <strong>{q.id || `q${index + 1}`} - {q.status || "AI-generated draft"}</strong>
+                  <span className="chip chip-muted">Version {index + 1}</span>
+                </div>
+                <textarea
+                  className="objective-input"
+                  style={{ minHeight: 58 }}
+                  value={q.question_text || ""}
+                  onChange={(e) => {
+                    updateQuestionCandidate?.(q.id, { question_text: e.target.value });
+                  }}
+                  readOnly={false}
+                />
+                <div className="question-field-grid">
+                  {[
+                    ["Population", q.population],
+                    ["Exposure", q.exposure],
+                    ["Comparator", q.comparator],
+                    ["Outcome", q.outcome],
+                    ["Time window", q.time_window],
+                    ["Unit", q.unit_of_analysis],
+                    ["Focus", q.within_or_between_person],
+                    ["Estimand", q.initial_estimand_direction],
+                  ].map(([label, value]) => (
+                    <div className="question-field" key={label}>
+                      <span className="filter-label">{label}</span>
+                      <div className="helper" style={{ margin: 0 }}>{value || "Needs review"}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="helper"><strong>Feasibility:</strong> {q.preliminary_data_feasibility || "Preliminary feasibility needs Phase 5 review."}</div>
+                {(q.limitations || []).length > 0 && <div className="helper"><strong>Limitations:</strong> {q.limitations.join(" ")}</div>}
+                {(q.supporting_evidence || []).length > 0 ? (
+                  <div className="helper"><strong>Evidence:</strong> {(q.supporting_evidence || []).slice(0, 2).map((e) => e.source_filename || e).join("; ")}</div>
+                ) : (
+                  <div className="helper">No supporting evidence attached to this candidate.</div>
+                )}
+                <div className="button-row">
+                  <button className="btn btn-primary btn-sm" onClick={() => selectGeneratedQuestion(q)}>Select This Question</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => selectGeneratedQuestion({ ...q, status: "user_edited" })}>Edit / Use Parts</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")}>Generate Alternative</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("View Supporting Evidence")}>View Supporting Evidence</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {candidateVariables.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <div className="card-title">Structured candidate variable recommendations</div>
+            <span className="chip chip-warning">Provisional roles</span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="mini-table">
+              <thead>
+                <tr>
+                  <th>Variable</th>
+                  <th>Status</th>
+                  <th>Category</th>
+                  <th>Measurement</th>
+                  <th>Temporal</th>
+                  <th>Possible role</th>
+                  <th>Rationale</th>
+                  <th>Evidence</th>
+                  <th>Limitations</th>
+                  <th>User decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidateVariables.map((v, index) => (
+                  <tr key={`${v.variable_name || "variable"}-${index}`}>
+                    <td className="mono">{v.variable_name}</td>
+                    <td><span className="chip chip-muted">{String(v.candidate_status || "consider").replaceAll("_", " ")}</span></td>
+                    <td>{v.data_category}</td>
+                    <td>{String(v.measurement_role || "unknown").replaceAll("_", " ")}</td>
+                    <td>{String(v.temporal_role || "unknown").replaceAll("_", " ")}</td>
+                    <td>{String(v.possible_structural_role || "unknown").replaceAll("_", " ")}</td>
+                    <td style={{ minWidth: 190 }}>{v.rationale}</td>
+                    <td>{(v.supporting_evidence || []).length ? `${v.supporting_evidence.length} item(s)` : "None attached"}</td>
+                    <td>{(v.limitations || []).slice(0, 2).join(" ")}</td>
+                    <td>
+                      <select className="select-input" value={v.user_decision || "Needs clarification"} onChange={(e) => applyVariableDecision(v.variable_name, e.target.value)}>
+                        {["Keep", "Modify", "Exclude", "Mark unavailable", "Needs clarification"].map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {derivedFeatureCandidates.length > 0 && (
+        <div className="card">
+          <div className="card-head"><div className="card-title">AI-derived feature candidates</div><span className="chip chip-muted">Requires backend computation</span></div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {derivedFeatureCandidates.map((f, index) => (
+              <div className="feature-row" key={f.feature_name || index}>
+                <div>
+                  <div className="feature-label">{f.feature_name}</div>
+                  <div className="feature-desc">Sources: {(f.source_variables || []).join(", ") || "Needs review"}</div>
+                  <div className="feature-desc">Method: {f.calculation_method || "Not specified"}; aggregation: {f.aggregation_method || "Not specified"}</div>
+                  <div className="feature-desc">Window: {f.time_window || "Needs review"}; missing data: {f.missing_data_handling || "Needs review"}</div>
+                  <div className="feature-desc">Leakage risk: {f.leakage_risk || "Needs review"}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head"><div className="card-title">Provisional variable-role recommendations</div><CardInfo text="AI first-pass role assignments (Exposure, Outcome, Confounder, Mediator, Proxy) based on your documents and data patterns. Review and override — these are starting suggestions, not final decisions." /></div>
@@ -5781,6 +5956,11 @@ export default function CausalStudioApp() {
   const [variableRoles, setVariableRoles] = useState({});
   const [selectedQuestionId, setSelectedQuestionId] = useState(null);
   const [questionFields, setQuestionFields] = useState(null);
+  const [questionCandidates, setQuestionCandidates] = useState([]);
+  const [candidateVariables, setCandidateVariables] = useState([]);
+  const [derivedFeatureCandidates, setDerivedFeatureCandidates] = useState([]);
+  const [phase4Status, setPhase4Status] = useState(null);
+  const [phase4Feedback, setPhase4Feedback] = useState("");
   const [derivedFeatures, setDerivedFeatures] = useState(() => DERIVED_FEATURE_OPTIONS.map((f) => ({ ...f, selected: false })));
   const [lockedContent, setLockedContent] = useState({});
   const lockContent = (key, value) => setLockedContent(c => ({ ...c, [key]: value }));
@@ -6121,6 +6301,147 @@ export default function CausalStudioApp() {
     } catch (error) {
       setAction("broadExploration", { kind: "error", message: friendlyError(error, "Broad exploration failed.") });
       pushAssistantNote(`Broad exploration failed: ${friendlyError(error)}`);
+    }
+  }
+
+  function buildPhase4Payload(extra = {}) {
+    const dataset = firstRealDataset(datasets);
+    const schema = dataset?.schema || {};
+    return {
+      research_objective: objective || "I want to study temporal relationships between passive sensing features and next-window alcohol-related labels.",
+      confirmed_question: questionFields?.question || "",
+      dataset_filename: realDatasetFilename(dataset) || dataset?.name || "",
+      schema_summary: {
+        filename: realDatasetFilename(dataset) || dataset?.name || "",
+        number_of_rows: schema.number_of_rows ?? dataset?.rows,
+        number_of_columns: schema.number_of_columns ?? dataset?.cols,
+        column_names: schema.column_names || [],
+        pandas_data_types: schema.pandas_data_types || {},
+        missing_value_percentage_per_column: schema.missing_value_percentage_per_column || {},
+        possible_id_columns: schema.possible_id_columns || (dataset?.participantField ? [dataset.participantField] : []),
+        possible_timestamp_date_columns: schema.possible_timestamp_date_columns || dataset?.timestampFields || [],
+        possible_numeric_columns: schema.possible_numeric_columns || [],
+        possible_categorical_columns: schema.possible_categorical_columns || [],
+        warnings: schema.warnings || [],
+      },
+      broad_exploration_summary: broadExploration || {},
+      rag_evidence: [],
+      user_feedback: phase4Feedback,
+      locked_decisions: lockedContent || {},
+      ...extra,
+    };
+  }
+
+  function questionCandidateToFields(candidate) {
+    return {
+      question: candidate.question_text || "",
+      population: candidate.population || "",
+      exposure: candidate.exposure || "",
+      comparator: candidate.comparator || "",
+      outcome: candidate.outcome || "",
+      timeWindow: candidate.time_window || "",
+      unitOfAnalysis: candidate.unit_of_analysis || "",
+      estimand: candidate.initial_estimand_direction || "",
+    };
+  }
+
+  async function handleGenerateQuestionCandidates(mode = "generate") {
+    if (!backendStatus.connected) {
+      setPhase4Status({ kind: "error", message: "Backend unavailable - showing existing draft question examples." });
+      pushAssistantNote("I could not call the Phase 4 backend, so keep using the local draft examples for now.");
+      return;
+    }
+    setPhase4Status({ kind: "loading", message: mode === "alternative" ? "Generating alternative questions..." : "Generating question candidates..." });
+    try {
+      const response = await generateQuestionCandidates(buildPhase4Payload({
+        user_feedback: mode === "alternative"
+          ? `${phase4Feedback}\nGenerate an alternative set while preserving locked user decisions.`
+          : phase4Feedback,
+      }));
+      setQuestionCandidates(response.questions || []);
+      setPhase4Status({
+        kind: response.status === "fallback" ? "warning" : "success",
+        message: `${response.questions?.length || 0} structured question candidate${(response.questions?.length || 0) === 1 ? "" : "s"} generated.`,
+      });
+      pushAssistantNote(
+        response.status === "fallback"
+          ? "I could not use the LLM, so I generated deterministic placeholder candidates from the current schema. Please review carefully."
+          : "I generated candidate questions using the current schema, uploaded evidence, and exploration context. These are drafts and need your review before continuing."
+      );
+    } catch (error) {
+      setPhase4Status({ kind: "error", message: friendlyError(error, "Question candidate generation failed.") });
+      pushAssistantNote(`Question candidate generation failed: ${friendlyError(error)}`);
+    }
+  }
+
+  async function handleRecommendCandidateVariables() {
+    const confirmed = questionFields?.question || questionCandidates[0]?.question_text || "";
+    if (!confirmed) {
+      showToast("Select or write a question before recommending variables.");
+      return;
+    }
+    if (!backendStatus.connected) {
+      setPhase4Status({ kind: "error", message: "Backend unavailable - variable recommendations need FastAPI." });
+      pushAssistantNote("Backend is unavailable, so I cannot generate structured variable recommendations right now.");
+      return;
+    }
+    setPhase4Status({ kind: "loading", message: "Recommending candidate variables..." });
+    try {
+      const response = await recommendCandidateVariables(buildPhase4Payload({
+        confirmed_question: confirmed,
+        user_feedback: phase4Feedback,
+      }));
+      setCandidateVariables(response.candidate_variables || []);
+      setDerivedFeatureCandidates(response.derived_feature_candidates || []);
+      setPhase4Status({
+        kind: response.status === "fallback" ? "warning" : "success",
+        message: `${response.candidate_variables?.length || 0} candidate variable${(response.candidate_variables?.length || 0) === 1 ? "" : "s"} returned.`,
+      });
+      (response.candidate_variables || []).forEach((item) => {
+        const name = item.variable_name;
+        const role = String(item.possible_structural_role || "").replaceAll("_", " ");
+        const option = ROLE_OPTIONS.find((candidate) => candidate.toLowerCase() === role.toLowerCase());
+        if (name && option) setVariableRole(name, option);
+      });
+      pushAssistantNote(
+        response.status === "fallback"
+          ? "I could not use the LLM, so I generated deterministic placeholder variables from the current schema. Variable roles are provisional and need review."
+          : "I generated candidate variables and derived features using the current schema, uploaded evidence, and exploration context. These are provisional and need your review before continuing."
+      );
+    } catch (error) {
+      setPhase4Status({ kind: "error", message: friendlyError(error, "Candidate variable recommendation failed.") });
+      pushAssistantNote(`Candidate variable recommendation failed: ${friendlyError(error)}`);
+    }
+  }
+
+  function selectGeneratedQuestion(candidate) {
+    setSelectedQuestionId(candidate.id);
+    setQuestionFields(questionCandidateToFields(candidate));
+    setPhase4Status({ kind: "warning", message: "Question selected as needs user review. Confirm or edit it before Phase 5." });
+    pushAssistantNote("Question selected as a draft. Review the comparator, time window, and estimand direction before confirming.");
+  }
+
+  function updateQuestionCandidate(id, patch) {
+    setQuestionCandidates((items) => items.map((item) => (
+      item.id === id ? { ...item, ...patch, status: "user_edited" } : item
+    )));
+  }
+
+  function confirmCurrentQuestion() {
+    if (!questionFields?.question) {
+      showToast("Choose or write a question first.");
+      return;
+    }
+    setPhase4Status({ kind: "success", message: "Question confirmed for targeted feasibility review." });
+    pushAssistantNote("Question confirmed for Phase 5 feasibility review. This confirms wording, not causal validity.");
+  }
+
+  function applyVariableDecision(variableName, decision) {
+    setCandidateVariables((items) => items.map((item) => (
+      item.variable_name === variableName ? { ...item, user_decision: decision, status: decision === "Modify" ? "user_edited" : "needs_user_review" } : item
+    )));
+    if (decision === "Exclude") {
+      setVariableRole(variableName, "Unassigned");
     }
   }
   function promotePattern(id) {
@@ -6660,6 +6981,8 @@ export default function CausalStudioApp() {
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern,
     handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
+    handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
+    phase4Feedback, setPhase4Feedback, applyVariableDecision,
     runAssistantAction,
     setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
@@ -6673,7 +6996,7 @@ export default function CausalStudioApp() {
   const state = {
     objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns,
     backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
-    variableRoles, selectedQuestionId, questionFields, derivedFeatures,
+    variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
     lagHours, exposureThreshold, sensitivityChecks, feasibility,
     graphNodes, graphEdges, selectedNodeId, selectedEdgeId, graphType, graphValidationResult, graphAlternatives, confirmedGraph, graphVersionLabel, graphActionStatus,
     effectType, estimatorFamily, repeatedMeasuresChecks, latestEstimationRun, primaryEstimationRun,

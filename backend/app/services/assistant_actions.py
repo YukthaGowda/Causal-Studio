@@ -75,6 +75,16 @@ class AssistantActionError(RuntimeError):
 
 
 def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
+    def _format_bool(value: Any) -> str:
+        return "yes" if bool(value) else "no"
+
+    def _format_count(value: Any) -> str:
+        if isinstance(value, list):
+            return str(len(value))
+        if isinstance(value, int):
+            return str(value)
+        return "0"
+
     if phase == "phase_2_data_foundation":
         rows = page_state.get("rows") or page_state.get("number_of_rows")
         columns = page_state.get("columns") or page_state.get("number_of_columns")
@@ -123,11 +133,31 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}
         readiness = page_state.get("readiness") or {}
-        return (
-            f"Project setup currently has {len(datasets)} dataset(s). "
-            f"Document/RAG status: {documents}. Readiness checks: {readiness}. "
-            "This setup stage checks completeness and context only; it does not perform causal analysis."
-        )
+        lines = [
+            "Project setup status:",
+            f"- Dataset files uploaded: {len(datasets)}",
+            f"- Data dictionary uploaded: {_format_bool(documents.get('dictionary_uploaded'))}",
+            f"- Protocol uploaded: {_format_bool(documents.get('protocol_uploaded'))}",
+            f"- Research papers uploaded: {_format_count(documents.get('papers_uploaded'))}",
+            f"- Domain guidance uploaded: {_format_count(documents.get('guidelines_uploaded'))}",
+        ]
+        ingestion_status = documents.get("ingestion_status")
+        if isinstance(ingestion_status, dict):
+            chunk_count = ingestion_status.get("stored_chunks") or ingestion_status.get("chunk_count")
+            collection = ingestion_status.get("collection_name")
+            if chunk_count is not None or collection:
+                lines.append(
+                    f"- RAG ingestion: {chunk_count if chunk_count is not None else 'unknown'} chunks"
+                    f"{f' in {collection}' if collection else ''}"
+                )
+        if isinstance(readiness, dict) and readiness:
+            completed = [name for name, ok in readiness.items() if ok]
+            pending = [name for name, ok in readiness.items() if not ok]
+            lines.append(f"- Readiness checks complete: {len(completed)}")
+            if pending:
+                lines.append(f"- Still to review: {', '.join(map(str, pending[:5]))}")
+        lines.append("This setup stage checks completeness and context only; it does not perform causal analysis.")
+        return "\n".join(lines)
 
     return (
         "Assistant action completed from the provided structured page state. "

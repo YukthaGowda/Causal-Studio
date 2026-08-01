@@ -14,8 +14,10 @@ from app.api.documents import router as documents_router
 from app.api.estimation import router as estimation_router
 from app.api.exploration import router as exploration_router
 from app.api.identification import router as identification_router
+from app.api.questions import router as questions_router
 from app.api.rag import router as rag_router
 from app.api.reports import router as reports_router
+from app.api.variables import router as variables_router
 from app.api.workflow import router as workflow_router
 
 
@@ -23,9 +25,9 @@ app = FastAPI(
     title="Causal Design Agent API",
     description=(
         "Backend API for the Causal Design Agent causal-design support platform. "
-        "Supports the official 8-step workflow from project setup through "
+        "Supports the official 9-phase workflow from project setup through "
         "data foundation, broad exploration, question and variable design, "
-        "targeted feasibility, graph validation, strategy, and review/export."
+        "targeted feasibility, graph validation, strategy, estimation, and review/export."
     ),
     version="0.1.0",
 )
@@ -47,7 +49,9 @@ app.include_router(rag_router)
 app.include_router(datasets_router)
 app.include_router(exploration_router)
 app.include_router(causal_questions_router)
+app.include_router(questions_router)
 app.include_router(candidate_variables_router)
+app.include_router(variables_router)
 app.include_router(causal_roles_router)
 app.include_router(causal_graph_router)
 app.include_router(identification_router)

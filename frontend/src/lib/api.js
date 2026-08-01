@@ -177,6 +177,24 @@ export async function listEstimationRuns() {
   return parseJsonResponse(response, "Could not list estimation runs.");
 }
 
+export async function validateEstimationConfig(payload) {
+  const response = await fetch(`${API_BASE_URL}/estimation/validate-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Estimation config validation failed.");
+}
+
+export async function selectPrimaryEstimationRun(payload) {
+  const response = await fetch(`${API_BASE_URL}/estimation/select-primary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Primary estimation run selection failed.");
+}
+
 export async function interpretEstimation(payload) {
   const response = await fetch(`${API_BASE_URL}/estimation/interpret`, {
     method: "POST",

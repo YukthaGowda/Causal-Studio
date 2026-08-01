@@ -16,6 +16,7 @@ class EstimationError(RuntimeError):
 DATASET_DIR = Path(__file__).resolve().parents[2] / "uploads" / "datasets"
 RUNTIME_DIR = Path(__file__).resolve().parents[2] / "runtime"
 RUNS_FILE = RUNTIME_DIR / "estimation_runs.json"
+PRIMARY_RUN_FILE = RUNTIME_DIR / "primary_estimation_run.json"
 
 
 def resolve_dataset_path(filename: str) -> Path:
@@ -48,9 +49,16 @@ def save_run(run: dict[str, Any]) -> None:
 
 def list_estimation_runs() -> dict[str, Any]:
     runs = load_runs()
+    selected_primary_run_id = None
+    if PRIMARY_RUN_FILE.exists():
+        try:
+            selected_primary_run_id = json.loads(PRIMARY_RUN_FILE.read_text(encoding="utf-8")).get("run_id")
+        except json.JSONDecodeError:
+            selected_primary_run_id = None
     return {
         "status": "ok",
         "number_of_runs": len(runs),
+        "selected_primary_run_id": selected_primary_run_id,
         "runs": [
             {
                 "run_id": run.get("run_id"),
@@ -64,6 +72,23 @@ def list_estimation_runs() -> dict[str, Any]:
             }
             for run in runs
         ],
+    }
+
+
+def select_primary_estimation_run(run_id: str) -> dict[str, Any]:
+    runs = load_runs()
+    if not any(run.get("run_id") == run_id for run in runs):
+        return {
+            "status": "error",
+            "selected_primary_run_id": "",
+            "message": f"Run '{run_id}' was not found.",
+        }
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    PRIMARY_RUN_FILE.write_text(json.dumps({"run_id": run_id, "selected_at": datetime.now(timezone.utc).isoformat()}, indent=2), encoding="utf-8")
+    return {
+        "status": "success",
+        "selected_primary_run_id": run_id,
+        "message": "Primary estimation run selected.",
     }
 
 
@@ -139,6 +164,100 @@ def check_readiness(request: dict[str, Any], columns: list[str]) -> dict[str, An
         "ready": not blocking_issues,
         "blocking_issues": blocking_issues,
         "warnings": warnings,
+    }
+
+
+def normalize_estimation_request(request: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(request)
+    strategy = normalized.get("strategy") or {}
+    estimand = normalized.get("estimand")
+    preprocessing = normalized.get("preprocessing") or {}
+
+    if isinstance(estimand, dict):
+        normalized["estimand_label"] = estimand.get("label") or estimand.get("effect_type") or "Specified estimand"
+        normalized["estimand"] = estimand.get("effect_type") or estimand.get("label") or "specified_estimand"
+        normalized["exposure"] = normalized.get("exposure") or estimand.get("exposure") or ""
+        normalized["outcome"] = normalized.get("outcome") or estimand.get("outcome") or ""
+    else:
+        normalized["estimand_label"] = str(estimand or "ATE")
+
+    estimator_family = str(strategy.get("estimator_family") or normalized.get("estimator") or "").lower()
+    if "logit" in estimator_family or "logistic" in estimator_family:
+        normalized["estimator"] = "statsmodels_logit"
+    elif estimator_family in {"ols", "linear_regression", "glm"} or "linear" in estimator_family:
+        normalized["estimator"] = "statsmodels_linear"
+
+    if strategy.get("missing_data_strategy"):
+        normalized["missing_data_strategy"] = strategy.get("missing_data_strategy")
+    if strategy.get("repeated_measures_strategy"):
+        repeated = str(strategy.get("repeated_measures_strategy")).lower()
+        normalized["cluster_or_repeated_measures"] = "none" if "not_implemented" in repeated or "none" in repeated else "cluster_by_participant"
+    if "drop_missing" in preprocessing:
+        normalized["missing_data_strategy"] = "complete_case" if preprocessing.get("drop_missing") else normalized.get("missing_data_strategy", "complete_case")
+    return normalized
+
+
+def validate_estimation_config(request: dict[str, Any]) -> dict[str, Any]:
+    import pandas as pd
+
+    dataset_path = resolve_dataset_path(request.get("dataset_filename", ""))
+    dataframe = pd.read_csv(dataset_path)
+    columns = [str(column) for column in dataframe.columns]
+    exposure = request.get("exposure") or ""
+    outcome = request.get("outcome") or ""
+    adjustment_set = request.get("adjustment_set") or []
+    errors: list[str] = []
+    warnings: list[str] = [
+        "Only complete-case preprocessing is implemented in this proof of concept.",
+        "Sensitivity/refutation analyses are not yet implemented.",
+    ]
+
+    checks = {
+        "dataset_found": True,
+        "exposure_found": exposure in columns,
+        "outcome_found": outcome in columns,
+        "adjustment_variables_found": all(variable in columns for variable in adjustment_set),
+        "exposure_has_variation": False,
+        "outcome_has_variation": False,
+        "sample_size_sufficient": False,
+        "missingness_reviewed": True,
+    }
+
+    if not checks["exposure_found"]:
+        errors.append(f"Exposure '{exposure}' does not exist in the dataset.")
+    if not checks["outcome_found"]:
+        errors.append(f"Outcome '{outcome}' does not exist in the dataset.")
+    missing_adjusters = [variable for variable in adjustment_set if variable not in columns]
+    if missing_adjusters:
+        errors.append(f"Adjustment variables do not exist in the dataset: {', '.join(missing_adjusters)}.")
+
+    required = [exposure, outcome, *adjustment_set]
+    if not errors:
+        complete = dataframe[required].dropna()
+        checks["sample_size_sufficient"] = len(complete) >= 30
+        checks["exposure_has_variation"] = complete[exposure].nunique(dropna=True) > 1
+        checks["outcome_has_variation"] = complete[outcome].nunique(dropna=True) > 1
+        if not checks["sample_size_sufficient"]:
+            errors.append("Complete-case sample size is below 30.")
+        if not checks["exposure_has_variation"]:
+            errors.append("Exposure has no variation after complete-case preprocessing.")
+        if not checks["outcome_has_variation"]:
+            errors.append("Outcome has no variation after complete-case preprocessing.")
+        dropped = len(dataframe) - len(complete)
+        if len(dataframe) and dropped / len(dataframe) >= 0.2:
+            warnings.append(f"Complete-case preprocessing would drop {round((dropped / len(dataframe)) * 100, 2)}% of rows.")
+
+    participant_id = request.get("participant_id") or ""
+    if participant_id and participant_id in columns:
+        warnings.append("Repeated-measures handling is not fully implemented in this proof of concept. Results should be treated as preliminary.")
+
+    status = "invalid" if errors else "valid_with_warnings" if warnings else "valid"
+    return {
+        "status": status,
+        "errors": errors,
+        "warnings": warnings,
+        "checks": checks,
+        "safe_to_run_estimation": status != "invalid",
     }
 
 
@@ -225,6 +344,7 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     import pandas as pd
     import statsmodels.api as sm
 
+    request = normalize_estimation_request(request)
     random_seed = int(request.get("random_seed") or 42)
     dataset_path = resolve_dataset_path(request.get("dataset_filename", ""))
     dataframe = pd.read_csv(dataset_path)
@@ -235,13 +355,40 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     if not readiness["ready"]:
         return {
             "run_id": run_id,
-            "status": "blocked_not_ready",
+            "run_label": request.get("run_label") or "Primary run",
+            "status": "not_runnable",
+            "estimand_label": request.get("estimand_label") or request.get("estimand") or "",
+            "model_type": request.get("estimator") or "not_fit",
+            "formula": "",
+            "primary_result": {
+                "exposure": request.get("exposure") or "",
+                "outcome": request.get("outcome") or "",
+                "point_estimate": None,
+                "standard_error": None,
+                "confidence_interval": [None, None],
+                "p_value": None,
+                "sample_size": None,
+            },
             "readiness": readiness,
             "estimate": None,
-            "diagnostics": {},
+            "diagnostics": {
+                "rows_before_preprocessing": int(len(dataframe)),
+                "rows_after_preprocessing": None,
+                "rows_dropped_missing": None,
+                "missingness_summary": [],
+                "exposure_variation": {},
+                "outcome_variation": {},
+                "covariate_balance_placeholder": "Covariate balance diagnostics are not implemented in this proof of concept.",
+                "overlap_placeholder": "Overlap diagnostics are summarized heuristically only.",
+                "model_warnings": readiness["blocking_issues"],
+            },
             "sensitivity": {"available": False, "checks": [], "warnings": ["Estimation was blocked before model fitting."]},
+            "sensitivity_results": [],
+            "warnings": readiness["warnings"],
+            "limitations": ["The estimation configuration was not runnable, so no numerical result was computed."],
             "reproducibility": {
                 "dataset_filename": request.get("dataset_filename"),
+                "input_dataset_version": Path(request.get("dataset_filename") or "").stem,
                 "timestamp": now,
                 "estimator": request.get("estimator"),
                 "python_version": sys.version.split()[0],
@@ -249,7 +396,20 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
                 "random_seed": random_seed,
                 "variables_used": [],
                 "complete_case_filter": request.get("missing_data_strategy") == "complete_case",
+                "configuration": request,
+                "code_path": "backend/app/services/estimation.py",
             },
+            "provenance": {
+                "dataset_filename": request.get("dataset_filename"),
+                "input_dataset_version": Path(request.get("dataset_filename") or "").stem,
+                "timestamp": now,
+                "python_version": sys.version.split()[0],
+                "packages": package_versions(),
+                "random_seed": random_seed,
+                "code_path": "backend/app/services/estimation.py",
+                "configuration": request,
+            },
+            "requires_user_review": True,
             "safe_interpretation_note": "The LLM may interpret this computed output, but it must not invent or modify numerical results.",
         }
 
@@ -266,6 +426,10 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     outcome_type = infer_outcome_type(y)
     model_warnings: list[str] = []
     data_warnings: list[str] = []
+    data_warnings.append("Only complete-case preprocessing is implemented in this proof of concept.")
+    data_warnings.append("Sensitivity/refutation analyses are not yet implemented.")
+    if participant_id and participant_id in dataframe.columns:
+        data_warnings.append("Repeated-measures handling is not fully implemented in this proof of concept. Results should be treated as preliminary.")
     if pd.to_numeric(dataframe[outcome], errors="coerce").notna().sum() == 0:
         data_warnings.append(
             f"Outcome '{outcome}' is non-numeric and was encoded for this proof-of-concept calculation; confirm the outcome definition before interpreting estimates."
@@ -310,13 +474,43 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     se = float(result.bse[exposure])
     ci = [float(value) for value in result.conf_int().loc[exposure].tolist()]
     p_value = float(result.pvalues[exposure])
-    status_value = "completed_with_warnings" if readiness["warnings"] or model_warnings or data_warnings else "completed"
+    status_value = "completed_with_warnings" if readiness["warnings"] or model_warnings or data_warnings else "success"
+    formula = f"{outcome} ~ {exposure}" + (f" + {' + '.join(adjustment_set)}" if adjustment_set else "")
+    missingness_summary = [
+        {
+            "variable": variable,
+            "missing_count": int(dataframe[variable].isna().sum()),
+            "missing_percent": round(float(dataframe[variable].isna().mean() * 100), 4),
+        }
+        for variable in [exposure, outcome, *adjustment_set]
+        if variable in dataframe.columns
+    ]
+    outcome_numeric = pd.to_numeric(dataframe.loc[y.index, outcome], errors="coerce")
+    outcome_variation = {
+        "unique_values": int(y.nunique()),
+        "mean": to_jsonable(float(outcome_numeric.mean())) if outcome_numeric.notna().sum() else to_jsonable(float(y.mean())),
+        "std": to_jsonable(float(outcome_numeric.std())) if outcome_numeric.notna().sum() else to_jsonable(float(y.std())),
+    }
+    package_info = package_versions()
     response = {
         "run_id": run_id,
+        "run_label": request.get("run_label") or "Primary run",
         "status": status_value,
+        "estimand_label": request.get("estimand_label") or request.get("estimand") or "Specified estimand",
+        "model_type": request.get("estimator") or ("statsmodels_logit" if outcome_type == "binary" else "statsmodels_linear"),
+        "formula": formula,
+        "primary_result": {
+            "exposure": exposure,
+            "outcome": outcome,
+            "point_estimate": to_jsonable(point),
+            "standard_error": to_jsonable(se),
+            "confidence_interval": to_jsonable(ci),
+            "p_value": to_jsonable(p_value),
+            "sample_size": rows_after,
+        },
         "readiness": readiness,
         "estimate": {
-            "estimand": request.get("estimand") or "ATE",
+            "estimand": request.get("estimand_label") or request.get("estimand") or "ATE",
             "estimator": request.get("estimator") or ("statsmodels_logit" if outcome_type == "binary" else "statsmodels_linear"),
             "exposure": exposure,
             "outcome": outcome,
@@ -328,14 +522,21 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
             "interpretation_boundary": "Computed association/estimate under the specified model and assumptions. This does not by itself prove causality.",
         },
         "diagnostics": {
+            "rows_before_preprocessing": rows_before,
+            "rows_after_preprocessing": rows_after,
+            "rows_dropped_missing": excluded_rows,
             "rows_before_filtering": rows_before,
             "rows_after_filtering": rows_after,
             "excluded_rows": excluded_rows,
             "excluded_percent": excluded_percent,
+            "missingness_summary": missingness_summary,
             "convergence": convergence,
             "outcome_type": outcome_type,
             "exposure_variation": variation,
+            "outcome_variation": outcome_variation,
             "overlap": overlap,
+            "covariate_balance_placeholder": "Covariate balance diagnostics are not implemented in this proof of concept.",
+            "overlap_placeholder": "Overlap diagnostics are summarized heuristically only.",
             "model_warnings": model_warnings,
             "data_warnings": data_warnings,
         },
@@ -352,17 +553,40 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
                 "This does not prove causality by itself.",
             ],
         },
+        "sensitivity_results": [],
+        "warnings": [*readiness["warnings"], *model_warnings, *data_warnings],
+        "limitations": [
+            "Complete-case preprocessing only is implemented.",
+            "Full repeated-measures modeling is not implemented in this proof of concept.",
+            "Sensitivity/refutation analyses are placeholders only.",
+            "The result is conditional on the selected graph, adjustment set, model, assumptions, and data limitations.",
+            "This phase does not prove causality.",
+        ],
         "reproducibility": {
             "dataset_filename": dataset_path.name,
+            "input_dataset_version": dataset_path.stem,
             "timestamp": now,
             "estimator": request.get("estimator") or ("statsmodels_logit" if outcome_type == "binary" else "statsmodels_linear"),
             "python_version": sys.version.split()[0],
-            "package_versions": package_versions(),
+            "package_versions": package_info,
             "random_seed": random_seed,
             "variables_used": variables_used,
             "variables_dropped": variables_dropped,
             "complete_case_filter": request.get("missing_data_strategy") == "complete_case",
+            "configuration": request,
+            "code_path": "backend/app/services/estimation.py",
         },
+        "provenance": {
+            "dataset_filename": dataset_path.name,
+            "input_dataset_version": dataset_path.stem,
+            "timestamp": now,
+            "python_version": sys.version.split()[0],
+            "packages": package_info,
+            "random_seed": random_seed,
+            "code_path": "backend/app/services/estimation.py",
+            "configuration": request,
+        },
+        "requires_user_review": True,
         "safe_interpretation_note": "The LLM may interpret this computed output, but it must not invent or modify numerical results.",
         "safety_boundary": [
             "This is computed under the specified graph, adjustment set, model, and assumptions.",

@@ -49,9 +49,11 @@ import {
   runBroadExploration,
   runFeasibilityCheck,
   searchRag,
+  selectPrimaryEstimationRun,
   uploadDataset,
   uploadDocument,
   runEstimation as runBackendEstimation,
+  validateEstimationConfig,
   validateAnalysisStrategy,
   validateCausalGraph,
 } from "../lib/api.js";
@@ -5199,8 +5201,8 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
 }
 
 function EstimationView({ state, actions, onGoNext }) {
-  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult } = state;
-  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun } = actions;
+  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed } = state;
+  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
@@ -5230,9 +5232,87 @@ function EstimationView({ state, actions, onGoNext }) {
   const [interpretVersions, setInterpretVersions] = useState([]);
   const [interpretLoading, setInterpretLoading] = useState(false);
   const [interpretLockedIdx, setInterpretLockedIdx] = useState(null);
+  const [estimationValidation, setEstimationValidation] = useState(null);
+  const [estimationStatus, setEstimationStatus] = useState(null);
 
   const activeRun = runs.find((r) => r.id === activeRunId) || runs[runs.length - 1] || null;
   const compareRuns = compareIds.length >= 2 ? runs.filter((r) => compareIds.includes(r.id)) : [];
+  const phase7Estimand = analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {};
+  const phase7Strategy = analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {};
+  const phase7Adjustment = editableAdjustmentSet?.length ? editableAdjustmentSet : estimationAdjustment.length ? estimationAdjustment : adjustmentSet.filter((name) => estimationColumns.includes(name));
+
+  function buildEstimationPayload(tag = "Primary") {
+    const dataset = firstRealDataset(datasets);
+    const exposure = estimationExposure || phase7Estimand.exposure || dataset?.schema?.possible_numeric_columns?.[0] || "";
+    const outcome = estimationOutcome || phase7Estimand.outcome || dataset?.schema?.column_names?.find((name) => name !== exposure) || "";
+    return {
+      dataset_filename: dataset?.savedFilename || "",
+      confirmed_question: questionFields?.question || "Among adults in the uploaded EMA/passive sensing dataset, what is the association between accelerometer magnitude and label under the specified model?",
+      estimand: {
+        label: phase7Estimand.label || (effectType === "direct" ? "Direct effect guidance" : "Total effect guidance"),
+        effect_type: phase7Estimand.effect_type || (effectType === "direct" ? "direct_effect" : "total_effect"),
+        population: phase7Estimand.population || "uploaded study population",
+        exposure,
+        comparator: phase7Estimand.comparator || "one-unit change",
+        outcome,
+        time_window: phase7Estimand.time_window || `${Math.max(1, Math.round(lagHours / 24))}d lag`,
+        unit_of_analysis: phase7Estimand.unit_of_analysis || "participant-window observation",
+      },
+      exposure,
+      comparator: { type: "continuous_unit_change", reference: "one-unit lower", treatment: "one-unit higher" },
+      outcome,
+      adjustment_set: phase7Adjustment.filter((name) => estimationColumns.includes(name)),
+      strategy: {
+        estimator_family: tag === "Exploratory" ? "linear_regression" : "logistic_regression",
+        repeated_measures_strategy: phase7Strategy.repeated_measures_strategy || "not_implemented_poc",
+        missing_data_strategy: "complete_case",
+        sensitivity_plan: phase7Strategy.sensitivity_plan || [],
+        robustness_checks: phase7Strategy.robustness_checks || [],
+      },
+      participant_id: estimationDataset?.participantField || "pid",
+      timestamp: estimationDataset?.timestampFields?.[0] || "time_stamp",
+      preprocessing: { drop_missing: true, standardize_exposure: false },
+      time_window: { exposure_window: "8h", lag: `${Math.max(1, Math.round(lagHours / 24))}d`, outcome_window: "24h" },
+      run_label: `${tag} run`,
+      random_seed: 42,
+      identification_confirmed: Boolean(analysisStrategyConfirmed || analysisStrategyValidation?.safe_to_continue_to_estimation),
+      graph_confirmed: Boolean(confirmedGraph),
+      assumptions_reviewed: Object.values(sensitivityChecks).some(Boolean),
+      allow_unconfirmed_analysis: true,
+    };
+  }
+
+  async function validateConfig() {
+    const payload = buildEstimationPayload();
+    if (!backendStatus.connected) {
+      setEstimationStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
+      return;
+    }
+    if (!payload.dataset_filename) {
+      setEstimationStatus({ kind: "error", message: "Upload and parse a CSV dataset before validation." });
+      return;
+    }
+    setEstimationStatus({ kind: "loading", message: "Validating estimation configuration..." });
+    try {
+      const response = await validateEstimationConfig({
+        dataset_filename: payload.dataset_filename,
+        exposure: payload.exposure,
+        outcome: payload.outcome,
+        adjustment_set: payload.adjustment_set,
+        strategy: payload.strategy,
+        participant_id: payload.participant_id,
+        timestamp: payload.timestamp,
+      });
+      setEstimationValidation(response);
+      setEstimationStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Configuration ${response.status}.` });
+      pushAssistantNote(response.safe_to_run_estimation
+        ? "Phase 8 configuration validation completed. Python will compute all numerical results; I will only interpret returned values."
+        : "Phase 8 configuration is not runnable yet. Review the blocking issues before running estimation.");
+    } catch (error) {
+      setEstimationStatus({ kind: "error", message: friendlyError(error, "Config validation failed.") });
+      pushAssistantNote(`Estimation config validation failed: ${friendlyError(error)}`);
+    }
+  }
 
   function generateResult() {
     const n = feasibility.finalSample;
@@ -5282,50 +5362,24 @@ function EstimationView({ state, actions, onGoNext }) {
     setInterpretLockedIdx(null);
     pushAssistantNote("Phase 8 is running in Python now. The backend will calculate the estimate, uncertainty, diagnostics, and warnings; I can interpret the computed output afterward, but I do not generate numerical results.");
     const backendRunInterval = setInterval(() => setRunProgress((p) => Math.min(p + 18, 90)), 380);
-    const exposure = dataset.schema?.column_names?.includes("acc_mean_magnitude")
-      ? "acc_mean_magnitude"
-      : questionFields?.exposure || dataset.schema?.possible_numeric_columns?.[0] || "";
-    const outcome = dataset.schema?.column_names?.includes("label")
-      ? "label"
-      : questionFields?.outcome || dataset.schema?.column_names?.find((name) => name !== exposure) || "";
-    const safeAdjustment = ["time_of_day", "day_of_week"].filter((name) => dataset.schema?.column_names?.includes(name));
-    const payload = {
-      dataset_filename: dataset.savedFilename,
-      confirmed_question: questionFields?.question || "Among adults in the uploaded EMA/passive sensing dataset, what is the association between accelerometer magnitude and label under the specified model?",
-      estimand: effectType === "direct" ? "ADE" : "ATE",
-      exposure,
-      comparator: { type: "continuous_unit_change", reference: "one-unit lower", treatment: "one-unit higher" },
-      outcome,
-      adjustment_set: safeAdjustment.length ? safeAdjustment : adjustmentSet.filter((name) => dataset.schema?.column_names?.includes(name)),
-      participant_id: dataset.participantField || "pid",
-      timestamp: dataset.timestampFields?.[0] || "time_stamp",
-      time_window: { exposure_window: "8h", lag: `${Math.max(1, Math.round(lagHours / 24))}d`, outcome_window: "24h" },
-      estimator: "statsmodels_linear",
-      missing_data_strategy: "complete_case",
-      cluster_or_repeated_measures: repeatedMeasuresChecks.randomIntercept ? "cluster_by_participant" : "none",
-      random_seed: 42,
-      identification_confirmed: Boolean(graphValidationResult?.safe_to_continue),
-      graph_confirmed: Boolean(confirmedGraph),
-      assumptions_reviewed: Object.values(sensitivityChecks).some(Boolean),
-      allow_unconfirmed_analysis: true,
-    };
+    const payload = buildEstimationPayload(tag);
     const fallbackConfig = {
       question: payload.confirmed_question,
-      estimand: payload.estimand,
+      estimand: payload.estimand?.label || payload.estimand?.effect_type || "Specified estimand",
       exposure: payload.exposure,
       comparator: `${payload.comparator.reference} vs ${payload.comparator.treatment}`,
       outcome: payload.outcome,
       timeWindow: `${payload.time_window.exposure_window} exposure, ${payload.time_window.lag} lag, ${payload.time_window.outcome_window} outcome`,
       adjustmentSet: payload.adjustment_set.join(", ") || "(none)",
-      effectType: payload.estimand,
+      effectType: payload.estimand?.effect_type || "specified",
       estimator: "statsmodels",
-      randomIntercept: payload.cluster_or_repeated_measures,
+      randomIntercept: payload.strategy?.repeated_measures_strategy || "not_implemented_poc",
     };
     try {
       const response = await runBackendEstimation(payload);
       clearInterval(backendRunInterval);
       setRunProgress(100);
-      if (response.status === "blocked_not_ready") {
+      if (response.status === "blocked_not_ready" || response.status === "not_runnable") {
         pushAssistantNote(`Estimation was blocked by readiness checks: ${response.readiness?.blocking_issues?.join("; ") || "not ready"}`);
         showToast("Estimation blocked by readiness checks.");
         return;
@@ -5471,6 +5525,22 @@ function EstimationView({ state, actions, onGoNext }) {
     showToast("Run log exported.");
   }
 
+  async function selectPrimaryRun(run) {
+    setPrimaryRunId(run.id);
+    setPrimaryEstimationRun(run);
+    if (backendStatus.connected) {
+      try {
+        const response = await selectPrimaryEstimationRun({ run_id: run.id });
+        if (response.status !== "success") {
+          pushAssistantNote(response.message || "Primary run was selected locally, but backend selection did not complete.");
+        }
+      } catch (error) {
+        pushAssistantNote(`Primary run selected locally, but backend selection failed: ${friendlyError(error)}`);
+      }
+    }
+    pushAssistantNote(`Run selected as the primary result. Confirm and Continue is now enabled. This selection does not prove causality; it marks the computed run for review/export.`);
+  }
+
   return (
     <>
       <div className="ps-header">
@@ -5493,17 +5563,17 @@ function EstimationView({ state, actions, onGoNext }) {
           <table className="mini-table" style={{ marginTop: 6 }}>
             <tbody>
               <tr><td style={{ color: "#5B6472", width: 190 }}>Research question</td><td>{questionFields?.question || <span className="helper">Not set \u2014 go back to Question &amp; Variables.</span>}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Estimand</td><td>{effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Exposure</td><td className="mono">{estimationExposure || questionFields?.exposure || "not selected"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Comparator</td><td>{questionFields?.comparator || "No disruption (\u22656h uninterrupted)"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Outcome</td><td className="mono">{estimationOutcome || questionFields?.outcome || "not selected"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Time window</td><td>{lagHours}h lag</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Adjustment set</td><td className="mono">{estimationAdjustment.length ? estimationAdjustment.join(", ") : adjustmentSet.length ? adjustmentSet.join(", ") : "(none identified)"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Estimand</td><td>{phase7Estimand.label || (effectType === "direct" ? "Average Direct Effect (ADE)" : "Average Treatment Effect (ATE)")}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Exposure</td><td className="mono">{estimationExposure || phase7Estimand.exposure || questionFields?.exposure || "not selected"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Comparator</td><td>{phase7Estimand.comparator || questionFields?.comparator || "One-unit exposure contrast"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Outcome</td><td className="mono">{estimationOutcome || phase7Estimand.outcome || questionFields?.outcome || "not selected"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Time window</td><td>{phase7Estimand.time_window || `${lagHours}h lag`}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Adjustment set</td><td className="mono">{phase7Adjustment.length ? phase7Adjustment.join(", ") : "(none identified)"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Excluded vars</td><td className="mono">{mediators.length && effectType !== "direct" ? `${mediators.join(", ")} (mediator \u2014 excluded from adjustment)` : "\u2014"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Estimator</td><td>{chosenEstimator.label}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Library / function</td><td className="mono">statsmodels OLS/Logit with robust or clustered standard errors</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Clustering strategy</td><td>{repeatedMeasuresChecks.randomIntercept ? "Random participant intercept (REML)" : "None specified"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Missing-data handling</td><td>{repeatedMeasuresChecks.multipleImputation ? "Multiple imputation (M=20 imputations, MAR assumed)" : "Complete-case analysis"}{repeatedMeasuresChecks.robustSE ? " + cluster-robust SEs" : ""}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Repeated-measures strategy</td><td>{phase7Strategy.repeated_measures_strategy || "Clustered standard errors when participant ID is available"}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Missing-data handling</td><td>{phase7Strategy.missing_data_strategy || "Complete-case analysis only in this proof of concept"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Analysis sample</td><td>{feasibility.finalSample.toLocaleString()} participant-days</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Exclusions</td><td>{Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Person-time</td><td>{Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks</td></tr>
@@ -5527,18 +5597,28 @@ function EstimationView({ state, actions, onGoNext }) {
           ))}
         </div>
         <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>
-          Required variables for the safe demo run: exposure <span className="mono">{estimationExposure || "not selected"}</span>, outcome <span className="mono">{estimationOutcome || "not selected"}</span>, adjustment set <span className="mono">{estimationAdjustment.join(", ") || "(none)"}</span>. Numerical results are calculated by Python only.
+          Required variables for the safe demo run: exposure <span className="mono">{estimationExposure || "not selected"}</span>, outcome <span className="mono">{estimationOutcome || "not selected"}</span>, adjustment set <span className="mono">{phase7Adjustment.join(", ") || "(none)"}</span>. Numerical results are calculated by Python/backend, not by the LLM.
         </p>
+        {estimationValidation && (
+          <div style={{ marginTop: 10 }}>
+            <span className={`chip ${estimationValidation.status === "invalid" ? "chip-danger" : "chip-warning"}`}>Backend config: {estimationValidation.status}</span>
+            {(estimationValidation.errors || []).map((error, idx) => <div key={`err-${idx}`} className="status-box status-error" style={{ marginTop: 8 }}>{error}</div>)}
+            {(estimationValidation.warnings || []).map((warning, idx) => <div key={`warn-${idx}`} className="helper" style={{ marginTop: 6 }}><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
+          </div>
+        )}
       </div>
 
       {/* ── Section 2: Backend Execution ── */}
       <div className="card">
         <div className="card-head">
           <div className="card-title">Backend execution</div>
-          <CardInfo text="Triggers the estimation pipeline. All numeric computation happens in backend code using DoWhy, statsmodels, or causalml — the AI assistant only interprets results, it never generates estimates." />
+          <CardInfo text="Triggers the estimation pipeline. All numeric computation happens in backend Python/statsmodels. The AI assistant only interprets results; it never generates estimates." />
         </div>
-        <p className="card-desc">Click Run Estimation to execute the pre-specified analysis. The estimator is selected automatically based on your data type and estimator choice — not hardcoded.</p>
+        <p className="card-desc">Validate the configuration first, then run estimation. These estimates are conditional on the selected design, model, assumptions, and data limitations. This phase does not prove causality.</p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+          <button className="btn btn-secondary" onClick={validateConfig} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <CheckCircle2 size={13} /> Validate Estimation Config
+          </button>
           <button className="btn btn-primary" onClick={() => runEstimation("Primary")} disabled={isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <Play size={13} /> {isRunning ? "Running\u2026" : runs.length === 0 ? "Run Estimation" : "Re-run with Updated Settings"}
           </button>
@@ -5549,6 +5629,7 @@ function EstimationView({ state, actions, onGoNext }) {
             </>
           )}
         </div>
+        {estimationStatus && <div className={`status-box status-${estimationStatus.kind}`} style={{ marginTop: 10 }}>{estimationStatus.message}</div>}
         {isRunning && (
           <div style={{ marginTop: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#5B6472", marginBottom: 4 }}>
@@ -5668,9 +5749,9 @@ function EstimationView({ state, actions, onGoNext }) {
             <button className="btn btn-primary" onClick={interpretEstimate} disabled={interpretLoading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Sparkles size={13} /> {interpretLoading ? "Interpreting\u2026" : (interpretVersions.length > 0 ? "Re-interpret" : "Interpret Current Estimate")}
             </button>
-            <button className="btn" onClick={interpretDiagnostics} style={{ display: "flex", alignItems: "center", gap: 6 }}><Info size={13} /> Explain Diagnostics</button>
+            <button className="btn" onClick={() => runAssistantAction("Explain Diagnostics")} style={{ display: "flex", alignItems: "center", gap: 6 }}><Info size={13} /> Explain Diagnostics</button>
             {activeRun.results.warnings.length > 0 && (
-              <button className="btn" onClick={() => pushAssistantNote(`Warning explanation: ${activeRun.results.warnings.join(" | ")} \u2014 These do not automatically invalidate the estimate, but they should be reported and addressed in the sensitivity plan before finalising the primary result.`)} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="btn" onClick={() => runAssistantAction("Explain This Warning")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <AlertTriangle size={13} /> Explain This Warning
               </button>
             )}
@@ -5735,7 +5816,7 @@ function EstimationView({ state, actions, onGoNext }) {
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <span className="mono" style={{ fontSize: 12 }}>Est: {run.results.pointEstimate} [{run.results.ciLower}, {run.results.ciUpper}]</span>
                     {primaryRunId !== run.id && (
-                      <button className="btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); setPrimaryRunId(run.id); setPrimaryEstimationRun(run); pushAssistantNote(`Run ${idx + 1} selected as the primary result \u2713 \u2014 "Confirm and Continue" is now enabled.`); }}>
+                      <button className="btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); selectPrimaryRun(run); }}>
                         Select as Primary
                       </button>
                     )}
@@ -7559,6 +7640,9 @@ export default function CausalStudioApp() {
       assumption_checklist: analysisStrategyResult?.assumption_checklist || [],
       analysis_strategy_validation: analysisStrategyValidation,
       analysis_strategy_confirmed: Boolean(analysisStrategyConfirmed),
+      estimation_validation: pageKey === "estimation" ? null : undefined,
+      latest_estimation_run: latestEstimationRun,
+      selected_primary_estimation_run: primaryEstimationRun,
       selected_node_id: selectedNodeId,
       selected_edge_id: selectedEdgeId,
       effect_type: effectType,
@@ -7591,6 +7675,14 @@ export default function CausalStudioApp() {
         recommended_revisions: targetedFeasibilityResult?.recommended_revisions || [],
       };
     }
+    if (pageKey === "estimation") {
+      return {
+        prompt,
+        latest_estimation_run: latestEstimationRun,
+        selected_primary_estimation_run: primaryEstimationRun,
+        warnings: estimationRunWarnings(primaryEstimationRun || latestEstimationRun),
+      };
+    }
     return { prompt };
   }
 
@@ -7609,7 +7701,7 @@ export default function CausalStudioApp() {
   }
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy"].includes(page);
+    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {

@@ -46,6 +46,7 @@ import {
   ingestDocuments,
   recommendCandidateVariables,
   runBroadExploration,
+  runFeasibilityCheck,
   searchRag,
   uploadDataset,
   uploadDocument,
@@ -893,6 +894,32 @@ function firstRealDataset(datasets) {
 
 function realDatasetFilename(dataset) {
   return dataset?.savedFilename || dataset?.name || "";
+}
+
+function schemaColumnNames(dataset) {
+  return dataset?.schema?.column_names || [];
+}
+
+function resolveDatasetColumn(dataset, candidates = []) {
+  const columns = schemaColumnNames(dataset);
+  if (!columns.length) return candidates.find(Boolean) || "";
+  const normalized = candidates
+    .filter(Boolean)
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+  const exact = normalized.find((value) => columns.includes(value));
+  if (exact) return exact;
+  const lowerExact = normalized
+    .map((value) => columns.find((column) => column.toLowerCase() === value.toLowerCase()))
+    .find(Boolean);
+  if (lowerExact) return lowerExact;
+  const tokenMatch = normalized
+    .map((value) => {
+      const lower = value.toLowerCase();
+      return columns.find((column) => lower.includes(column.toLowerCase()) || column.toLowerCase().includes(lower));
+    })
+    .find(Boolean);
+  return tokenMatch || "";
 }
 
 function formatList(values, fallback = "None detected") {
@@ -2903,8 +2930,8 @@ function VerdictBadge({ verdict }) {
 }
 
 function FeasibilityView({ state, actions, onGoNext }) {
-  const { datasets, questionFields, selectedQuestionId, variableRoles, lagHours, exposureThreshold, sensitivityChecks } = state;
-  const { setLagHours, setExposureThreshold, toggleSensitivity, showToast } = actions;
+  const { datasets, questionFields, selectedQuestionId, variableRoles, lagHours, exposureThreshold, sensitivityChecks, targetedFeasibilityResult, actionStatus } = state;
+  const { setLagHours, setExposureThreshold, toggleSensitivity, showToast, handleRunFeasibilityCheck, runAssistantAction } = actions;
 
   const feas = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
   const seed = datasets.length ? seedFromName(datasets[0].name, datasets.length) : 42;
@@ -2963,6 +2990,31 @@ function FeasibilityView({ state, actions, onGoNext }) {
   const derivedFeatureReady = feas.retainedPct >= 55;
 
   const focusRole = variableRoles[focusVar] || ROLE_TABLE_VARIABLES.find((v) => v.name === focusVar)?.roleGuess || "Unassigned";
+  const backendDataset = firstRealDataset(datasets);
+  const resolvedExposure = resolveDatasetColumn(backendDataset, [questionFields?.exposure, ...Object.entries(variableRoles).filter(([, role]) => role === "Exposure").map(([name]) => name), "acc_mean_magnitude", "sleep_quality"]);
+  const resolvedOutcome = resolveDatasetColumn(backendDataset, [questionFields?.outcome, ...Object.entries(variableRoles).filter(([, role]) => role === "Outcome").map(([name]) => name), "label", "alcohol_use_event"]);
+  const feasibilityStatus = targetedFeasibilityResult?.status || "not_run";
+  const statusClass = feasibilityStatus === "ready"
+    ? "chip-success"
+    : feasibilityStatus === "marginal"
+      ? "chip-warning"
+      : feasibilityStatus === "not_run"
+        ? "chip-muted"
+        : "chip-danger";
+  const statusMessageText = {
+    ready: "Ready to proceed to graph design.",
+    marginal: "This can proceed only if limitations are explicitly accepted.",
+    requires_revision: "Please revise the question, exposure, comparator, timing, or variables before graph design.",
+    not_feasible: "The current data cannot support this proposed analysis.",
+    not_run: "Run Python feasibility checks before proceeding.",
+  }[feasibilityStatus] || "Review required before proceeding.";
+  const missingRows = targetedFeasibilityResult?.missingness_check?.variables || [];
+  const coverage = targetedFeasibilityResult?.coverage_check || {};
+  const sampleCheck = targetedFeasibilityResult?.analysis_ready_sample_check || {};
+  const exposureCheck = targetedFeasibilityResult?.exposure_check || {};
+  const outcomeCheck = targetedFeasibilityResult?.outcome_check || {};
+  const overlapCheck = targetedFeasibilityResult?.overlap_positivity_check || {};
+  const lagCheck = targetedFeasibilityResult?.lag_feasibility_check || {};
 
   // Temporal ordering check
   const temporalOrdering = useMemo(() => {
@@ -3008,6 +3060,126 @@ function FeasibilityView({ state, actions, onGoNext }) {
         <h1>Targeted variable exploration & feasibility check</h1>
         <p>{questionFields?.question ? <>Checking feasibility for: <strong style={{ color: "var(--navy)" }}>{questionFields.question}</strong></> : "No research question selected yet \u2014 go back to Question & Variables."}</p>
       </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div className="card-title">Python targeted feasibility check</div>
+          <span className={`chip ${statusClass}`}>{String(feasibilityStatus).replaceAll("_", " ")}</span>
+        </div>
+        <p className="card-desc">This checks whether the selected question and candidate variables can be implemented with the uploaded dataset. It does not generate a graph, identify an estimand, estimate an effect, or prove causality.</p>
+        <div className="question-field-grid">
+          <div className="question-field"><span className="filter-label">Dataset</span><div className="helper" style={{ margin: 0 }}>{realDatasetFilename(backendDataset) || "No uploaded dataset selected"}</div></div>
+          <div className="question-field"><span className="filter-label">Exposure</span><div className="helper mono" style={{ margin: 0 }}>{resolvedExposure || "Needs dataset-backed exposure"}</div></div>
+          <div className="question-field"><span className="filter-label">Comparator</span><div className="helper" style={{ margin: 0 }}>{questionFields?.comparator || `One-unit increase in ${resolvedExposure || "exposure"}`}</div></div>
+          <div className="question-field"><span className="filter-label">Outcome</span><div className="helper mono" style={{ margin: 0 }}>{resolvedOutcome || "Needs dataset-backed outcome"}</div></div>
+          <div className="question-field"><span className="filter-label">Time window</span><div className="helper" style={{ margin: 0 }}>{questionFields?.timeWindow || `${lagHours}h lag, next observation window`}</div></div>
+          <div className="question-field"><span className="filter-label">Selected variables</span><div className="helper" style={{ margin: 0 }}>{targetedVars.join(", ")}</div></div>
+        </div>
+        <div className="button-row" style={{ marginTop: 10 }}>
+          <button className="btn btn-primary btn-sm" onClick={handleRunFeasibilityCheck} disabled={actionStatus.targetedFeasibility?.kind === "loading"}>
+            <RefreshCw size={13} className={actionStatus.targetedFeasibility?.kind === "loading" ? "spin" : ""} /> Run Feasibility Checks
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Feasibility Results")}>
+            <Info size={13} /> Interpret Feasibility Results
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Explain This Warning")}>
+            <AlertTriangle size={13} /> Explain This Warning
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={handleRunFeasibilityCheck}>
+            <RefreshCw size={13} /> Recalculate
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => actions.showToast("Go back to Phase 4 using the left navigation to revise the confirmed question.")}>
+            Revise Question
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => actions.showToast("Go back to Phase 4 to revise candidate variables and roles.")}>
+            Revise Variables
+          </button>
+        </div>
+        {statusMessage(actionStatus.targetedFeasibility) && (
+          <div className={`action-note ${actionStatus.targetedFeasibility.kind === "error" ? "action-note-error" : actionStatus.targetedFeasibility.kind === "success" ? "action-note-success" : ""}`}>
+            {statusMessage(actionStatus.targetedFeasibility)}
+          </div>
+        )}
+        <div className={`helper ${feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision" ? "" : ""}`} style={{ marginTop: 10 }}>
+          <ShieldAlert size={13} /> {statusMessageText}
+        </div>
+      </div>
+
+      {targetedFeasibilityResult && (
+        <div className="two-col">
+          <div className="card">
+            <div className="card-head"><div className="card-title">Core variable diagnostics</div><span className="chip chip-muted">Python computed</span></div>
+            <table className="mini-table">
+              <thead><tr><th>Check</th><th>Variable</th><th>Variation</th><th>Non-missing</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>Exposure</td>
+                  <td className="mono">{exposureCheck.variable || "Not matched"}</td>
+                  <td>{String(Boolean(exposureCheck.has_variation))}</td>
+                  <td>{exposureCheck.non_missing_observations ?? "n/a"}</td>
+                  <td><span className={`chip ${exposureCheck.status === "ready" ? "chip-success" : "chip-warning"}`}>{exposureCheck.status || "review"}</span></td>
+                </tr>
+                <tr>
+                  <td>Outcome</td>
+                  <td className="mono">{outcomeCheck.variable || "Not matched"}</td>
+                  <td>{String(Boolean(outcomeCheck.has_variation))}</td>
+                  <td>{outcomeCheck.non_missing_observations ?? "n/a"}</td>
+                  <td><span className={`chip ${outcomeCheck.status === "ready" ? "chip-success" : "chip-warning"}`}>{outcomeCheck.status || "review"}</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="mini-stat-row" style={{ marginTop: 10 }}>
+              <div className="mini-stat"><span className="mini-stat-label">Total rows</span><span className="mini-stat-value">{(sampleCheck.total_rows ?? 0).toLocaleString()}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Complete cases</span><span className="mini-stat-value">{(sampleCheck.complete_case_rows_for_exposure_outcome_and_selected ?? sampleCheck.complete_case_rows_for_selected_variables ?? 0).toLocaleString()}</span></div>
+              <div className="mini-stat"><span className="mini-stat-label">Participants</span><span className="mini-stat-value">{coverage.number_of_participants ?? "n/a"}</span></div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Warnings, blockers, and revisions</div><span className="chip chip-warning">{(targetedFeasibilityResult.warnings || []).length} notes</span></div>
+            {(targetedFeasibilityResult.blocking_issues || []).length > 0 && (
+              <div className="helper" style={{ background: "var(--danger-soft)", borderColor: "#FBBFBB", marginBottom: 8 }}>
+                <XCircle size={13} style={{ color: "var(--danger)" }} /> Blocking issues: {targetedFeasibilityResult.blocking_issues.map((item) => item.message).join(" ")}
+              </div>
+            )}
+            <ul className="tight-list">
+              {(targetedFeasibilityResult.warnings || []).slice(0, 6).map((warning, index) => (
+                <li key={`${warning.warning_type || "warning"}-${index}`}>{warning.message}</li>
+              ))}
+            </ul>
+            <div className="helper" style={{ marginTop: 8 }}><strong>Recommended revisions:</strong> {(targetedFeasibilityResult.recommended_revisions || []).join(" ")}</div>
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Missingness summary</div></div>
+            <table className="mini-table">
+              <thead><tr><th>Variable</th><th>Missing %</th><th>Status</th></tr></thead>
+              <tbody>
+                {missingRows.slice(0, 8).map((row) => (
+                  <tr key={row.variable}>
+                    <td className="mono">{row.variable}</td>
+                    <td>{row.missing_percentage ?? "n/a"}%</td>
+                    <td><span className={`chip ${row.severity === "high" ? "chip-warning" : "chip-success"}`}>{row.severity === "high" ? "High missingness" : "OK"}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="card">
+            <div className="card-head"><div className="card-title">Timing, overlap, and derived features</div></div>
+            <div className="lag-reality-box">
+              <div className="lag-reality-row"><span className="lag-reality-label">Lag feasibility</span><span>{lagCheck.status || "review"}; timestamp exists: {String(Boolean(lagCheck.timestamp_column_exists))}; participant ID exists: {String(Boolean(lagCheck.participant_id_exists))}</span></div>
+              <div className="lag-reality-row"><span className="lag-reality-label">Overlap / positivity</span><span>{overlapCheck.status || "review required"}</span></div>
+              <div className="lag-reality-row"><span className="lag-reality-label">High correlations</span><span>{targetedFeasibilityResult.correlation_redundancy_check?.high_correlations?.length || 0} pair(s) flagged</span></div>
+              <div className="lag-reality-row"><span className="lag-reality-label">Derived features</span><span>Lagged exposure possible: {String(Boolean(targetedFeasibilityResult.derived_feature_check?.lagged_exposure_possible))}; rolling features possible: {String(Boolean(targetedFeasibilityResult.derived_feature_check?.rolling_or_cumulative_features_possible))}</span></div>
+            </div>
+            <div className="helper" style={{ marginTop: 10 }}>
+              <Info size={13} /> {targetedFeasibilityResult.python_calculation_note}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head">
@@ -3345,15 +3517,37 @@ function FeasibilityView({ state, actions, onGoNext }) {
       </div>
 
       <div className="next-bar">
-        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> build the causal graph and validate variable roles.</p>
-        <button className="btn btn-primary" onClick={() => { if (feas.verdict === "Not feasible") { showToast("Feasibility verdict is \"Not feasible\" \u2014 you can still continue, but consider adjusting the controls above."); } onGoNext(); }}>Causal graph <ArrowRight size={14} /></button>
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> build the causal graph only after feasibility limitations are reviewed.</p>
+        <div className="button-row">
+          {(feasibilityStatus === "requires_revision" || feasibilityStatus === "not_feasible") && (
+            <button className="btn btn-secondary" onClick={() => actions.showToast("Use Phase 4 in the left navigation to revise the question, exposure, comparator, timing, or variables.")}>
+              Revise Phase 4 inputs
+            </button>
+          )}
+          {feasibilityStatus === "marginal" && (
+            <button className="btn btn-secondary" onClick={() => { showToast("Limitations accepted for this design draft. Keep them in the final report."); onGoNext(); }}>
+              Proceed with limitations <ArrowRight size={14} />
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => {
+            if (feasibilityStatus === "not_run") {
+              showToast("Run Python feasibility checks first, or proceed only as a demo draft.");
+            } else if (feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision") {
+              showToast("Feasibility is inadequate. Revise Phase 4 inputs before graph design.");
+              return;
+            } else if (feas.verdict === "Not feasible") {
+              showToast("Local demo feasibility is \"Not feasible\"; review the backend result before continuing.");
+            }
+            onGoNext();
+          }}>Causal graph <ArrowRight size={14} /></button>
+        </div>
       </div>
     </>
   );
 }
 
 
-const ROLE_NODE_COLOR = { Exposure: "#2F5D8A", Outcome: "#B8382B", Confounder: "#A6650E", Mediator: "#6B4A9E", Proxy: "#8A93A3", Unassigned: "#8A93A3" };
+const ROLE_NODE_COLOR = { Exposure: "#2F5D8A", Outcome: "#0F9F6E", Confounder: "#A6650E", Mediator: "#6B4A9E", "Collider Candidate": "#D97706", Proxy: "#8A93A3", Unassigned: "#8A93A3" };
 const ROLE_EXPLANATION = {
   Exposure: "This is your hypothesized cause \u2014 the variable you believe influences the outcome.",
   Outcome: "This is what you're trying to explain or predict.",
@@ -3888,9 +4082,12 @@ function GraphView({ state, actions, onGoNext }) {
       </div>
 
       <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", background: "#F8FAFC", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span className="helper" style={{ margin: 0 }}>
-          <AlertTriangle size={13} /> Draft only: the graph supports causal-design review, not proven causal conclusions.
+          <span className="helper" style={{ margin: 0 }}>
+          <AlertTriangle size={13} /> Graph edges are assumptions, not proven causal relationships. The LLM can draft alternatives, but backend validation checks graph structure.
         </span>
+        {graphType !== "DAG" && (
+          <span className="chip chip-warning">{graphType} experimental: full representation-specific validation is not yet implemented.</span>
+        )}
         {graphActionStatus?.message && (
           <span className={`chip ${graphActionStatus.kind === "error" ? "chip-danger" : graphActionStatus.kind === "success" ? "chip-success" : "chip-muted"}`}>
             {graphActionStatus.message}
@@ -4021,9 +4218,12 @@ function GraphView({ state, actions, onGoNext }) {
             </select>
             <p>{ROLE_EXPLANATION[variableRoles[selectedNode.id] || "Unassigned"]}</p>
             <p>
-              <strong>Temporal:</strong> {selectedNode.temporalRole || "unknown"}<br />
-              <strong>Measurement:</strong> {selectedNode.measurementRole || "unknown"}<br />
-              {selectedNode.locked ? "Locked node. " : ""}{selectedNode.notes || "No node notes recorded yet."}
+              <strong>Variable:</strong> <span className="mono">{selectedNode.id}</span><br />
+              <strong>Temporal role:</strong> {selectedNode.temporalRole || "unknown"}<br />
+              <strong>Measurement role:</strong> {selectedNode.measurementRole || "unknown"}<br />
+              <strong>Data category:</strong> {ROLE_TABLE_VARIABLES.find((v) => v.name === selectedNode.id)?.source || "unknown"}<br />
+              <strong>Locked:</strong> {selectedNode.locked ? "yes" : "no"}<br />
+              <strong>Notes:</strong> {selectedNode.notes || "No node notes recorded yet."}
             </p>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-sm" onClick={() => selectNode(null)}>Close</button>
@@ -4035,10 +4235,15 @@ function GraphView({ state, actions, onGoNext }) {
         {selectedEdge && (
           <div className="graph-side-panel">
             <h4><span className="mono">{selectedEdge.from}</span> \u2192 <span className="mono">{selectedEdge.to}</span></h4>
-            <p>{selectedEdge.type === "uncertain" ? "This edge is unsupported or uncertain \u2014 confirm it with your data or remove it before moving on." : "This is a standard directed relationship in your assumed structure."}</p>
+            <p>{selectedEdge.type === "uncertain" ? "Uncertain: confirm timing/evidence or remove before moving on." : "Evidence-informed draft edge. This remains an assumption until user review and validation."}</p>
             <p>
+              <strong>Edge type:</strong> {selectedEdge.edgeType || "directed"}<br />
               <strong>Confidence:</strong> {selectedEdge.confidence || "uncertain"}<br />
-              {selectedEdge.locked ? "Locked edge. " : ""}{selectedEdge.rationale || "No rationale recorded yet."}
+              <strong>Temporal compatibility:</strong> {selectedEdge.temporalConstraint || "Needs review"}<br />
+              <strong>User decision:</strong> {selectedEdge.locked ? "Locked/user accepted" : selectedEdge.userModified ? "User-specified" : "Draft"}<br />
+              <strong>Rationale:</strong> {selectedEdge.rationale || "No rationale recorded yet."}<br />
+              <strong>Supporting evidence:</strong> {selectedEdge.supportingEvidence?.length ? selectedEdge.supportingEvidence.join("; ") : "Unsupported by retrieved evidence"}<br />
+              <strong>Limitations:</strong> Graph edges are assumptions, not proven causal relationships.
             </p>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button className="btn btn-sm" onClick={() => setEdgeType(selectedEdge.id, selectedEdge.type === "supported" ? "uncertain" : "supported")}>
@@ -4047,6 +4252,7 @@ function GraphView({ state, actions, onGoNext }) {
               <button className="btn btn-sm" onClick={() => reverseGraphEdge(selectedEdge.id)}>Reverse edge</button>
               <button className="btn btn-sm" onClick={() => toggleEdgeLock(selectedEdge.id)}>{selectedEdge.locked ? "Unlock" : "Lock"} edge</button>
               <button className="btn btn-sm" onClick={() => runAssistantAction("Explain Selected Edge")}>Explain Selected Edge</button>
+              <button className="btn btn-sm" onClick={() => runAssistantAction("What Happens If I Adjust for This Variable?")}>Adjustment impact</button>
               <button className="btn btn-sm" onClick={() => selectEdge(null)}>Close</button>
               <button className="btn btn-sm" style={{ color: "var(--danger)" }} onClick={() => removeGraphEdge(selectedEdge.id)}>Remove edge</button>
             </div>
@@ -4085,6 +4291,26 @@ function GraphView({ state, actions, onGoNext }) {
 
       {showAnalysis && (
         <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", background: "#fff", maxHeight: "42vh", overflowY: "auto" }}>
+          <div className="card">
+            <div className="card-head">
+              <div className="card-title">Graph concepts and assistant checks</div>
+              <span className="chip chip-muted">Education only</span>
+            </div>
+            <p className="card-desc">Variable roles remain provisional until deterministic validation and user confirmation. These explanations support review; they do not prove graph validity.</p>
+            <div className="button-row">
+              <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction("Show Backdoor Paths")}>Show Backdoor Paths</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction("What Happens If I Adjust for This Variable?")}>Adjustment Consequences</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setGraphCompareMode((m) => !m)}>Compare Graph Versions</button>
+            </div>
+            <div className="question-field-grid" style={{ marginTop: 10 }}>
+              <div className="question-field"><span className="filter-label">Chain</span><div className="helper" style={{ margin: 0 }}>A -&gt; B -&gt; C. Adjusting for B blocks the path.</div></div>
+              <div className="question-field"><span className="filter-label">Fork</span><div className="helper" style={{ margin: 0 }}>B causes A and C. B is a common-cause candidate.</div></div>
+              <div className="question-field"><span className="filter-label">Collider</span><div className="helper" style={{ margin: 0 }}>A -&gt; B &lt;- C. Adjusting for B can open a noncausal path.</div></div>
+              <div className="question-field"><span className="filter-label">Mediator</span><div className="helper" style={{ margin: 0 }}>Exposure -&gt; mediator -&gt; outcome. Adjusting changes total-effect interpretation.</div></div>
+              <div className="question-field"><span className="filter-label">Backdoor path</span><div className="helper" style={{ margin: 0 }}>A noncausal route from exposure to outcome through common causes.</div></div>
+              <div className="question-field"><span className="filter-label">Total vs direct effect</span><div className="helper" style={{ margin: 0 }}>Total includes mediated paths; direct blocks selected mediators.</div></div>
+            </div>
+          </div>
 
           {/* ── AI: Graph structure summary ── */}
           <div className="card insight-card" style={{ marginTop: 0 }}>
@@ -5969,6 +6195,7 @@ export default function CausalStudioApp() {
   const [lagHours, setLagHours] = useState(24);
   const [exposureThreshold, setExposureThreshold] = useState(30);
   const [sensitivityChecks, setSensitivityChecks] = useState({ missingData: true, positivity: true, unmeasuredConf: false, consistency: false, exclusionRestriction: false });
+  const [targetedFeasibilityResult, setTargetedFeasibilityResult] = useState(null);
 
   const [graphNodes, setGraphNodes] = useState(DEFAULT_GRAPH_NODES.map((n) => ({ ...n })));
   const [graphEdges, setGraphEdges] = useState(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
@@ -6436,6 +6663,101 @@ export default function CausalStudioApp() {
     pushAssistantNote("Question confirmed for Phase 5 feasibility review. This confirms wording, not causal validity.");
   }
 
+  function buildFeasibilityPayload() {
+    const dataset = firstRealDataset(datasets);
+    const schema = dataset?.schema || {};
+    const columns = schemaColumnNames(dataset);
+    const roleNames = Object.entries(variableRoles)
+      .filter(([, role]) => role && role !== "Unassigned")
+      .map(([name]) => name);
+    const recommendedNames = candidateVariables
+      .filter((item) => item.user_decision !== "Exclude" && item.user_decision !== "Mark unavailable")
+      .map((item) => item.variable_name)
+      .filter(Boolean);
+    const selectedVariables = [...new Set([
+      ...roleNames,
+      ...recommendedNames,
+      ...columns.filter((column) => ["pid", "label", "time_stamp", "time_of_day", "day_of_week", "acc_min_magnitude", "acc_max_magnitude", "acc_mean_magnitude", "avg_latitude"].includes(column)),
+    ])];
+    const exposure = resolveDatasetColumn(dataset, [
+      questionFields?.exposure,
+      ...Object.entries(variableRoles).filter(([, role]) => role === "Exposure").map(([name]) => name),
+      "acc_mean_magnitude",
+      "sleep_quality",
+      "sleep_duration",
+    ]);
+    const outcome = resolveDatasetColumn(dataset, [
+      questionFields?.outcome,
+      ...Object.entries(variableRoles).filter(([, role]) => role === "Outcome").map(([name]) => name),
+      "label",
+      "alcohol_use_event",
+      "craving",
+    ]);
+    const participantId = schema.possible_id_columns?.[0] || resolveDatasetColumn(dataset, ["pid", "participant_id", "subject_id"]);
+    const timestamp = schema.possible_timestamp_date_columns?.[0] || resolveDatasetColumn(dataset, ["time_stamp", "timestamp", "date", "time_of_day"]);
+    const selectedDerived = [
+      ...derivedFeatures.filter((feature) => feature.selected).map((feature) => feature.label),
+      ...derivedFeatureCandidates.map((feature) => feature.feature_name).filter(Boolean),
+    ];
+
+    return {
+      dataset_filename: realDatasetFilename(dataset),
+      confirmed_question: questionFields?.question || "Targeted feasibility check for the selected causal design question.",
+      exposure,
+      outcome,
+      comparator: {
+        type: "continuous_unit_change",
+        reference: questionFields?.comparator || "one-unit lower value",
+        treatment: questionFields?.exposure ? `one-unit increase in ${exposure || questionFields.exposure}` : "one-unit increase",
+      },
+      time_window: {
+        exposure_window: questionFields?.timeWindow || `${lagHours}h exposure window`,
+        lag: questionFields?.timeWindow || `${lagHours}h lag`,
+        outcome_window: "next observation window",
+      },
+      selected_variables: selectedVariables,
+      candidate_confounders: Object.entries(variableRoles).filter(([, role]) => role === "Confounder").map(([name]) => name),
+      candidate_mediators: Object.entries(variableRoles).filter(([, role]) => role === "Mediator").map(([name]) => name),
+      effect_modifiers: [],
+      proxy_variables: Object.entries(variableRoles).filter(([, role]) => role === "Proxy").map(([name]) => name),
+      derived_features: selectedDerived,
+      participant_id: participantId || "pid",
+      timestamp: timestamp || "time_stamp",
+    };
+  }
+
+  async function handleRunFeasibilityCheck() {
+    const dataset = firstRealDataset(datasets);
+    if (!dataset) {
+      setAction("targetedFeasibility", { kind: "error", message: "Upload a CSV dataset before running targeted feasibility." });
+      return;
+    }
+    if (!backendStatus.connected || !dataset.savedFilename) {
+      setAction("targetedFeasibility", { kind: "error", message: "Backend unavailable - start FastAPI to run Python feasibility checks." });
+      return;
+    }
+    const payload = buildFeasibilityPayload();
+    if (!payload.exposure || !payload.outcome) {
+      setAction("targetedFeasibility", { kind: "error", message: "Choose an exposure and outcome that exist in the uploaded dataset before running feasibility." });
+      pushAssistantNote("I could not run Phase 5 yet because the exposure/outcome could not be matched to dataset columns. Go back to Phase 4 and choose dataset-backed variables.");
+      return;
+    }
+    setAction("targetedFeasibility", { kind: "loading", message: "Running Python targeted feasibility diagnostics..." });
+    try {
+      const response = await runFeasibilityCheck(payload);
+      setTargetedFeasibilityResult(response);
+      const issueCount = (response.blocking_issues || []).length + (response.warnings || []).length;
+      setAction("targetedFeasibility", {
+        kind: response.status === "not_feasible" || response.status === "requires_revision" ? "warning" : "success",
+        message: `Feasibility status: ${String(response.status || "unknown").replaceAll("_", " ")} with ${issueCount} diagnostic note${issueCount === 1 ? "" : "s"}.`,
+      });
+      pushAssistantNote("Python calculated the feasibility diagnostics from the uploaded dataset. I can explain the implications, but these checks do not establish causality.");
+    } catch (error) {
+      setAction("targetedFeasibility", { kind: "error", message: friendlyError(error, "Targeted feasibility check failed.") });
+      pushAssistantNote(`Targeted feasibility check failed: ${friendlyError(error)}`);
+    }
+  }
+
   function applyVariableDecision(variableName, decision) {
     setCandidateVariables((items) => items.map((item) => (
       item.variable_name === variableName ? { ...item, user_decision: decision, status: decision === "Modify" ? "user_edited" : "needs_user_review" } : item
@@ -6608,7 +6930,19 @@ export default function CausalStudioApp() {
       dataset_filename: dataset?.savedFilename || dataset?.name || "",
       selected_variables: selectedVariables,
       provisional_roles: variableRoles,
-      feasibility_result: feasibility,
+      feasibility_result: targetedFeasibilityResult || feasibility,
+      comparator: {
+        type: "continuous_unit_change",
+        reference: questionFields?.comparator || "reference condition",
+        treatment: questionFields?.exposure || exposure,
+      },
+      time_window: {
+        exposure_window: questionFields?.timeWindow || "",
+        lag: questionFields?.timeWindow || `${lagHours}h lag`,
+        outcome_window: "next observation window",
+      },
+      schema_summary: schema || {},
+      locked_decisions: lockedContent,
       rag_evidence: [],
       user_feedback: "",
       preserve_user_locked_edges: true,
@@ -6681,6 +7015,17 @@ export default function CausalStudioApp() {
     showToast("Alternative graph saved.");
   }
   function confirmGraph() {
+    if (graphValidationResult?.status === "invalid") {
+      showToast("Graph validation is invalid. Fix errors before confirming the graph.");
+      return;
+    }
+    if (!graphValidationResult) {
+      showToast("Validate the graph before confirming it.");
+      return;
+    }
+    if (graphValidationResult.status === "valid_with_warnings") {
+      showToast("Confirmed with warnings. These limitations must stay visible in downstream reporting.");
+    }
     setConfirmedGraph({ graphType, graphVersionLabel, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult });
     pushAssistantNote("Graph confirmed for downstream planning. This confirms a reviewed design draft, not a proven causal structure.");
     showToast("Graph confirmed.");
@@ -6875,6 +7220,7 @@ export default function CausalStudioApp() {
       selected_question_id: selectedQuestionId,
       variable_roles: variableRoles,
       feasibility,
+      targeted_feasibility_result: targetedFeasibilityResult,
       graph_nodes: graphNodes,
       graph_edges: graphEdges,
       graph_type: graphType,
@@ -6905,6 +7251,15 @@ export default function CausalStudioApp() {
         correlations: broadExploration?.broad_correlation_summary || null,
       };
     }
+    if (pageKey === "feasibility") {
+      return {
+        prompt,
+        feasibility_status: targetedFeasibilityResult?.status,
+        warnings: targetedFeasibilityResult?.warnings || [],
+        blocking_issues: targetedFeasibilityResult?.blocking_issues || [],
+        recommended_revisions: targetedFeasibilityResult?.recommended_revisions || [],
+      };
+    }
     return { prompt };
   }
 
@@ -6923,7 +7278,7 @@ export default function CausalStudioApp() {
   }
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore", "graph"].includes(page);
+    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {
@@ -6983,6 +7338,7 @@ export default function CausalStudioApp() {
     handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
+    handleRunFeasibilityCheck,
     runAssistantAction,
     setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
@@ -6997,7 +7353,7 @@ export default function CausalStudioApp() {
     objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns,
     backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
     variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
-    lagHours, exposureThreshold, sensitivityChecks, feasibility,
+    lagHours, exposureThreshold, sensitivityChecks, feasibility, targetedFeasibilityResult,
     graphNodes, graphEdges, selectedNodeId, selectedEdgeId, graphType, graphValidationResult, graphAlternatives, confirmedGraph, graphVersionLabel, graphActionStatus,
     effectType, estimatorFamily, repeatedMeasuresChecks, latestEstimationRun, primaryEstimationRun,
     lockedContent,

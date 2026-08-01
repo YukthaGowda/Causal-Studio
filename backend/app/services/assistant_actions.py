@@ -129,6 +129,34 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
             f"with {len(warnings)} warning(s). {caution}"
         )
 
+    if phase == "phase_5_feasibility":
+        result = page_state.get("targeted_feasibility_result") or {}
+        status = result.get("status") or page_state.get("feasibility_status") or "not run"
+        warnings = result.get("warnings") or page_state.get("warnings") or []
+        blocking = result.get("blocking_issues") or page_state.get("blocking_issues") or []
+        revisions = result.get("recommended_revisions") or page_state.get("recommended_revisions") or []
+        sample = result.get("analysis_ready_sample_check") or {}
+        complete_cases = (
+            sample.get("complete_case_rows_for_exposure_outcome_and_selected")
+            or sample.get("complete_case_rows_for_selected_variables")
+        )
+        parts = [
+            f"Phase 5 feasibility status: {str(status).replace('_', ' ')}.",
+            f"Python returned {len(warnings)} warning(s) and {len(blocking)} blocking issue(s).",
+        ]
+        if complete_cases is not None:
+            parts.append(f"Analysis-ready complete-case rows: {complete_cases}.")
+        if blocking:
+            parts.append("Blocking issues should be resolved before graph design.")
+        elif status == "marginal":
+            parts.append("This can proceed only if limitations are explicitly accepted.")
+        elif status == "ready":
+            parts.append("Ready to proceed to graph design after user review.")
+        if revisions:
+            parts.append(f"Recommended revisions: {' '.join(map(str, revisions[:4]))}")
+        parts.append("These feasibility diagnostics do not establish causality or estimate an effect.")
+        return " ".join(parts)
+
     if phase == "phase_1_project_setup":
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}

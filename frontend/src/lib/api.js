@@ -91,6 +91,15 @@ export async function runBroadExploration(filename) {
   return parseJsonResponse(response, "Broad exploration failed.");
 }
 
+export async function runFeasibilityCheck(payload) {
+  const response = await fetch(`${API_BASE_URL}/feasibility/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Targeted feasibility check failed.");
+}
+
 export async function assistantAction(payload) {
   const response = await fetch(`${API_BASE_URL}/assistant/action`, {
     method: "POST",
@@ -119,7 +128,7 @@ export async function recommendCandidateVariables(payload) {
 }
 
 export async function generateCausalGraph(payload) {
-  const response = await fetch(`${API_BASE_URL}/causal-graph/generate-and-validate`, {
+  const response = await fetch(`${API_BASE_URL}/causal-graph/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

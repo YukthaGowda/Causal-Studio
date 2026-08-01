@@ -215,9 +215,14 @@ def validate_structured_graph(
     checks = {
         "acyclic": True,
         "no_self_loops": True,
+        "no_duplicate_edges": True,
         "all_nodes_known": True,
         "outcome_not_adjusted_for": True,
+        "id_not_causal_variable": True,
+        "timestamps_not_causal_variables": True,
         "temporal_order_reviewed": True,
+        "post_treatment_adjustment_reviewed": True,
+        "collider_adjustment_reviewed": True,
     }
 
     if graph_type not in SUPPORTED_GRAPH_TYPES:
@@ -236,6 +241,7 @@ def validate_structured_graph(
     counts = Counter((edge["source"], edge["target"]) for edge in normalized_edges)
     for (source, target), count in counts.items():
         if count > 1:
+            checks["no_duplicate_edges"] = False
             errors.append(f"Duplicate edge detected: {source} -> {target}.")
 
     if graph_type == "DAG":
@@ -259,17 +265,21 @@ def validate_structured_graph(
 
     if participant_id:
         if participant_id == exposure or participant_id == outcome or role_by_id.get(participant_id) in {"exposure", "outcome"}:
+            checks["id_not_causal_variable"] = False
             warnings.append(f"{participant_id} is a participant/grouping ID and should not be treated as exposure or outcome.")
 
     for field in timestamp_fields:
         if field in node_ids and role_by_id.get(field) in {"exposure", "outcome", "confounder", "mediator", "collider_candidate", "proxy"}:
+            checks["timestamps_not_causal_variables"] = False
             warnings.append(f"{field} is a timestamp/context field; treat it as temporal structure, not a standalone causal variable.")
 
     for variable in adjustment_set:
         role = role_by_id.get(variable, "unknown")
         if temporal_by_id.get(variable) == "post_treatment":
+            checks["post_treatment_adjustment_reviewed"] = False
             warnings.append(f"{variable} appears post-treatment; adjusting for it may bias the target effect.")
         if role == "collider_candidate":
+            checks["collider_adjustment_reviewed"] = False
             warnings.append(f"{variable} is marked as a possible collider; adjusting for it can open a noncausal path.")
 
     for node in normalized_nodes:
@@ -421,7 +431,8 @@ def generate_structured_graph(
         "validation_result": {key: value for key, value in validation.items() if not key.startswith("normalized_")},
         "warnings": warnings,
         "evidence_notes": evidence_notes,
-        "status": "fallback_demo_draft",
+        "status": "fallback",
         "generated_at": _now_iso(),
         "confirmed_question": confirmed_question,
+        "requires_user_review": True,
     }

@@ -41,6 +41,12 @@ class GraphRoleRecommendation(BaseModel):
 class GenerateAndValidateGraphRequest(BaseModel):
     graph_type: str = Field(default="DAG")
     confirmed_question: str = Field(default="")
+    exposure: str = Field(default="")
+    outcome: str = Field(default="")
+    comparator: dict[str, Any] = Field(default_factory=dict)
+    time_window: dict[str, Any] = Field(default_factory=dict)
+    schema_summary: dict[str, Any] = Field(default_factory=dict)
+    locked_decisions: dict[str, Any] = Field(default_factory=dict)
     dataset_filename: str | None = None
     selected_variables: list[Any] = Field(default_factory=list)
     role_recommendations: list[Any] = Field(default_factory=list)
@@ -123,6 +129,42 @@ def generate_graph(
             estimand_type=request.estimand_type,
             top_k_evidence=request.top_k_evidence,
         )
+    except CausalGraphGenerationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+
+
+@router.post("/generate")
+def generate_structured_graph_route(
+    request: GenerateAndValidateGraphRequest,
+) -> dict[str, Any]:
+    try:
+        provisional_roles = dict(request.provisional_roles)
+        if request.exposure:
+            provisional_roles.setdefault(request.exposure, "exposure")
+        if request.outcome:
+            provisional_roles.setdefault(request.outcome, "outcome")
+        response = generate_structured_graph(
+            graph_type=request.graph_type,
+            confirmed_question=request.confirmed_question,
+            selected_variables=request.selected_variables,
+            provisional_roles=provisional_roles,
+            feasibility_result=request.feasibility_result,
+            rag_evidence=request.rag_evidence,
+            user_feedback=request.user_feedback,
+            preserve_user_locked_edges=request.preserve_user_locked_edges,
+        )
+        if request.graph_type.upper() != "DAG":
+            warning = (
+                "This graph type is currently experimental. Full representation-specific "
+                "validation is not yet implemented."
+            )
+            response["warnings"] = list(dict.fromkeys([*response.get("warnings", []), warning]))
+        response["graph_type"] = request.graph_type.upper()
+        response["requires_user_review"] = True
+        return response
     except CausalGraphGenerationError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

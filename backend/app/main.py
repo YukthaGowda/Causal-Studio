@@ -13,6 +13,7 @@ from app.api.debug import router as debug_router
 from app.api.documents import router as documents_router
 from app.api.estimation import router as estimation_router
 from app.api.exploration import router as exploration_router
+from app.api.feasibility import router as feasibility_router
 from app.api.identification import router as identification_router
 from app.api.questions import router as questions_router
 from app.api.rag import router as rag_router
@@ -48,6 +49,7 @@ app.include_router(assistant_router)
 app.include_router(rag_router)
 app.include_router(datasets_router)
 app.include_router(exploration_router)
+app.include_router(feasibility_router)
 app.include_router(causal_questions_router)
 app.include_router(questions_router)
 app.include_router(candidate_variables_router)

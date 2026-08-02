@@ -257,6 +257,41 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
         )
         return " ".join(parts)
 
+    if phase == "phase_9_review_export":
+        package = page_state.get("assembled_package") or {}
+        audit = page_state.get("claim_audit_result") or {}
+        final_design = page_state.get("final_design_summary") or package.get("final_design_summary") or {}
+        selected_run = (
+            page_state.get("selected_estimation_run")
+            or page_state.get("selected_primary_estimation_run")
+            or package.get("selected_estimation_summary")
+            or {}
+        )
+        warnings = page_state.get("unresolved_warnings") or package.get("unresolved_warnings") or []
+        evidence = page_state.get("evidence_summary") or package.get("evidence_summary") or {}
+        flagged = audit.get("flagged_claims") or []
+        parts = [
+            f"Phase 9 review package status: {package.get('status', 'not assembled')}.",
+            f"Confirmed question: {final_design.get('confirmed_question') or 'not available'}.",
+            f"Selected estimation run available: {'yes' if bool(selected_run) else 'no'}.",
+            f"Unresolved warnings: {len(warnings)}.",
+            f"Claim audit status: {audit.get('status', 'not run')} with {len(flagged)} flagged claim(s).",
+        ]
+        if evidence:
+            parts.append(f"Evidence summary: {evidence.get('summary') or evidence.get('evidence_item_count') or 'available but not summarized'}.")
+        if warnings:
+            parts.append(f"Warnings to document: {' '.join(map(str, warnings[:5]))}")
+        if flagged:
+            parts.append(
+                "Claim audit issues to revise: "
+                + " ".join(str(item.get("explanation") or item.get("text")) for item in flagged[:4] if isinstance(item, dict))
+            )
+        parts.append(
+            "This package supports review and reporting. It does not prove causality, and claims must remain conditional "
+            "on the selected design, assumptions, diagnostics, and evidence."
+        )
+        return " ".join(parts)
+
     if phase == "phase_1_project_setup":
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}

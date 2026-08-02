@@ -6204,17 +6204,70 @@ function ReviewView({ state, actions }) {
   ].filter(Boolean);
   const [reportDraft, setReportDraft] = useState(null);
   const [claimAudit, setClaimAudit] = useState(null);
+  const [reportPreview, setReportPreview] = useState("");
+  const [reportHistory, setReportHistory] = useState([]);
+  const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
-  const exportReady = Boolean(selectedRun && reportDraft && claimAudit && claimAudit.status !== "fail");
+  const exportReady = Boolean(reportDraft && claimAudit && claimAudit.status !== "fail");
+
+  function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
+    setReportHistory((prev) => [
+      ...prev,
+      {
+        label,
+        text,
+        assembled_package: packageSnapshot,
+        claim_audit_result: auditSnapshot,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+  }
+
+  async function handleReviewAssistant(prompt) {
+    if (!backendStatus.connected) {
+      await runAssistantAction(prompt);
+      return;
+    }
+    try {
+      const response = await assistantAction({
+        phase: "phase_9_review_export",
+        action: assistantActionForPrompt("review", prompt),
+        page_state: {
+          assembled_package: reportDraft || {},
+          report_preview: reportPreview,
+          claim_audit_result: claimAudit || {},
+          final_design_summary: reportDraft?.final_design_summary || {},
+          selected_estimation_run: selectedRun || {},
+          selected_primary_estimation_run: selectedRun || {},
+          unresolved_warnings: reportDraft?.unresolved_warnings || estimationWarnings,
+          evidence_summary: reportDraft?.evidence_summary || {},
+        },
+        selected_item: { prompt },
+        user_feedback: prompt,
+        rag_evidence: reportDraft?.rag_evidence || [],
+      });
+      pushAssistantNote(response.assistant_message || "Review assistant action completed.");
+    } catch (error) {
+      pushAssistantNote(`Review assistant action failed: ${friendlyError(error)} Use deterministic report sections and claim audit as the source of truth.`);
+    }
+  }
 
   async function handleGenerateReport() {
     setReportLoading(true);
-    const payload = reviewExportPayloadFromState(state);
+    const payload = reviewExportPayloadFromState(state, {
+      unresolved_warnings_acknowledged: false,
+      include_appendix: true,
+      include_reproducibility: true,
+      include_evidence_table: true,
+    });
     try {
       if (!backendStatus.connected) throw new Error("Backend unavailable - generated local incomplete draft.");
       const report = await assembleReviewPackage(payload);
+      const preview = reportToMarkdown(report, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(report);
+      setReportPreview(preview);
+      saveReportVersion("Draft 1", preview, report, claimAudit);
       pushAssistantNote("The Phase 9 review package is assembled. Review missing items, estimation diagnostics, evidence limits, and claim boundaries before exporting.");
       showToast("Review package assembled.");
     } catch (error) {
@@ -6234,7 +6287,10 @@ function ReviewView({ state, actions }) {
         ready_for_export: Boolean(selectedRun),
         requires_user_review: true,
       };
+      const preview = reportToMarkdown(localDraft, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(localDraft);
+      setReportPreview(preview);
+      saveReportVersion("Draft 1 - local fallback", preview, localDraft, claimAudit);
       pushAssistantNote("I created a local incomplete report preview because the backend report endpoint was unavailable. Review it as a draft only.");
       showToast("Local report preview generated.");
     } finally {
@@ -6257,7 +6313,7 @@ function ReviewView({ state, actions }) {
           });
       if (!reportDraft) setReportDraft(assembled);
       const payload = {
-        report_text: reportToMarkdown(assembled, { ...state, reportClaimAudit: claimAudit }),
+        report_text: reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: claimAudit }),
         final_design_summary: assembled.final_design_summary || {},
         selected_estimation_summary: assembled.selected_estimation_summary || {},
         assumption_checklist: reviewExportPayloadFromState(state).phase_7_strategy.assumption_checklist,
@@ -6272,6 +6328,7 @@ function ReviewView({ state, actions }) {
         ready_for_export: false,
       };
       setClaimAudit(audit);
+      saveReportVersion("Claim-audited draft", reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }), assembled, audit);
       const blockingCount = (audit.flagged_claims || []).filter((item) => item.severity === "blocking").length;
       pushAssistantNote(`Claim audit returned ${audit.status}. ${blockingCount} blocking issue(s) must be revised before external export.`);
       showToast("Claim audit complete.");
@@ -6288,11 +6345,6 @@ function ReviewView({ state, actions }) {
     if (format === "pdf") {
       showToast("PDF export is planned but not implemented in this proof of concept.");
       pushAssistantNote("PDF export is planned later. Use JSON or Markdown for this proof of concept.");
-      return;
-    }
-    if (!selectedRun) {
-      showToast("Select a primary estimation run before export.");
-      pushAssistantNote("Select a primary estimation run before exporting the complete design and analysis package.");
       return;
     }
     if (!reportDraft || !claimAudit) {
@@ -6317,12 +6369,25 @@ function ReviewView({ state, actions }) {
         })
       : {
           filename: `causal_design_agent_review_export.${format === "markdown" ? "md" : "json"}`,
-          content: format === "markdown" ? reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }) : JSON.stringify({ assembled_package: assembled, claim_audit_result: audit }, null, 2),
+          content: format === "markdown" ? (reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit })) : JSON.stringify({ assembled_package: assembled, claim_audit_result: audit, report_preview: reportPreview }, null, 2),
           warnings: ["Backend unavailable - local export generated."],
         };
     const filename = exportReport(format === "markdown" ? { markdown: result.content } : JSON.parse(result.content), format);
+    saveReportVersion(`Exported ${format.toUpperCase()}`, result.content, assembled, audit);
     (result.warnings || []).forEach((warning) => pushAssistantNote(warning));
     showToast(`Exported ${result.filename || filename}`);
+  }
+
+  function applySafeRevision(flaggedClaim) {
+    if (!flaggedClaim?.suggested_revision) return;
+    const original = flaggedClaim.text || "";
+    const replacement = flaggedClaim.suggested_revision;
+    const nextPreview = reportPreview && original
+      ? reportPreview.replace(new RegExp(original.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), replacement)
+      : `${reportPreview}\n\nSuggested safer wording: ${replacement}`.trim();
+    setReportPreview(nextPreview);
+    saveReportVersion("Revised draft", nextPreview, reportDraft, claimAudit);
+    showToast("Suggested safer wording applied to the report preview.");
   }
 
   return (
@@ -6459,8 +6524,8 @@ function ReviewView({ state, actions }) {
           </>
         ) : (
           <div className="inconsistency-card">
-            <p style={{ margin: 0 }}>Select a primary estimation run before exporting the complete design and analysis package.</p>
-            <p style={{ margin: "8px 0 0" }}>Return to Phase 8 to run estimation and select a primary run.</p>
+            <p style={{ margin: 0 }}>No primary estimation run has been selected. You can still create a design-only draft, but the complete design and analysis package requires a selected estimation run.</p>
+            <p style={{ margin: "8px 0 0" }}>Return to Phase 8 to run estimation and select a primary run when you need the complete package.</p>
             {latestDraftRun && <p style={{ margin: "8px 0 0" }}>A latest draft run exists ({latestDraftRun.id}), but it has not been selected as primary.</p>}
           </div>
         )}
@@ -6522,10 +6587,11 @@ function ReviewView({ state, actions }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleClaimAudit} disabled={auditLoading}><ShieldAlert size={13} /> {auditLoading ? "Auditing..." : "Run Claim Audit"}</button>
-          <button className="btn" onClick={() => runAssistantAction("Ask AI to Revise Report")}><Sparkles size={13} /> Ask AI to Revise Report</button>
-          <button className="btn" onClick={() => runAssistantAction("Interpret Final Design")}><Info size={13} /> Interpret Final Design</button>
-          <button className="btn" onClick={() => runAssistantAction("Summarize Key Decisions")}><ClipboardList size={13} /> Summarize Key Decisions</button>
-          <button className="btn" onClick={() => runAssistantAction("Review Unresolved Warnings")}><AlertTriangle size={13} /> Review Unresolved Warnings</button>
+          <button className="btn" onClick={() => handleReviewAssistant("Ask AI to Revise Report")}><Sparkles size={13} /> Ask AI to Revise Report</button>
+          <button className="btn" onClick={() => handleReviewAssistant("Interpret Final Design")}><Info size={13} /> Interpret Final Design</button>
+          <button className="btn" onClick={() => handleReviewAssistant("Summarize Key Decisions")}><ClipboardList size={13} /> Summarize Key Decisions</button>
+          <button className="btn" onClick={() => handleReviewAssistant("Review Unresolved Warnings")}><AlertTriangle size={13} /> Review Unresolved Warnings</button>
+          <button className="btn" onClick={() => handleReviewAssistant("Reprocess with Selected Evidence")}><RefreshCw size={13} /> Reprocess with Selected Evidence</button>
         </div>
         {claimAudit ? (
           <>
@@ -6540,6 +6606,11 @@ function ReviewView({ state, actions }) {
                 <p style={{ margin: 0 }}><strong>{item.severity}:</strong> {item.text}</p>
                 <p style={{ margin: "4px 0 0" }}>{item.explanation}</p>
                 {item.suggested_revision && <p style={{ margin: "4px 0 0" }}><strong>Safer wording:</strong> {item.suggested_revision}</p>}
+                {item.suggested_revision && (
+                  <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={() => applySafeRevision(item)}>
+                    Apply suggested wording
+                  </button>
+                )}
               </div>
             ))}
             {(claimAudit.safe_language_suggestions || []).map((item, index) => (
@@ -6547,7 +6618,7 @@ function ReviewView({ state, actions }) {
             ))}
           </>
         ) : (
-          <div className="helper"><Info size={13} /> Run claim audit before final sign-off or export.</div>
+          <div className="helper"><Info size={13} /> Run claim audit before export.</div>
         )}
       </div>
 
@@ -6558,13 +6629,19 @@ function ReviewView({ state, actions }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
+          <button className="btn" onClick={() => setIsEditingReport((value) => !value)} disabled={!reportDraft}><FileText size={13} /> {isEditingReport ? "Preview Report" : "Edit Report"}</button>
           <button className="btn" onClick={() => handleExportReviewPackage("json")} disabled={!exportReady}><Save size={13} /> Export JSON</button>
           <button className="btn" onClick={() => handleExportReviewPackage("markdown")} disabled={!exportReady}><FileText size={13} /> Export Markdown</button>
           <button className="btn" onClick={() => handleExportReviewPackage("pdf")}><Lock size={13} /> Export PDF placeholder</button>
         </div>
         {!exportReady && (
           <div className="status-box status-warning" style={{ marginBottom: 12 }}>
-            Select a primary estimation run, generate the report, and run claim audit before exporting the complete design and analysis package.
+            Review missing items and unresolved warnings before exporting.
+          </div>
+        )}
+        {!claimAudit && (
+          <div className="status-box status-warning" style={{ marginBottom: 12 }}>
+            Run claim audit before export.
           </div>
         )}
         {reportDraft ? (
@@ -6572,9 +6649,24 @@ function ReviewView({ state, actions }) {
             <div className="pattern-row"><span>Report title</span><span>{reportDraft.package_title || reportDraft.title || reportDraft.report_title}</span></div>
             <div className="pattern-row"><span>Status</span><span className={reportDraft.ready_for_export ? "chip chip-success" : "chip chip-warning"}>{reportDraft.status || "draft"}</span></div>
             <div className="pattern-row"><span>Sections</span><span className="mono">{Array.isArray(reportDraft.sections) ? reportDraft.sections.length : Object.keys(reportDraft.sections || {}).length}</span></div>
+            <div className="pattern-row"><span>Draft history</span><span className="mono">{reportHistory.length} version(s)</span></div>
             {(reportDraft.unresolved_warnings || reportDraft.warnings || []).map((warning, index) => (
               <div className="helper" style={{ marginTop: 6 }} key={`${warning}-${index}`}><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>
             ))}
+            {isEditingReport ? (
+              <textarea
+                className="text-input"
+                value={reportPreview}
+                onChange={(event) => setReportPreview(event.target.value)}
+                onBlur={() => saveReportVersion("User-edited draft", reportPreview, reportDraft, claimAudit)}
+                rows={16}
+                style={{ marginTop: 12, width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", lineHeight: 1.55 }}
+              />
+            ) : (
+              <pre className="report-preview" style={{ marginTop: 12, whiteSpace: "pre-wrap", maxHeight: 360, overflow: "auto" }}>
+                {reportPreview || reportToMarkdown(reportDraft, { ...state, reportClaimAudit: claimAudit })}
+              </pre>
+            )}
           </>
         ) : (
           <div className="helper"><Info size={13} /> Generate Report to preview backend report sections, missing items, warnings, and export options.</div>

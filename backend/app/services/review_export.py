@@ -153,6 +153,17 @@ def _collect_unresolved_warnings(payload: dict[str, Any], estimation_summary: di
     return [str(item) for item in warnings if item]
 
 
+def _unique_strings(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
 def _section(section_id: str, title: str, content: str, status: str = "complete", warnings: list[str] | None = None, evidence: list[Any] | None = None) -> dict[str, Any]:
     return {
         "section_id": section_id,
@@ -201,6 +212,8 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         missing_required.append("analysis_strategy")
     if not estimation_summary.get("available"):
         missing_required.append("selected_primary_estimation_run")
+    if unresolved_warnings and not preferences.get("unresolved_warnings_acknowledged", False):
+        missing_required.append("unresolved_warnings_acknowledged")
 
     limitations = [
         "This package supports review and reporting. It does not prove causality.",
@@ -254,7 +267,12 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
     if not preferences.get("include_evidence_table", True):
         sections = [section for section in sections if section["section_id"] != "rag_evidence"]
 
-    ready_for_export = not any(item for item in missing_required if item != "selected_primary_estimation_run")
+    blocking_required = [
+        item
+        for item in missing_required
+        if item != "selected_primary_estimation_run"
+    ]
+    ready_for_export = not blocking_required
     status = "success" if ready_for_export else "fallback"
 
     return {
@@ -268,9 +286,9 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         "final_design_summary": final_design_summary,
         "selected_estimation_summary": estimation_summary,
         "evidence_summary": evidence_summary,
-        "unresolved_warnings": unresolved_warnings,
-        "limitations": limitations,
-        "missing_required_items": missing_required,
+        "unresolved_warnings": _unique_strings(unresolved_warnings),
+        "limitations": _unique_strings(limitations),
+        "missing_required_items": _unique_strings(missing_required),
         "ready_for_export": ready_for_export,
         "requires_user_review": True,
     }
@@ -422,6 +440,8 @@ def export_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Claim audit has blocking issues. Export content is returned for revision only.")
     if package.get("unresolved_warnings"):
         warnings.append("Unresolved warnings remain and must be acknowledged before external use.")
+    if audit.get("status") in (None, "", "not_run"):
+        warnings.append("Run claim audit before export.")
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     if export_format == "json":

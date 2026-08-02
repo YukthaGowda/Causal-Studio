@@ -956,9 +956,35 @@ function assistantActionForPrompt(pageKey, prompt) {
   return "interpret";
 }
 
+function acceptedExtensions(accept) {
+  return (accept || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.startsWith("."));
+}
+
+function splitAcceptedFiles(files, accept) {
+  const extensions = acceptedExtensions(accept);
+  if (!extensions.length) return { accepted: files, rejected: [] };
+  return files.reduce((acc, file) => {
+    const lowerName = file.name.toLowerCase();
+    const allowed = extensions.some((ext) => lowerName.endsWith(ext));
+    acc[allowed ? "accepted" : "rejected"].push(file);
+    return acc;
+  }, { accepted: [], rejected: [] });
+}
+
 function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
+  function handleFiles(fileList) {
+    const files = Array.from(fileList || []);
+    const { accepted, rejected } = splitAcceptedFiles(files, accept);
+    if (rejected.length > 0) {
+      window.alert(`Unsupported file type: ${rejected.map((file) => file.name).join(", ")}. Accepted formats: ${acceptedExtensions(accept).join(", ") || "listed formats"}.`);
+    }
+    if (accepted.length > 0) onFiles(multiple ? accepted : accepted.slice(0, 1));
+  }
   return (
     <div
       className={`dropzone ${dragOver ? "dropzone-active" : ""} ${compact ? "dropzone-compact" : ""}`}
@@ -967,7 +993,7 @@ function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        if (e.dataTransfer.files?.length) onFiles(Array.from(e.dataTransfer.files));
+        if (e.dataTransfer.files?.length) handleFiles(e.dataTransfer.files);
       }}
     >
       <UploadCloud size={compact ? 18 : 22} className="dropzone-icon" />
@@ -985,7 +1011,7 @@ function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
         accept={accept}
         style={{ display: "none" }}
         onChange={(e) => {
-          if (e.target.files?.length) onFiles(Array.from(e.target.files));
+          if (e.target.files?.length) handleFiles(e.target.files);
           e.target.value = "";
         }}
       />
@@ -1156,6 +1182,7 @@ const STYLE = `
   .backend-status-warn { background: #FFF7ED; border-color: #FED7AA; color: #B45309; }
   .action-note { margin-top: 8px; border-radius: 8px; background: #F8FAFC; border: 1px solid var(--border); padding: 8px 10px; color: var(--text-2); font-size: 11.5px; line-height: 1.4; }
   .action-note-success { background: #ECFDF5; border-color: #BBF7D0; color: #047857; }
+  .action-note-warning { background: #FFFBEB; border-color: #FDE68A; color: #92400E; }
   .action-note-error { background: #FFF1F2; border-color: #FECDD3; color: #BE123C; }
   .button-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .real-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
@@ -1483,7 +1510,7 @@ function ProjectSetupView({ state, actions }) {
         <p className="card-desc">The raw data files collected for your study — EMA surveys, wearable sensor exports, smartphone logs, clinical records, or baseline assessments. Upload one file per data source; you can add more later.</p>
         <div className="upload-detail-box">
           <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>CSV</span></div>
-          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>ema_daily_survey.csv &nbsp;·&nbsp; actigraphy_30day.csv &nbsp;·&nbsp; baseline_clinical.json</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>ema_daily_survey.csv &nbsp;·&nbsp; actigraphy_30day.csv &nbsp;·&nbsp; baseline_clinical.csv</span></div>
           <div className="upload-detail-row"><span className="upload-detail-label">Must include</span><span>A participant identifier column (e.g. <code>participant_id</code>), at least one timestamp column, and the variables you plan to treat as exposure or outcome.</span></div>
         </div>
         <div className="helper" style={{ marginTop: 0, marginBottom: 12 }}>
@@ -1505,7 +1532,7 @@ function ProjectSetupView({ state, actions }) {
             onReplace={() => {
               const inp = document.createElement("input");
               inp.type = "file";
-              inp.accept = ".csv,.tsv,.json";
+              inp.accept = ".csv";
               inp.onchange = (e) => replaceDataset(ds.id, e.target.files[0]);
               inp.click();
             }}
@@ -1721,6 +1748,16 @@ function DataFoundationView({ state, actions }) {
   const selectedSchema = selectedDataset?.schema;
   const parsedRows = schemaRows(selectedSchema, 40);
   const missingnessRows = topMissingness(selectedSchema, 6);
+  const hasRealSchema = Boolean(selectedSchema?.column_names?.length);
+  const realIdColumns = selectedSchema?.possible_id_columns || [];
+  const realTimestampColumns = selectedSchema?.possible_timestamp_date_columns || [];
+  const highMissingRows = missingnessRows.filter((row) => row.pct >= 30);
+  const stableStructureRows = hasRealSchema
+    ? parsedRows.filter((row) => ["Identifier", "Timestamp", "Baseline"].includes(row.tag)).slice(0, 8)
+    : BASELINE_VARIABLES.map((name) => ({ name, tag: "Baseline" }));
+  const repeatedStructureRows = hasRealSchema
+    ? parsedRows.filter((row) => !["Identifier", "Baseline"].includes(row.tag)).slice(0, 12)
+    : DATA_SCHEMA.filter((v) => v.frequency).map((v) => ({ name: v.name, tag: v.frequency }));
 
   const parsedOk = datasets.length > 0 && !datasets.some((d) => d.status === "blocking");
   const participantFields = [...new Set(datasets.map((d) => d.participantField).filter(Boolean))];
@@ -1773,10 +1810,22 @@ function DataFoundationView({ state, actions }) {
           onLock={(val) => lockContent("dataSummary", val)}
           onUnlock={() => unlockContent("dataSummary")}
         />
+        {hasRealSchema && (
+          <div className="real-summary-grid">
+            <div className="real-summary-card"><span>Rows parsed</span><strong>{selectedSchema.number_of_rows?.toLocaleString()}</strong></div>
+            <div className="real-summary-card"><span>Columns parsed</span><strong>{selectedSchema.number_of_columns}</strong></div>
+            <div className="real-summary-card"><span>Possible IDs</span><strong>{formatList(realIdColumns)}</strong></div>
+            <div className="real-summary-card"><span>Timing fields</span><strong>{formatList(realTimestampColumns)}</strong></div>
+            <div className="real-summary-card real-summary-card-wide"><span>High missingness</span><strong>{highMissingRows.length ? highMissingRows.slice(0, 4).map((row) => `${row.name} ${row.pct.toFixed(2)}%`).join(", ") : "None above 30%"}</strong></div>
+            <div className="real-summary-card real-summary-card-wide"><span>Phase 2 labels</span><strong>Descriptive structure only; causal roles are assigned later.</strong></div>
+          </div>
+        )}
         {hasData && (
           <div className="unit-callout" style={{ marginTop: 8 }}>
             <Compass size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-            Observation unit: participant-day \u2014 {participants} participants, up to {days} days each (up to {maxRows.toLocaleString()} possible rows per variable).
+            {hasRealSchema
+              ? `Backend schema loaded: ${selectedSchema.number_of_rows?.toLocaleString()} rows, ${selectedSchema.number_of_columns} columns, ${formatList(realIdColumns, "no obvious ID field")}, and ${formatList(realTimestampColumns, "no obvious timing field")}.`
+              : `Fallback structure estimate: participant-day - ${participants} participants, up to ${days} days each (up to ${maxRows.toLocaleString()} possible rows per variable).`}
           </div>
         )}
       </div>
@@ -1818,18 +1867,18 @@ function DataFoundationView({ state, actions }) {
 
       <div className="two-col">
         <div className="card">
-          <div className="card-head"><div className="card-title">Baseline variables</div><CardInfo text="Variables measured once at enrollment — e.g., age, sex, diagnosis. These are stable characteristics and strong candidates for confounders in the causal model." /></div>
-          <p className="card-desc">Collected once, at or before enrollment.</p>
+          <div className="card-head"><div className="card-title">Stable or linking fields</div><CardInfo text="Fields that look like identifiers, timestamps, or baseline descriptors. Phase 2 describes measurement structure only; it does not assign final causal roles." /></div>
+          <p className="card-desc">{hasRealSchema ? "Detected from the parsed backend schema." : "Shown from demo examples until a CSV schema is parsed."}</p>
           <ul className="plain-list">
-            {BASELINE_VARIABLES.map((v) => <li key={v}>{v}</li>)}
+            {stableStructureRows.map((v) => <li key={v.name || v}>{v.name || v} {v.tag && <span className="chip chip-muted freq-tag">{v.tag}</span>}</li>)}
           </ul>
         </div>
         <div className="card">
-          <div className="card-head"><div className="card-title">Time-varying variables</div><CardInfo text="Variables that change across repeated measurements — e.g., daily EMA scores, actigraphy. The primary candidates for exposure and outcome in a within-person causal design." /></div>
-          <p className="card-desc">Repeated across the study period.</p>
+          <div className="card-head"><div className="card-title">Repeated or measured fields</div><CardInfo text="Fields that appear time-indexed, self-reported, wearable-derived, smartphone-derived, or otherwise measured repeatedly. Causal labels are intentionally deferred to later phases." /></div>
+          <p className="card-desc">{hasRealSchema ? "Descriptive labels inferred from column names and backend schema metadata." : "Repeated across the study period in the demo scaffold."}</p>
           <ul className="plain-list">
-            {DATA_SCHEMA.filter((v) => v.frequency).map((v) => (
-              <li key={v.name}><span className="mono">{v.name}</span> <span className="chip chip-muted freq-tag">{v.frequency}</span></li>
+            {repeatedStructureRows.map((v) => (
+              <li key={v.name}><span className="mono">{v.name}</span> <span className="chip chip-muted freq-tag">{v.tag}</span></li>
             ))}
           </ul>
         </div>
@@ -2061,6 +2110,11 @@ function ExploreView({ state, actions, onGoNext }) {
               <li key={`${warning.warning_type}-${index}`}>{warning.message}</li>
             ))}
           </ul>
+        )}
+        {!broadExploration && (
+          <div className="action-note action-note-warning">
+            No backend exploration result is loaded yet. The charts below remain frontend demo visualizations until "Run broad exploration" succeeds.
+          </div>
         )}
         <div className="helper">
           <ShieldAlert size={13} /> Numerical results must come from Python/R computation, not the LLM.
@@ -4160,6 +4214,16 @@ function GraphView({ state, actions, onGoNext }) {
         {graphAlternatives?.length > 0 && <span className="chip chip-muted">{graphAlternatives.length} saved alternative{graphAlternatives.length === 1 ? "" : "s"}</span>}
         {!canUseGraphBackend && <span className="chip chip-warning">Run feasibility checks before generating a graph.</span>}
       </div>
+      {graphValidationResult && (
+        <div className={`action-note ${graphValidationResult.safe_to_continue ? "action-note-warning" : "action-note-error"}`} style={{ margin: "10px 16px 0" }}>
+          <strong>Graph validation:</strong> {graphValidationResult.safe_to_continue
+            ? "No blocking graph error was returned. Review every warning before continuing; edges remain design assumptions, not proven causal facts."
+            : "Blocking graph errors were returned. Fix cycles, self-loops, invalid nodes, or invalid role/timing choices before continuing."}
+          {(graphValidationResult.errors?.length || graphValidationResult.warnings?.length) ? (
+            <span> Errors: {graphValidationResult.errors?.length || 0}; warnings: {graphValidationResult.warnings?.length || 0}.</span>
+          ) : null}
+        </div>
+      )}
 
       {/* ── Graph Regenerate / Version / Lock toolbar ── */}
       <div className={`graph-regen-bar${graphLocked ? " graph-regen-bar-locked" : ""}`}>
@@ -5549,6 +5613,7 @@ function EstimationView({ state, actions, onGoNext }) {
       <div className="ps-header">
         <h1>Estimation &amp; calculation</h1>
         <p>Run your pre-specified analysis, review results and diagnostics, and confirm a primary result before continuing to Review &amp; Export.</p>
+        <span className="note"><ShieldAlert size={12} /> Proof-of-concept calculation support only: backend results help review the design, but they do not prove a causal effect or support clinical decisions.</span>
       </div>
 
       {/* ── Section 1: Pre-Run Config Summary ── */}
@@ -6209,7 +6274,7 @@ function ReviewView({ state, actions }) {
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
-  const exportReady = Boolean(reportDraft && claimAudit && claimAudit.status !== "fail");
+  const exportReady = Boolean(reportDraft && claimAudit && claimAudit.status !== "fail" && selectedRun && signoffBlockers.length === 0);
 
   function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
     setReportHistory((prev) => [
@@ -6350,6 +6415,21 @@ function ReviewView({ state, actions }) {
     if (!reportDraft || !claimAudit) {
       showToast("Generate the report and run claim audit before export.");
       pushAssistantNote("Generate the report and run claim audit before export so the package includes diagnostics, warnings, and claim-safety checks.");
+      return;
+    }
+    if (!selectedRun) {
+      showToast("Select a primary Phase 8 run before export.");
+      pushAssistantNote("Phase 9 export is blocked until a Phase 8 estimation run is selected as primary. This keeps the report tied to a specific computed run and diagnostics.");
+      return;
+    }
+    if (signoffBlockers.length > 0) {
+      showToast("Resolve sign-off blockers before export.");
+      pushAssistantNote(`Export is blocked: ${signoffBlockers.join(" ")}`);
+      return;
+    }
+    if (claimAudit.status === "fail" || (claimAudit.flagged_claims || []).some((item) => item.severity === "blocking")) {
+      showToast("Claim audit has blocking issues.");
+      pushAssistantNote("Export is blocked until unsafe causal or predictive claims are revised and claim audit is rerun.");
       return;
     }
     const assembled = reportDraft || (backendStatus.connected ? await assembleReviewPackage(reviewExportPayloadFromState(state)) : reportDraft);
@@ -6846,12 +6926,12 @@ export default function CausalStudioApp() {
   useEffect(() => {
     let active = true;
     checkBackendHealth()
-      .then(() => {
-        if (active) setBackendStatus({ checked: true, connected: true, message: "Backend connected" });
+      .then((health) => {
+        if (active) setBackendStatus({ checked: true, connected: true, message: `Connected to ${health.api_base_url || "FastAPI"}` });
       })
-      .catch(() => {
+      .catch((error) => {
         if (!active) return;
-        setBackendStatus({ checked: true, connected: false, message: "Backend unavailable - demo mode active" });
+        setBackendStatus({ checked: true, connected: false, message: friendlyError(error, "Backend unavailable - demo mode active") });
         pushAssistantNote("Backend unavailable - demo mode active. Real upload, RAG, and Python exploration require FastAPI to be running.", "setup");
       });
     return () => {
@@ -6864,17 +6944,6 @@ export default function CausalStudioApp() {
     pushAssistantNote("Checking this now - confirming it is a valid dataset file, scanning columns and row structure...");
     setAction("datasetUpload", { kind: "loading", message: "Uploading dataset..." });
 
-    if (!backendStatus.connected) {
-      const additions = files.map((f, i) => {
-        const seed = seedFromName(f.name, datasets.length + i);
-        return { id: `${f.name}-${Date.now()}-${i}`, name: f.name, size: f.size || 200000 + (seed % 900000), expanded: false, ...genDatasetDetail(f, seed) };
-      });
-      setDatasets((d) => [...d, ...additions]);
-      setAction("datasetUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
-      pushAssistantNote("Backend unavailable - demo mode active. Start FastAPI to upload and parse real datasets.");
-      return;
-    }
-
     const additions = [];
     for (const [i, f] of files.entries()) {
       const seed = seedFromName(f.name, datasets.length + i);
@@ -6886,7 +6955,7 @@ export default function CausalStudioApp() {
               detected: "The file could not be parsed. No valid delimiter or header row was found.",
               issues: "The structure of the file does not match a supported tabular format.",
               why: "Downstream steps cannot analyze a dataset that cannot be read.",
-              action: "Re-export the file as CSV, TSV, or JSON and upload again.",
+              action: "Re-export the file as CSV and upload again.",
               blocking: true,
             },
           }
@@ -6895,6 +6964,7 @@ export default function CausalStudioApp() {
         const uploaded = await uploadDataset(f);
         const schema = await getDatasetSchema(uploaded.saved_filename);
         additions.push(schemaToDataset(f, uploaded, schema, fallback));
+        setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
         pushAssistantNote(buildRealSchemaAssistantMessage(schema));
       } catch (error) {
         additions.push({
@@ -6929,7 +6999,7 @@ export default function CausalStudioApp() {
       const blocked = additions.find((a) => a.status === "blocking");
       const flagged = additions.find((a) => a.status !== "ready" && a.status !== "blocking");
       if (blocked) {
-        pushAssistantNote(`${blocked.name} could not be parsed — re-export as CSV, TSV, or JSON and upload again.`);
+        pushAssistantNote(`${blocked.name} could not be parsed - re-export as CSV and upload again.`);
       } else if (flagged) {
         pushAssistantNote(`${flagged.name} uploaded with a flag — open "Validation details" to see what needs attention.`);
       } else {
@@ -6960,17 +7030,14 @@ export default function CausalStudioApp() {
     const f = files[0];
     if (!f) return;
     setAction("dictionaryUpload", { kind: "loading", message: "Uploading data dictionary..." });
-    if (backendStatus.connected) {
-      try {
-        await uploadDocument(f, "data_dictionary");
-        setAction("dictionaryUpload", { kind: "success", message: "Data dictionary stored in the backend document library." });
-      } catch (error) {
-        setAction("dictionaryUpload", { kind: "error", message: friendlyError(error, "Data dictionary upload failed.") });
-        pushAssistantNote(`Data dictionary upload failed: ${friendlyError(error)} Backend document upload currently accepts PDF, DOCX, and TXT.`);
-        return;
-      }
-    } else {
-      setAction("dictionaryUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    try {
+      await uploadDocument(f, "data_dictionary");
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      setAction("dictionaryUpload", { kind: "success", message: "Data dictionary stored in the backend document library." });
+    } catch (error) {
+      setAction("dictionaryUpload", { kind: "error", message: friendlyError(error, "Data dictionary upload failed.") });
+      pushAssistantNote(`Data dictionary upload failed: ${friendlyError(error)} Backend document upload currently accepts PDF, DOCX, and TXT.`);
+      return;
     }
     const seed = seedFromName(f.name, 7);
     const total = 90 + (seed % 20);
@@ -6993,17 +7060,14 @@ export default function CausalStudioApp() {
   async function addProtocol(files) {
     if (!files?.[0]) return;
     setAction("protocolUpload", { kind: "loading", message: "Uploading protocol..." });
-    if (backendStatus.connected) {
-      try {
-        await uploadDocument(files[0], "protocol");
-        setAction("protocolUpload", { kind: "success", message: "Protocol stored in the backend document library." });
-      } catch (error) {
-        setAction("protocolUpload", { kind: "error", message: friendlyError(error, "Protocol upload failed.") });
-        pushAssistantNote(`Protocol upload failed: ${friendlyError(error)}`);
-        return;
-      }
-    } else {
-      setAction("protocolUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    try {
+      await uploadDocument(files[0], "protocol");
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      setAction("protocolUpload", { kind: "success", message: "Protocol stored in the backend document library." });
+    } catch (error) {
+      setAction("protocolUpload", { kind: "error", message: friendlyError(error, "Protocol upload failed.") });
+      pushAssistantNote(`Protocol upload failed: ${friendlyError(error)}`);
+      return;
     }
     setProtocol({ name: files[0].name, size: files[0].size });
     pushAssistantNote(`Protocol uploaded ✓ — I'll use it to flag any design-vs-data inconsistencies in Data Foundation.`);
@@ -7011,17 +7075,14 @@ export default function CausalStudioApp() {
   async function addPapers(files) {
     if (!files?.length) return;
     setAction("paperUpload", { kind: "loading", message: "Uploading research papers..." });
-    if (backendStatus.connected) {
-      try {
-        for (const file of files) await uploadDocument(file, "research_paper");
-        setAction("paperUpload", { kind: "success", message: "Research papers stored in the backend document library." });
-      } catch (error) {
-        setAction("paperUpload", { kind: "error", message: friendlyError(error, "Research paper upload failed.") });
-        pushAssistantNote(`Research paper upload failed: ${friendlyError(error)}`);
-        return;
-      }
-    } else {
-      setAction("paperUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    try {
+      for (const file of files) await uploadDocument(file, "research_paper");
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      setAction("paperUpload", { kind: "success", message: "Research papers stored in the backend document library." });
+    } catch (error) {
+      setAction("paperUpload", { kind: "error", message: friendlyError(error, "Research paper upload failed.") });
+      pushAssistantNote(`Research paper upload failed: ${friendlyError(error)}`);
+      return;
     }
     const additions = files.map((f, i) => {
       const seed = seedFromName(f.name, i);
@@ -7039,17 +7100,14 @@ export default function CausalStudioApp() {
   async function addGuidelines(files) {
     if (!files?.length) return;
     setAction("guidelineUpload", { kind: "loading", message: "Uploading guidance documents..." });
-    if (backendStatus.connected) {
-      try {
-        for (const file of files) await uploadDocument(file, "domain_guidance");
-        setAction("guidelineUpload", { kind: "success", message: "Guidance documents stored in the backend document library." });
-      } catch (error) {
-        setAction("guidelineUpload", { kind: "error", message: friendlyError(error, "Guidance upload failed.") });
-        pushAssistantNote(`Guidance upload failed: ${friendlyError(error)}`);
-        return;
-      }
-    } else {
-      setAction("guidelineUpload", { kind: "error", message: "Backend unavailable - demo mode active." });
+    try {
+      for (const file of files) await uploadDocument(file, "domain_guidance");
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      setAction("guidelineUpload", { kind: "success", message: "Guidance documents stored in the backend document library." });
+    } catch (error) {
+      setAction("guidelineUpload", { kind: "error", message: friendlyError(error, "Guidance upload failed.") });
+      pushAssistantNote(`Guidance upload failed: ${friendlyError(error)}`);
+      return;
     }
     const additions = files.map((f, i) => {
       const seed = seedFromName(f.name, i + 3);
@@ -7060,13 +7118,10 @@ export default function CausalStudioApp() {
   }
   async function handleDocumentIngestion() {
     setAction("documentIngestion", { kind: "loading", message: "Ingesting uploaded documents into ChromaDB..." });
-    if (!backendStatus.connected) {
-      setAction("documentIngestion", { kind: "error", message: "Backend unavailable - start FastAPI to ingest documents." });
-      return;
-    }
     try {
       const result = await ingestDocuments();
       const status = await getIngestionStatus();
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setIngestionInfo({ ...status, lastResult: result });
       const chunkCount = result.number_of_chunks_created ?? result.chunks_created ?? result.number_of_chunks ?? status.number_of_stored_chunks ?? status.stored_chunks ?? 0;
       setAction("documentIngestion", { kind: "success", message: `Documents ingested. ${chunkCount} chunks available for RAG search.` });
@@ -7078,12 +7133,9 @@ export default function CausalStudioApp() {
   }
   async function handleDictionaryRagCheck() {
     setAction("ragCheck", { kind: "loading", message: "Checking the document knowledge base..." });
-    if (!backendStatus.connected) {
-      setAction("ragCheck", { kind: "error", message: "Backend unavailable - start FastAPI to search RAG evidence." });
-      return;
-    }
     try {
       const response = await searchRag("What evidence or guidance helps interpret the uploaded study variables and measurement timing?", 3);
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       const count = response.number_of_results ?? response.results?.length ?? 0;
       const sources = [...new Set((response.results || []).map((item) => item.source_filename || item.metadata?.source_filename).filter(Boolean))];
       const summary = count
@@ -7103,13 +7155,14 @@ export default function CausalStudioApp() {
       setAction("broadExploration", { kind: "error", message: "Upload a CSV dataset before running broad exploration." });
       return;
     }
-    if (!backendStatus.connected || !dataset.savedFilename) {
-      setAction("broadExploration", { kind: "error", message: "Backend unavailable - demo charts remain visible." });
+    if (!dataset.savedFilename) {
+      setAction("broadExploration", { kind: "error", message: "Upload and parse a CSV dataset before running backend broad exploration." });
       return;
     }
     setAction("broadExploration", { kind: "loading", message: "Running Python broad exploration..." });
     try {
       const result = await runBroadExploration(realDatasetFilename(dataset));
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setBroadExploration(result);
       const warningCount = result.data_quality_warnings?.length || 0;
       setAction("broadExploration", { kind: "success", message: `Broad exploration complete with ${warningCount} data-quality note${warningCount === 1 ? "" : "s"}.` });
@@ -8138,10 +8191,10 @@ export default function CausalStudioApp() {
     const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation", "review"].includes(page);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
-    if (!useBackendAction || !backendStatus.connected) {
+    if (!useBackendAction) {
       const fallbackText = localAssistantAnswer(prompt);
       setAssistantThinking(true);
-      setAssistantThinkingMessage(backendStatus.connected ? "Thinking..." : "Assistant is using local fallback because the backend is unavailable...");
+      setAssistantThinkingMessage("Thinking...");
       setTimeout(() => {
         setAssistantThinking(false);
         setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: fallbackText }] }));
@@ -8165,9 +8218,10 @@ export default function CausalStudioApp() {
         ...t,
         [page]: [...(t[page] || []), { role: "assistant", text: response.assistant_message || localAssistantAnswer(prompt) }],
       }));
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       return response.assistant_message || localAssistantAnswer(prompt);
     } catch (error) {
-      const fallbackText = `I could not complete this assistant action. Please check backend connection.\n\n${localAssistantAnswer(prompt)}`;
+      const fallbackText = `I could not complete this assistant action through FastAPI: ${friendlyError(error)}\n\n${localAssistantAnswer(prompt)}`;
       setAssistantThreads((t) => ({
         ...t,
         [page]: [

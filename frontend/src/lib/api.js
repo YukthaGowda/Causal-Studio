@@ -1,5 +1,18 @@
-export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const LOCAL_API_CANDIDATES = [
+  "http://127.0.0.1:8000",
+  "http://localhost:8000",
+  "http://127.0.0.1:8010",
+  "http://localhost:8010",
+  "http://127.0.0.1:8005",
+  "http://localhost:8005",
+];
+
+export let API_BASE_URL = configuredApiBaseUrl || LOCAL_API_CANDIDATES[0];
+
+function apiBaseCandidates() {
+  return [...new Set([configuredApiBaseUrl, API_BASE_URL, ...LOCAL_API_CANDIDATES].filter(Boolean))];
+}
 
 async function parseJsonResponse(response, fallbackMessage) {
   let data = null;
@@ -20,15 +33,35 @@ async function parseJsonResponse(response, fallbackMessage) {
   return data;
 }
 
+async function apiFetch(path, options) {
+  const candidates = apiBaseCandidates();
+  const errors = [];
+
+  for (const baseUrl of candidates) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, options);
+      API_BASE_URL = baseUrl;
+      return response;
+    } catch (error) {
+      errors.push(`${baseUrl}: ${error?.message || "network error"}`);
+    }
+  }
+
+  throw new Error(
+    `Could not reach the FastAPI backend. Tried ${candidates.join(", ")}. Start FastAPI or set VITE_API_BASE_URL. ${errors.at(-1) || ""}`.trim()
+  );
+}
+
 export async function checkBackendHealth() {
-  const response = await fetch(`${API_BASE_URL}/health`);
-  return parseJsonResponse(response, "Backend health check failed.");
+  const response = await apiFetch("/health");
+  const data = await parseJsonResponse(response, "Backend health check failed.");
+  return { ...data, api_base_url: API_BASE_URL };
 }
 
 export async function uploadDataset(file) {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await fetch(`${API_BASE_URL}/datasets/upload`, {
+  const response = await apiFetch("/datasets/upload", {
     method: "POST",
     body: formData,
   });
@@ -36,12 +69,12 @@ export async function uploadDataset(file) {
 }
 
 export async function listDatasets() {
-  const response = await fetch(`${API_BASE_URL}/datasets`);
+  const response = await apiFetch("/datasets");
   return parseJsonResponse(response, "Could not list datasets.");
 }
 
 export async function getDatasetSchema(filename) {
-  const response = await fetch(`${API_BASE_URL}/datasets/${encodeURIComponent(filename)}/schema`);
+  const response = await apiFetch(`/datasets/${encodeURIComponent(filename)}/schema`);
   return parseJsonResponse(response, "Dataset schema parsing failed.");
 }
 
@@ -49,7 +82,7 @@ export async function uploadDocument(file, category) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("category", category);
-  const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+  const response = await apiFetch("/documents/upload", {
     method: "POST",
     body: formData,
   });
@@ -57,24 +90,24 @@ export async function uploadDocument(file, category) {
 }
 
 export async function listDocuments() {
-  const response = await fetch(`${API_BASE_URL}/documents`);
+  const response = await apiFetch("/documents");
   return parseJsonResponse(response, "Could not list documents.");
 }
 
 export async function ingestDocuments() {
-  const response = await fetch(`${API_BASE_URL}/documents/ingest`, {
+  const response = await apiFetch("/documents/ingest", {
     method: "POST",
   });
   return parseJsonResponse(response, "Document ingestion failed.");
 }
 
 export async function getIngestionStatus() {
-  const response = await fetch(`${API_BASE_URL}/documents/ingest/status`);
+  const response = await apiFetch("/documents/ingest/status");
   return parseJsonResponse(response, "Could not check document ingestion status.");
 }
 
 export async function searchRag(query, topK = 5) {
-  const response = await fetch(`${API_BASE_URL}/rag/search`, {
+  const response = await apiFetch("/rag/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query, top_k: topK }),
@@ -83,7 +116,7 @@ export async function searchRag(query, topK = 5) {
 }
 
 export async function runBroadExploration(filename) {
-  const response = await fetch(`${API_BASE_URL}/exploration/broad`, {
+  const response = await apiFetch("/exploration/broad", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ dataset_filename: filename }),
@@ -92,7 +125,7 @@ export async function runBroadExploration(filename) {
 }
 
 export async function runFeasibilityCheck(payload) {
-  const response = await fetch(`${API_BASE_URL}/feasibility/check`, {
+  const response = await apiFetch("/feasibility/check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -101,7 +134,7 @@ export async function runFeasibilityCheck(payload) {
 }
 
 export async function assistantAction(payload) {
-  const response = await fetch(`${API_BASE_URL}/assistant/action`, {
+  const response = await apiFetch("/assistant/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -110,7 +143,7 @@ export async function assistantAction(payload) {
 }
 
 export async function generateQuestionCandidates(payload) {
-  const response = await fetch(`${API_BASE_URL}/questions/generate-candidates`, {
+  const response = await apiFetch("/questions/generate-candidates", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -119,7 +152,7 @@ export async function generateQuestionCandidates(payload) {
 }
 
 export async function recommendCandidateVariables(payload) {
-  const response = await fetch(`${API_BASE_URL}/variables/recommend-candidates`, {
+  const response = await apiFetch("/variables/recommend-candidates", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -128,7 +161,7 @@ export async function recommendCandidateVariables(payload) {
 }
 
 export async function generateCausalGraph(payload) {
-  const response = await fetch(`${API_BASE_URL}/causal-graph/generate`, {
+  const response = await apiFetch("/causal-graph/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -137,7 +170,7 @@ export async function generateCausalGraph(payload) {
 }
 
 export async function validateCausalGraph(payload) {
-  const response = await fetch(`${API_BASE_URL}/causal-graph/validate`, {
+  const response = await apiFetch("/causal-graph/validate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -146,7 +179,7 @@ export async function validateCausalGraph(payload) {
 }
 
 export async function generateAnalysisStrategy(payload) {
-  const response = await fetch(`${API_BASE_URL}/analysis-strategy/generate`, {
+  const response = await apiFetch("/analysis-strategy/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -155,7 +188,7 @@ export async function generateAnalysisStrategy(payload) {
 }
 
 export async function validateAnalysisStrategy(payload) {
-  const response = await fetch(`${API_BASE_URL}/analysis-strategy/validate`, {
+  const response = await apiFetch("/analysis-strategy/validate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -164,7 +197,7 @@ export async function validateAnalysisStrategy(payload) {
 }
 
 export async function runEstimation(payload) {
-  const response = await fetch(`${API_BASE_URL}/estimation/run`, {
+  const response = await apiFetch("/estimation/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -173,12 +206,12 @@ export async function runEstimation(payload) {
 }
 
 export async function listEstimationRuns() {
-  const response = await fetch(`${API_BASE_URL}/estimation/runs`);
+  const response = await apiFetch("/estimation/runs");
   return parseJsonResponse(response, "Could not list estimation runs.");
 }
 
 export async function validateEstimationConfig(payload) {
-  const response = await fetch(`${API_BASE_URL}/estimation/validate-config`, {
+  const response = await apiFetch("/estimation/validate-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -187,7 +220,7 @@ export async function validateEstimationConfig(payload) {
 }
 
 export async function selectPrimaryEstimationRun(payload) {
-  const response = await fetch(`${API_BASE_URL}/estimation/select-primary`, {
+  const response = await apiFetch("/estimation/select-primary", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -196,7 +229,7 @@ export async function selectPrimaryEstimationRun(payload) {
 }
 
 export async function interpretEstimation(payload) {
-  const response = await fetch(`${API_BASE_URL}/estimation/interpret`, {
+  const response = await apiFetch("/estimation/interpret", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -205,7 +238,7 @@ export async function interpretEstimation(payload) {
 }
 
 export async function generateReport(payload) {
-  const response = await fetch(`${API_BASE_URL}/reports/generate`, {
+  const response = await apiFetch("/reports/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -214,7 +247,7 @@ export async function generateReport(payload) {
 }
 
 export async function auditClaims(payload) {
-  const response = await fetch(`${API_BASE_URL}/reports/audit-claims`, {
+  const response = await apiFetch("/reports/audit-claims", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -223,7 +256,7 @@ export async function auditClaims(payload) {
 }
 
 export async function assembleReviewPackage(payload) {
-  const response = await fetch(`${API_BASE_URL}/review-export/assemble`, {
+  const response = await apiFetch("/review-export/assemble", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -232,7 +265,7 @@ export async function assembleReviewPackage(payload) {
 }
 
 export async function runClaimAudit(payload) {
-  const response = await fetch(`${API_BASE_URL}/review-export/claim-audit`, {
+  const response = await apiFetch("/review-export/claim-audit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -241,7 +274,7 @@ export async function runClaimAudit(payload) {
 }
 
 export async function exportReviewPackage(payload) {
-  const response = await fetch(`${API_BASE_URL}/review-export/export`, {
+  const response = await apiFetch("/review-export/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

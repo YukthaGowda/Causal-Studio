@@ -190,6 +190,35 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
         )
         return " ".join(parts)
 
+    if phase == "phase_7_analysis_strategy":
+        identification = page_state.get("identification_result") or {}
+        validation = page_state.get("analysis_strategy_validation") or {}
+        adjustment_set = page_state.get("adjustment_set") or []
+        estimand = page_state.get("estimand") or {}
+        strategy = page_state.get("strategy") or {}
+        assumptions = page_state.get("assumption_checklist") or []
+        warnings = (
+            identification.get("warnings")
+            or validation.get("warnings")
+            or page_state.get("warnings")
+            or []
+        )
+        parts = [
+            f"Phase 7 identification status: {identification.get('status') or identification.get('identification_status') or 'not run'}.",
+            f"Current adjustment set has {len(adjustment_set)} variable(s): {', '.join(map(str, adjustment_set)) or 'none'}.",
+            f"Estimand: {estimand.get('label') or estimand.get('effect_type') or 'not finalized'}.",
+            f"Estimator family: {strategy.get('estimator_family') or 'not selected'}.",
+            f"Assumption checklist items: {len(assumptions)}.",
+        ]
+        if validation:
+            parts.append(f"Adjustment-set validation status: {validation.get('status', 'unknown')}.")
+        if warnings:
+            parts.append(f"Warnings to review before Phase 8: {' '.join(map(str, warnings[:4]))}")
+        parts.append(
+            "Phase 7 defines the analysis plan only. It does not calculate treatment effects, and backend checks do not prove causal validity."
+        )
+        return " ".join(parts)
+
     if phase == "phase_1_project_setup":
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}

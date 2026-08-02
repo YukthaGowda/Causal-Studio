@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
 from collections import defaultdict
 from typing import Any
 
 import networkx as nx
+from dotenv import load_dotenv
+from openai import OpenAI, OpenAIError
+
+from app.services.causal_questions import DEFAULT_MODEL
 
 
 FORMAL_ID_WARNING = (
@@ -83,9 +89,38 @@ def generate_phase7_analysis_strategy(payload: dict[str, Any]) -> dict[str, Any]
 
     estimand = _estimand(payload, exposure, outcome)
     strategy = _strategy(payload, exposure, outcome, recommended, schema, feasibility)
+    assumption_checklist = _assumption_checklist(recommended, schema, feasibility, warnings)
+    status = "fallback"
+
+    llm_draft = _draft_strategy_with_llm(
+        payload=payload,
+        deterministic_identification={
+            "status": identification_status,
+            "summary": summary,
+            "backdoor_paths": backdoor_paths,
+            "candidate_adjustment_sets": candidate_sets,
+            "recommended_adjustment_set": recommended,
+            "variables_not_to_adjust_for": variables_not_to_adjust,
+            "warnings": warnings,
+        },
+        estimand=estimand,
+        strategy=strategy,
+        assumption_checklist=assumption_checklist,
+    )
+    if llm_draft:
+        status = "success"
+        warnings = [warning for warning in warnings if warning != FALLBACK_WARNING]
+        estimand = _merge_known_keys(estimand, llm_draft.get("estimand"))
+        strategy = _merge_known_keys(strategy, llm_draft.get("strategy"))
+        assumption_checklist = _merge_assumption_checklist(assumption_checklist, llm_draft.get("assumption_checklist"))
+        for warning in llm_draft.get("warnings") or []:
+            warning_text = str(warning).strip()
+            if warning_text:
+                warnings.append(warning_text)
+        warnings = list(dict.fromkeys(warnings))
 
     return {
-        "status": "fallback",
+        "status": status,
         "identification": {
             "status": identification_status,
             "summary": summary,
@@ -98,7 +133,7 @@ def generate_phase7_analysis_strategy(payload: dict[str, Any]) -> dict[str, Any]
         },
         "estimand": estimand,
         "strategy": strategy,
-        "assumption_checklist": _assumption_checklist(recommended, schema, feasibility, warnings),
+        "assumption_checklist": assumption_checklist,
         "warnings": warnings,
         "recommended_next_actions": _next_actions(errors, warnings),
         "requires_user_review": True,
@@ -193,6 +228,137 @@ def _build_graph(raw_graph: dict[str, Any]) -> tuple[nx.DiGraph, list[dict[str, 
             if target not in graph:
                 graph.add_node(target)
     return graph, nodes, edges
+
+
+def _draft_strategy_with_llm(
+    *,
+    payload: dict[str, Any],
+    deterministic_identification: dict[str, Any],
+    estimand: dict[str, Any],
+    strategy: dict[str, Any],
+    assumption_checklist: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    load_dotenv()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = {
+        "confirmed_question": payload.get("confirmed_question") or "",
+        "deterministic_identification": deterministic_identification,
+        "estimand_draft": estimand,
+        "strategy_draft": strategy,
+        "assumption_checklist": assumption_checklist,
+        "feasibility_result": _compact_value(payload.get("feasibility_result") or {}, max_items=14),
+        "schema_summary": _compact_value(payload.get("schema_summary") or {}, max_items=14),
+        "rag_evidence": _compact_evidence(payload.get("rag_evidence") or []),
+        "user_feedback": payload.get("user_feedback") or "",
+        "locked_decisions": _compact_value(payload.get("locked_decisions") or {}, max_items=10),
+        "rules": [
+            "Return JSON only.",
+            "Do not override deterministic identification status, errors, or warnings.",
+            "If deterministic status is not_identified or requires_review, do not claim identified.",
+            "Do not calculate treatment effects, estimates, confidence intervals, p-values, or sample results.",
+            "Do not say causality is proven.",
+            "Draft analysis guidance only.",
+        ],
+        "response_shape": {
+            "estimand": estimand,
+            "strategy": strategy,
+            "assumption_checklist": assumption_checklist,
+            "warnings": ["optional additional caution"],
+        },
+    }
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You draft Phase 7 identification and analysis-strategy guidance for Causal Design Agent. "
+                        "Deterministic backend checks are authoritative. Never produce effect estimates or proof claims."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(prompt, default=str)},
+            ],
+            temperature=0.15,
+        )
+        parsed = _extract_json_object(response.choices[0].message.content or "")
+        return parsed if parsed else None
+    except OpenAIError:
+        return None
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _merge_known_keys(base: dict[str, Any], draft: Any) -> dict[str, Any]:
+    if not isinstance(draft, dict):
+        return base
+    merged = dict(base)
+    for key in base:
+        value = draft.get(key)
+        if value not in (None, "", []):
+            merged[key] = value
+    return merged
+
+
+def _merge_assumption_checklist(base: list[dict[str, Any]], draft: Any) -> list[dict[str, Any]]:
+    if not isinstance(draft, list):
+        return base
+    by_name = {str(item.get("assumption")): item for item in draft if isinstance(item, dict)}
+    merged = []
+    for item in base:
+        name = str(item.get("assumption"))
+        candidate = by_name.get(name)
+        if candidate:
+            merged_item = dict(item)
+            for key in ("status", "rationale", "evidence", "requires_user_review"):
+                value = candidate.get(key)
+                if value not in (None, "", []):
+                    merged_item[key] = value
+            merged_item["requires_user_review"] = True
+            merged.append(merged_item)
+        else:
+            merged.append(item)
+    return merged
+
+
+def _compact_value(value: Any, max_items: int = 12) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _compact_value(v, max_items=max_items) for k, v in list(value.items())[:max_items]}
+    if isinstance(value, list):
+        return [_compact_value(item, max_items=max_items) for item in value[:max_items]]
+    text = str(value)
+    return text[:500] if len(text) > 500 else value
+
+
+def _compact_evidence(rag_evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in rag_evidence[:5]:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        compact.append({
+            "source_filename": item.get("source_filename") or item.get("filename") or metadata.get("source_filename"),
+            "page_number": item.get("page_number") or metadata.get("page_number"),
+            "chunk_index": item.get("chunk_index") or metadata.get("chunk_index"),
+            "snippet": str(item.get("text") or item.get("chunk_text") or item.get("summary") or "")[:500],
+        })
+    return compact
 
 
 def _role_map(nodes: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, str]:

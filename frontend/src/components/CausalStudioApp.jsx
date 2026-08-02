@@ -4918,7 +4918,11 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
         <div className="card">
           <div className="card-head"><div className="card-title">Sensitivity and robustness plan</div><CardInfo text="Planned checks for Phase 8 and final reporting. These are not effect estimates." /></div>
           <h4>Sensitivity plan</h4>
-          <ul className="compact-list">{(strategy.sensitivity_plan || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
+          <textarea
+            rows={6}
+            value={(strategy.sensitivity_plan || []).join("\n")}
+            onChange={(e) => updateAnalysisDraft("strategy", "sensitivity_plan", e.target.value.split("\n").map((item) => item.trim()).filter(Boolean))}
+          />
           <h4>Robustness checks</h4>
           <ul className="compact-list">{(strategy.robustness_checks || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
         </div>
@@ -7873,6 +7877,27 @@ export default function CausalStudioApp() {
         feasibility_result: targetedFeasibilityResult || feasibility || {},
         rag_evidence: ragSummary ? [{ source_filename: "RAG evidence summary", text: ragSummary }] : [],
         safety_note: "Graph edges are assumptions, not proven causal relationships. The LLM can draft graph alternatives, but backend validation checks graph structure.",
+      };
+    }
+
+    if (pageKey === "strategy") {
+      const basePayload = analysisStrategyPayload();
+      return {
+        ...base,
+        phase: "phase_7_analysis_strategy",
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        confirmed_question: questionFields || {},
+        graph: basePayload.graph,
+        graph_validation_result: graphValidationResult || confirmedGraph?.validation || {},
+        feasibility_result: targetedFeasibilityResult || feasibility || {},
+        identification_result: analysisStrategyResult?.identification || {},
+        adjustment_set: editableAdjustmentSet || [],
+        estimand: analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {},
+        strategy: analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {},
+        assumption_checklist: analysisStrategyResult?.assumption_checklist || [],
+        analysis_strategy_validation: analysisStrategyValidation || {},
+        rag_evidence: ragSummary ? [{ source_filename: "RAG evidence summary", text: ragSummary }] : [],
+        safety_note: "Phase 7 defines the analysis plan. It does not calculate treatment effects, and backend checks do not prove causal validity.",
       };
     }
 

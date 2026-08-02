@@ -219,6 +219,44 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
         )
         return " ".join(parts)
 
+    if phase == "phase_8_estimation":
+        result = page_state.get("estimation_result") or page_state.get("latest_estimation_run") or {}
+        raw = result.get("raw") if isinstance(result, dict) else {}
+        if isinstance(raw, dict) and raw:
+            result = raw
+        primary = result.get("primary_result") or result.get("estimate") or {}
+        diagnostics = page_state.get("diagnostics") or result.get("diagnostics") or {}
+        warnings = page_state.get("warnings") or result.get("warnings") or []
+        provenance = page_state.get("provenance") or result.get("provenance") or result.get("reproducibility") or {}
+        if not primary or primary.get("point_estimate") is None:
+            return (
+                "No computed estimate is available to interpret yet. Validate the configuration, run Phase 8 estimation "
+                "in backend Python, then review the returned diagnostics and warnings. The assistant cannot invent point "
+                "estimates, standard errors, confidence intervals, or p-values."
+            )
+        parts = [
+            f"Phase 8 returned a backend-computed estimate for {primary.get('exposure', 'the exposure')} -> {primary.get('outcome', 'the outcome')}.",
+            (
+                f"Point estimate: {primary.get('point_estimate')}; SE: {primary.get('standard_error')}; "
+                f"95% CI: {primary.get('confidence_interval')}; p-value: {primary.get('p_value')}; "
+                f"N: {primary.get('sample_size')}."
+            ),
+            f"Model status: {result.get('status', 'unknown')}; model type: {result.get('model_type') or provenance.get('estimator') or 'not returned'}.",
+        ]
+        if diagnostics:
+            parts.append(
+                f"Diagnostics: rows before filtering {diagnostics.get('rows_before_filtering') or diagnostics.get('rows_before_preprocessing')}; "
+                f"rows after filtering {diagnostics.get('rows_after_filtering') or diagnostics.get('rows_after_preprocessing')}; "
+                f"convergence {diagnostics.get('convergence', 'not returned')}."
+            )
+        if warnings:
+            parts.append(f"Warnings to review: {' '.join(map(str, warnings[:5]))}")
+        parts.append(
+            "These are computed model outputs under the selected graph, adjustment set, model, and assumptions. "
+            "They do not prove causality, and the assistant did not generate or alter the numerical values."
+        )
+        return " ".join(parts)
+
     if phase == "phase_1_project_setup":
         datasets = page_state.get("datasets") or []
         documents = page_state.get("documents") or {}

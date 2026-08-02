@@ -5213,17 +5213,18 @@ function downloadPDFReport(state) {
 }
 
 function backendEstimationToRun(response, tag, fallbackConfig = {}) {
-  const estimate = response.estimate || {};
+  const estimate = response.estimate || response.primary_result || {};
   const diagnostics = response.diagnostics || {};
   const sensitivity = response.sensitivity || {};
   const reproducibility = response.reproducibility || {};
   const ci = estimate.confidence_interval || [null, null];
   const warnings = [
+    ...(response.warnings || []),
     ...(response.readiness?.warnings || []),
     ...(diagnostics.model_warnings || []),
     ...(diagnostics.data_warnings || []),
     ...(sensitivity.warnings || []),
-  ].filter(Boolean);
+  ].filter(Boolean).filter((warning, index, array) => array.indexOf(warning) === index);
   return {
     id: response.run_id,
     tag,
@@ -5437,6 +5438,17 @@ function EstimationView({ state, actions, onGoNext }) {
       clearInterval(backendRunInterval);
       setRunProgress(100);
       if (response.status === "blocked_not_ready" || response.status === "not_runnable") {
+        setEstimationStatus({
+          kind: "error",
+          message: "This estimation configuration is not runnable yet. Review the blocking issues below.",
+        });
+        setEstimationValidation({
+          status: "invalid",
+          errors: response.readiness?.blocking_issues || response.diagnostics?.model_warnings || ["Estimation is not runnable."],
+          warnings: response.warnings || response.readiness?.warnings || [],
+          checks: response.readiness?.checks || {},
+          safe_to_run_estimation: false,
+        });
         pushAssistantNote(`Estimation was blocked by readiness checks: ${response.readiness?.blocking_issues?.join("; ") || "not ready"}`);
         showToast("Estimation blocked by readiness checks.");
         return;
@@ -5445,6 +5457,14 @@ function EstimationView({ state, actions, onGoNext }) {
       setRuns((prev) => [...prev, newRun]);
       setActiveRunId(newRun.id);
       setLatestEstimationRun(newRun);
+      if (response.status === "completed_with_warnings") {
+        setEstimationStatus({
+          kind: "warning",
+          message: "Estimation completed with warnings. Review diagnostics before selecting this as the primary run.",
+        });
+      } else {
+        setEstimationStatus({ kind: "success", message: "Estimation completed. Review diagnostics before selecting a primary run." });
+      }
       if (newRun.results.warnings.length) {
         pushAssistantNote(`Python estimation complete with ${newRun.results.warnings.length} warning(s). Point estimate ${newRun.results.pointEstimate} (95% CI: ${newRun.results.ciLower}, ${newRun.results.ciUpper}), SE ${newRun.results.se}, p=${newRun.results.pValue}, N=${Number(newRun.results.n || 0).toLocaleString()}. This is computed under the specified model and assumptions; it does not prove causality by itself.`);
         advanceGuidance("estimation", "run_complete", "Results are in - review warnings before selecting a primary result. Use Interpret Current Estimate for a plain-language explanation of the computed output.");
@@ -5465,10 +5485,9 @@ function EstimationView({ state, actions, onGoNext }) {
     if (!activeRun || interpretLoading) return;
     setInterpretLoading(true);
     try {
-      const response = await interpretEstimation({ estimation_result: activeRun.raw || activeRun, user_question: "Interpret the current computed estimate." });
-      const text = response.assistant_message || "The backend returned an interpretation, but no message was provided.";
+      const text = await runAssistantAction("Interpret Current Estimate")
+        || "No computed estimate was provided to interpret. Run Phase 8 estimation first.";
       setInterpretVersions(prev => [...prev, text]);
-      pushAssistantNote(text);
       advanceGuidance("estimation", "interpreted", "Interpretation done. Now review diagnostics and sensitivity notes before selecting a primary run.");
     } catch (error) {
       pushAssistantNote(`Interpretation failed: ${friendlyError(error)} The numerical output remains valid as backend-computed output; only the interpretation step failed.`);
@@ -5476,19 +5495,9 @@ function EstimationView({ state, actions, onGoNext }) {
       setInterpretLoading(false);
     }
   }
-  function interpretDiagnostics() {
+  async function interpretDiagnostics() {
     if (!activeRun) return;
-    const diagnostics = activeRun.results?.diagnostics || {};
-    const warnings = activeRun.results?.warnings || [];
-    pushAssistantNote([
-      "Diagnostics are backend-computed metadata for the selected run.",
-      `Rows after filtering: ${diagnostics.rows_after_filtering ?? activeRun.results?.n ?? "not returned"}.`,
-      `Convergence: ${diagnostics.convergence || activeRun.results?.convergence || "not returned"}.`,
-      warnings.length
-        ? `Warnings to review: ${warnings.join("; ")}`
-        : "No backend warnings were attached to this run.",
-      "If a diagnostic was not returned, treat it as not evaluated in this proof of concept. Do not infer balance, overlap, or sensitivity results that Python did not calculate.",
-    ].join("\n"));
+    await runAssistantAction("Explain Diagnostics");
   }
   function exportRunLog() {
     const lines = runs.map((r, i) =>
@@ -5870,7 +5879,7 @@ function EstimationView({ state, actions, onGoNext }) {
 
       {runs.length === 0 && (
         <div className="inconsistency-card" style={{ marginTop: 4 }}>
-          <p style={{ margin: 0 }}>Run estimation first to see results and unlock the reproducibility panel.</p>
+          <p style={{ margin: 0 }}>No estimation run has been executed yet. Validate the configuration before running estimation.</p>
         </div>
       )}
     </>
@@ -7901,6 +7910,34 @@ export default function CausalStudioApp() {
       };
     }
 
+    if (pageKey === "estimation") {
+      const selectedRun = primaryEstimationRun || latestEstimationRun;
+      const selectedRaw = selectedRun?.raw || {};
+      const diagnostics = selectedRun?.results?.diagnostics || selectedRaw?.diagnostics || {};
+      const warnings = estimationRunWarnings(selectedRun);
+      return {
+        ...base,
+        phase: "phase_8_estimation",
+        dataset_filename: dataset?.savedFilename || dataset?.name,
+        confirmed_question: questionFields || {},
+        estimation_config: selectedRun?.config || {
+          exposure: questionFields?.exposure || "not selected",
+          outcome: questionFields?.outcome || "not selected",
+          adjustment_set: editableAdjustmentSet || [],
+          estimator_family: estimatorFamily,
+          effect_type: effectType,
+        },
+        validation_result: selectedRaw?.readiness || {},
+        estimation_result: selectedRaw || selectedRun || {},
+        diagnostics,
+        warnings,
+        provenance: selectedRaw?.provenance || selectedRaw?.reproducibility || selectedRun?.config || {},
+        selected_primary_estimation_run: primaryEstimationRun,
+        latest_estimation_run: latestEstimationRun,
+        safety_note: "Phase 8 uses backend Python/statsmodels to compute numerical outputs. The assistant may explain returned values only and must not invent estimates or claim causality is proven.",
+      };
+    }
+
     return {
       ...base,
       dataset_filename: dataset?.savedFilename || dataset?.name,
@@ -8010,13 +8047,14 @@ export default function CausalStudioApp() {
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
 
     if (!useBackendAction || !backendStatus.connected) {
+      const fallbackText = localAssistantAnswer(prompt);
       setAssistantThinking(true);
       setAssistantThinkingMessage(backendStatus.connected ? "Thinking..." : "Assistant is using local fallback because the backend is unavailable...");
       setTimeout(() => {
         setAssistantThinking(false);
-        setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: localAssistantAnswer(prompt) }] }));
+        setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: fallbackText }] }));
       }, 650);
-      return;
+      return fallbackText;
     }
 
     setAssistantThinking(true);
@@ -8035,17 +8073,20 @@ export default function CausalStudioApp() {
         ...t,
         [page]: [...(t[page] || []), { role: "assistant", text: response.assistant_message || localAssistantAnswer(prompt) }],
       }));
+      return response.assistant_message || localAssistantAnswer(prompt);
     } catch (error) {
+      const fallbackText = `I could not complete this assistant action. Please check backend connection.\n\n${localAssistantAnswer(prompt)}`;
       setAssistantThreads((t) => ({
         ...t,
         [page]: [
           ...(t[page] || []),
           {
             role: "assistant",
-            text: `I could not complete this assistant action. Please check backend connection.\n\n${localAssistantAnswer(prompt)}`,
+            text: fallbackText,
           },
         ],
       }));
+      return fallbackText;
     } finally {
       setAssistantThinking(false);
     }

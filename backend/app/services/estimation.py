@@ -340,6 +340,119 @@ def package_versions() -> dict[str, str]:
     return versions
 
 
+def build_not_runnable_response(
+    *,
+    request: dict[str, Any],
+    dataset_path: Path,
+    dataframe: Any,
+    run_id: str,
+    timestamp: str,
+    reason: str,
+    readiness: dict[str, Any],
+    warnings: list[str] | None = None,
+    diagnostics: dict[str, Any] | None = None,
+    formula: str = "",
+    model_type: str = "not_fit",
+) -> dict[str, Any]:
+    package_info = package_versions()
+    all_warnings = [*readiness.get("warnings", []), *(warnings or [])]
+    if "Only complete-case preprocessing is implemented in this proof of concept." not in all_warnings:
+        all_warnings.append("Only complete-case preprocessing is implemented in this proof of concept.")
+    if "Sensitivity/refutation analyses are not yet implemented." not in all_warnings:
+        all_warnings.append("Sensitivity/refutation analyses are not yet implemented.")
+
+    base_diagnostics = {
+        "rows_before_preprocessing": int(len(dataframe)),
+        "rows_after_preprocessing": None,
+        "rows_dropped_missing": None,
+        "rows_before_filtering": int(len(dataframe)),
+        "rows_after_filtering": None,
+        "excluded_rows": None,
+        "excluded_percent": None,
+        "missingness_summary": [],
+        "convergence": "not_fit",
+        "exposure_variation": {},
+        "outcome_variation": {},
+        "covariate_balance_placeholder": "Covariate balance diagnostics are not implemented in this proof of concept.",
+        "overlap_placeholder": "Overlap diagnostics are summarized heuristically only.",
+        "model_warnings": [reason],
+        "data_warnings": all_warnings,
+    }
+    if diagnostics:
+        base_diagnostics.update(diagnostics)
+        base_diagnostics["model_warnings"] = [
+            *base_diagnostics.get("model_warnings", []),
+            reason,
+        ]
+
+    return {
+        "run_id": run_id,
+        "run_label": request.get("run_label") or "Primary run",
+        "status": "not_runnable",
+        "estimand_label": request.get("estimand_label") or request.get("estimand") or "",
+        "model_type": model_type,
+        "formula": formula,
+        "primary_result": {
+            "exposure": request.get("exposure") or "",
+            "outcome": request.get("outcome") or "",
+            "point_estimate": None,
+            "standard_error": None,
+            "confidence_interval": [None, None],
+            "p_value": None,
+            "sample_size": base_diagnostics.get("rows_after_filtering"),
+        },
+        "readiness": {
+            **readiness,
+            "ready": False,
+            "blocking_issues": [*readiness.get("blocking_issues", []), reason],
+        },
+        "estimate": None,
+        "diagnostics": base_diagnostics,
+        "sensitivity": {
+            "available": False,
+            "checks": [],
+            "warnings": ["Sensitivity/refutation analyses are not yet implemented."],
+        },
+        "sensitivity_results": [],
+        "warnings": all_warnings,
+        "limitations": [
+            reason,
+            "The estimation configuration was not runnable, so no numerical result was computed.",
+            "This phase does not prove causality.",
+        ],
+        "reproducibility": {
+            "dataset_filename": dataset_path.name,
+            "input_dataset_version": dataset_path.stem,
+            "timestamp": timestamp,
+            "estimator": request.get("estimator"),
+            "python_version": sys.version.split()[0],
+            "package_versions": package_info,
+            "random_seed": int(request.get("random_seed") or 42),
+            "variables_used": [],
+            "complete_case_filter": request.get("missing_data_strategy") == "complete_case",
+            "configuration": request,
+            "code_path": "backend/app/services/estimation.py",
+        },
+        "provenance": {
+            "dataset_filename": dataset_path.name,
+            "input_dataset_version": dataset_path.stem,
+            "timestamp": timestamp,
+            "python_version": sys.version.split()[0],
+            "packages": package_info,
+            "random_seed": int(request.get("random_seed") or 42),
+            "code_path": "backend/app/services/estimation.py",
+            "configuration": request,
+        },
+        "requires_user_review": True,
+        "safe_interpretation_note": "The LLM may interpret this computed output, but it must not invent or modify numerical results.",
+        "safety_boundary": [
+            "No numerical estimate was computed.",
+            "Review the blocking issue and rerun from the backend.",
+            "The LLM cannot repair or invent estimation results.",
+        ],
+    }
+
+
 def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     import pandas as pd
     import statsmodels.api as sm
@@ -442,8 +555,40 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     if excluded_percent >= 20:
         data_warnings.append(f"Complete-case filtering excluded {excluded_percent}% of rows; missing-data sensitivity is required.")
 
+    formula = f"{outcome} ~ {exposure}" + (f" + {' + '.join(adjustment_set)}" if adjustment_set else "")
+    model_type = request.get("estimator") or ("statsmodels_logit" if outcome_type == "binary" else "statsmodels_linear")
+
     if variation.get("unique_values", 0) <= 1:
-        raise EstimationError("Exposure has no variation after filtering; estimation cannot be fit.")
+        return build_not_runnable_response(
+            request=request,
+            dataset_path=dataset_path,
+            dataframe=dataframe,
+            run_id=run_id,
+            timestamp=now,
+            reason="Exposure has no variation after filtering; estimation cannot be fit.",
+            readiness=readiness,
+            warnings=data_warnings,
+            model_type=model_type,
+            formula=formula,
+            diagnostics={
+                "rows_after_preprocessing": rows_after,
+                "rows_dropped_missing": excluded_rows,
+                "rows_after_filtering": rows_after,
+                "excluded_rows": excluded_rows,
+                "excluded_percent": excluded_percent,
+                "missingness_summary": [
+                    {
+                        "variable": variable,
+                        "missing_count": int(dataframe[variable].isna().sum()),
+                        "missing_percent": round(float(dataframe[variable].isna().mean() * 100), 4),
+                    }
+                    for variable in [exposure, outcome, *adjustment_set]
+                    if variable in dataframe.columns
+                ],
+                "exposure_variation": variation,
+                "overlap": overlap,
+            },
+        )
 
     convergence = "not_applicable"
     try:
@@ -463,19 +608,61 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
                 result = model.fit(cov_type="HC1")
             convergence = "not_applicable"
     except Exception as error:
-        raise EstimationError(
-            f"Statsmodels estimation failed: {error}. If this was Logit, try a linear probability model fallback or simplify the adjustment set."
-        ) from error
+        return build_not_runnable_response(
+            request=request,
+            dataset_path=dataset_path,
+            dataframe=dataframe,
+            run_id=run_id,
+            timestamp=now,
+            reason=(
+                f"Statsmodels estimation failed: {error}. If this was Logit, try a linear probability model fallback "
+                "or simplify the adjustment set."
+            ),
+            readiness=readiness,
+            warnings=data_warnings,
+            model_type=model_type,
+            formula=formula,
+            diagnostics={
+                "rows_after_preprocessing": rows_after,
+                "rows_dropped_missing": excluded_rows,
+                "rows_after_filtering": rows_after,
+                "excluded_rows": excluded_rows,
+                "excluded_percent": excluded_percent,
+                "convergence": "failed",
+                "exposure_variation": variation,
+                "overlap": overlap,
+            },
+        )
 
     if exposure not in result.params.index:
-        raise EstimationError(f"Exposure coefficient '{exposure}' was not returned by the fitted model.")
+        return build_not_runnable_response(
+            request=request,
+            dataset_path=dataset_path,
+            dataframe=dataframe,
+            run_id=run_id,
+            timestamp=now,
+            reason=f"Exposure coefficient '{exposure}' was not returned by the fitted model.",
+            readiness=readiness,
+            warnings=data_warnings,
+            model_type=model_type,
+            formula=formula,
+            diagnostics={
+                "rows_after_preprocessing": rows_after,
+                "rows_dropped_missing": excluded_rows,
+                "rows_after_filtering": rows_after,
+                "excluded_rows": excluded_rows,
+                "excluded_percent": excluded_percent,
+                "convergence": convergence,
+                "exposure_variation": variation,
+                "overlap": overlap,
+            },
+        )
 
     point = float(result.params[exposure])
     se = float(result.bse[exposure])
     ci = [float(value) for value in result.conf_int().loc[exposure].tolist()]
     p_value = float(result.pvalues[exposure])
     status_value = "completed_with_warnings" if readiness["warnings"] or model_warnings or data_warnings else "success"
-    formula = f"{outcome} ~ {exposure}" + (f" + {' + '.join(adjustment_set)}" if adjustment_set else "")
     missingness_summary = [
         {
             "variable": variable,

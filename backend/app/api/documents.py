@@ -3,18 +3,28 @@ from shutil import copyfileobj
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from app.rag.ingestion import (
     IngestionDependencyError,
     get_ingestion_status,
     ingest_uploaded_documents,
 )
+from app.services.document_validation import validate_document_category
 
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+
+
+class DocumentCategoryValidationRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+    declared_category: str = Field(
+        "unknown",
+        pattern="^(data_dictionary|protocol|research_paper|clinical_guideline|domain_guidance|unknown)$",
+    )
 
 
 def get_file_extension(filename: str) -> str:
@@ -78,6 +88,14 @@ def list_documents() -> dict[str, str | list[dict[str, str | int]]]:
         "upload_folder_path": str(UPLOAD_DIR),
         "documents": documents,
     }
+
+
+@router.post("/validate-category")
+def validate_category(request: DocumentCategoryValidationRequest) -> dict[str, object]:
+    return validate_document_category(
+        filename=request.filename,
+        declared_category=request.declared_category,
+    )
 
 
 @router.post("/ingest")

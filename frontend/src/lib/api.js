@@ -89,6 +89,15 @@ export async function uploadDocument(file, category) {
   return parseJsonResponse(response, "Document upload failed.");
 }
 
+export async function validateDocumentCategory(filename, declaredCategory = "unknown") {
+  const response = await apiFetch("/documents/validate-category", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, declared_category: declaredCategory }),
+  });
+  return parseJsonResponse(response, "Document category validation failed.");
+}
+
 export async function listDocuments() {
   const response = await apiFetch("/documents");
   return parseJsonResponse(response, "Could not list documents.");

@@ -1,14 +1,20 @@
 # Causal Design Agent Full Workflow Test Checklist
 
-Use this checklist for the 9-phase technical proof-of-concept demo pass.
+Use this checklist for a local 9-phase technical proof-of-concept demo pass.
 
 ## Local Setup
 
-1. Start FastAPI:
+1. Start FastAPI from the repository root or from `backend`:
 
 ```powershell
 cd backend
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010
+```
+
+If `python` opens the Microsoft Store alias, use:
+
+```powershell
+py -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010
 ```
 
 2. Start React:
@@ -18,7 +24,7 @@ cd frontend
 npm run dev
 ```
 
-3. If the backend is on port `8010`, set `frontend/.env` locally:
+3. If the backend is on port `8010`, create `frontend/.env` locally:
 
 ```text
 VITE_API_BASE_URL=http://127.0.0.1:8010
@@ -28,6 +34,17 @@ Do not commit `.env`.
 
 ## Backend Routes To Confirm
 
+- `GET /health`
+- `POST /documents/upload`
+- `GET /documents`
+- `POST /documents/validate-category`
+- `POST /documents/ingest`
+- `GET /documents/ingest/status`
+- `POST /rag/search`
+- `POST /datasets/upload`
+- `GET /datasets`
+- `GET /datasets/{filename}/schema`
+- `POST /exploration/broad`
 - `POST /assistant/action`
 - `POST /questions/generate-candidates`
 - `POST /variables/recommend-candidates`
@@ -43,78 +60,116 @@ Do not commit `.env`.
 - `POST /review-export/assemble`
 - `POST /review-export/claim-audit`
 - `POST /review-export/export`
+- `GET /debug/langsmith-status`
+- `POST /debug/test-trace`
 
 ## Demo Inputs
 
-- Objective: `I want to study temporal relationships between passive sensing features and next-window alcohol-related labels.`
+- Objective: `I want to study temporal relationships between sleep, stress, and next-day alcohol use.`
 - Dataset: `15_result_indexed_dataset_window1_distance1.csv`
 - Expected schema highlights: `1106` rows, `74` columns, ID `pid`, timestamps including `time_of_day`, `day_of_week`, and `time_stamp`.
+- Demo variables: `pid`, `label`, `time_stamp`, `time_of_day`, `day_of_week`, `acc_min_magnitude`, `acc_max_magnitude`, `acc_mean_magnitude`, `avg_latitude`.
 
-## Phase Tests
+## Phase 1 - Project Setup And Document Upload
 
-### Phase 1 - Project Setup and Document Upload
+- Confirm backend status changes to connected when FastAPI is running.
+- Upload one CSV dataset.
+- Confirm upload status and immediate schema parse.
+- Upload a data dictionary, protocol, research paper, and guidance document where available.
+- Confirm document category validation returns success, warning, or clarification status.
+- Ingest documents.
+- Check ingestion status and chunk count.
+- Run RAG evidence check.
+- Confirm any no-evidence result is explicit and not a crash.
 
-- Backend status should show connected when FastAPI is running.
-- CSV upload should save and parse the dataset.
-- PDF/DOCX upload should save documents.
-- Document ingestion should update ChromaDB status.
-- RAG evidence check should return snippets or a clear no-evidence message.
+## Phase 2 - Data Foundation And Understanding
 
-### Phase 2 - Data Foundation and Understanding
+- Open Data Foundation after dataset upload.
+- Confirm real row and column counts appear.
+- Confirm possible ID columns and timestamp/date columns appear.
+- Confirm missingness and high-missingness warnings appear.
+- Confirm duplicate row and participant-time duplicate summaries appear when available.
+- Confirm labels are descriptive only: Identifier, Timestamp, Time-varying, EMA/self-report, Smartphone-derived, Wearable-derived, Derived feature, Needs clarification.
+- Confirm the page does not assign final causal labels such as Exposure, Outcome, Confounder, or Mediator.
 
-- Real schema values should appear after parsing.
-- Labels must be descriptive only, not final causal roles.
-- Use labels such as Identifier, Timestamp, Time-varying, Smartphone-derived, Wearable-derived, Derived feature, and Needs clarification.
+## Phase 3 - Broad Data Exploration
 
-### Phase 3 - Broad Data Exploration
+- Run broad exploration with backend connected.
+- Confirm summaries are labeled Python-computed when backend results are returned.
+- Confirm missingness, participant/time structure, correlation or numeric summaries, and warnings are shown when present.
+- Save at least one exploration view.
+- Use Compare Variables and confirm the assistant note is exploratory only.
+- Promote one pattern.
+- Confirm the page says exploratory patterns do not establish causality.
+- Stop backend and confirm fallback/demo mode does not crash.
 
-- Broad exploration should call the backend when available.
-- Summaries should include missingness, participant/time structure, and exploratory warnings.
-- Page must state exploratory patterns do not establish causality.
+## Phase 4 - Causal Question And Provisional Variable Design
 
-### Phase 4 - Causal Question and Provisional Variable Design
+- Generate candidate causal questions from the objective and schema.
+- Confirm each question is labeled candidate/provisional.
+- Select or edit one question.
+- Generate candidate variables.
+- Confirm recommendations are provisional and require human review.
+- Confirm variables can be accepted, modified, or excluded.
+- Confirm no output says a causal relationship is proven.
 
-- Candidate question generation requires an uploaded and parsed dataset.
-- Candidate variable recommendation requires a dataset and a draft/confirmed question.
-- Outputs must use candidate/provisional wording, not proven causal wording.
+## Phase 5 - Targeted Variable Exploration And Feasibility Check
 
-### Phase 5 - Targeted Variable Exploration and Feasibility Check
+- Choose a dataset-backed exposure and outcome.
+- Run feasibility check.
+- Confirm selected variables, participant ID, timestamp, lag, missingness, overlap, and warnings are visible.
+- Confirm `avg_latitude` high missingness is flagged when present.
+- Confirm the result is an analysis-readiness/feasibility check only.
 
-- Feasibility checks are disabled until a question, dataset-backed exposure, and dataset-backed outcome exist.
-- The page should show: `Confirm a question and variables before running feasibility checks.`
-- Backend output should show selected variables, missingness, timing, and feasibility status.
+## Phase 6 - Causal Graph And Final Role Validation
 
-### Phase 6 - Causal Graph and Final Role Validation
+- Generate a draft graph after feasibility.
+- Confirm graph appears in React Flow.
+- Drag nodes and edit edges.
+- Validate the edited graph with backend validation.
+- Confirm warnings/errors are visible and clear.
+- Confirm the graph is labeled a draft requiring user review.
 
-- Graph generation and validation are disabled until feasibility has run.
-- The page should show: `Run feasibility checks before generating a graph.`
-- Generated graph remains a draft and requires user review.
-- Backend validation warnings/errors must be visible.
+## Phase 7 - Identification And Analysis Strategy
 
-### Phase 7 - Identification and Analysis Strategy
+- Run identification check after graph confirmation.
+- Generate analysis strategy guidance.
+- Review assumptions and sensitivity planning.
+- Confirm outputs are guidance only and not numerical estimates.
+- Confirm the UI does not claim identification proves the effect.
 
-- Identification buttons are disabled until a graph is confirmed.
-- The page should show: `Confirm a graph before running identification.`
-- Phase 7 should generate strategy guidance only, not numerical estimates.
+## Phase 8 - Estimation And Calculation
 
-### Phase 8 - Estimation and Calculation
+- Validate estimation configuration.
+- Run estimation only after prerequisites are complete.
+- Confirm any numerical output comes from backend Python.
+- Confirm proof-of-concept messaging is visible.
+- Confirm estimates are described as conditional on the selected data, model, adjustment set, and assumptions.
+- Confirm no fake point estimates, fake intervals, or fake p-values appear when backend data is missing.
+- Select a primary run for Phase 9.
 
-- Config validation and estimation are disabled until an analysis strategy is confirmed.
-- The page should show: `Confirm an analysis strategy before running estimation.`
-- All numerical estimates must come from backend Python.
-- Do not show fake point estimates, fake p-values, fake intervals, or fake diagnostics.
-- If no backend run exists, show an empty state.
+## Phase 9 - Review And Export
 
-### Phase 9 - Review and Export
+- Generate the review package.
+- Confirm the selected Phase 8 run appears in the report.
+- Run claim audit.
+- Confirm unsafe causal, proven, predictive, diagnostic, or treatment-decision claims are blocked.
+- Export JSON and Markdown.
+- Use PDF preview only after export readiness checks pass.
+- Confirm the report title and wording make clear this is a causal design and analysis guidance report.
 
-- Export is disabled until a primary Phase 8 run is selected, a report is generated, and claim audit has run.
-- The page should show: `Select a primary estimation run before exporting the complete design and analysis package.`
-- Claim audit must flag unsafe causal/proven/treatment-decision language.
-- Report wording must say results are conditional on the selected model, data, and assumptions.
+## Assistant And Tracing
+
+- Ask a simple setup question through the assistant.
+- Click one interpretation/action button.
+- Confirm `/assistant/action` is called when backend is available.
+- Confirm fallback mode is clear when backend is unavailable.
+- Check `/debug/langsmith-status`.
+- Confirm API keys are not returned to the frontend.
 
 ## Safety Checks
 
 - The app must never present causal conclusions as proven.
-- The LLM/assistant recommends, explains, and drafts only.
+- The assistant recommends, explains, and drafts only.
 - Deterministic Python/backend validation remains the source of truth for roles, timing, graph checks, assumptions, claims, and estimation readiness.
-- Do not log or export secrets, API keys, uploaded raw datasets, ChromaDB runtime files, or generated runtime reports.
+- Do not commit `.env`, API keys, uploaded data/documents, ChromaDB runtime files, generated reports, `node_modules`, `dist`, caches, or virtual environments.

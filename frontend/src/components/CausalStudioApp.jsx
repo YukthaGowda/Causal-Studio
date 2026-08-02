@@ -52,6 +52,7 @@ import {
   selectPrimaryEstimationRun,
   uploadDataset,
   uploadDocument,
+  validateDocumentCategory,
   runEstimation as runBackendEstimation,
   runClaimAudit,
   validateEstimationConfig,
@@ -893,6 +894,34 @@ function statusMessage(status) {
   return status.kind === "error" ? `Error: ${status.message}` : status.message;
 }
 
+function actionNoteClass(status) {
+  if (!status?.kind) return "";
+  if (status.kind === "error") return "action-note-error";
+  if (status.kind === "warning") return "action-note-warning";
+  if (status.kind === "success") return "action-note-success";
+  return "";
+}
+
+function documentValidationMessage(validation, fallback = "Upload successful.") {
+  const labels = {
+    uploaded_and_validated: "Uploaded and validated",
+    requires_clarification: "Requires clarification",
+    incomplete_document: "Incomplete document",
+    incorrect_document_type: "Incorrect document type",
+    error: "Validation error",
+  };
+  if (!validation?.status) return fallback;
+  const warnings = validation.warnings?.length ? ` Warnings: ${validation.warnings.slice(0, 2).join(" ")}` : "";
+  return `${labels[validation.status] || "Upload successful"}. ${validation.summary || ""}${warnings}`.trim();
+}
+
+function documentValidationKind(validation) {
+  if (!validation?.status) return "success";
+  if (validation.status === "uploaded_and_validated") return "success";
+  if (["requires_clarification", "incomplete_document", "incorrect_document_type"].includes(validation.status)) return "warning";
+  return "error";
+}
+
 function firstRealDataset(datasets) {
   return datasets.find((dataset) => dataset.savedFilename) || datasets[0] || null;
 }
@@ -1519,7 +1548,7 @@ function ProjectSetupView({ state, actions }) {
         </div>
         <UploadDropzone label="EMA, wearable, smartphone, clinical, or baseline data · CSV" multiple accept=".csv" onFiles={addDatasets} />
         {statusMessage(actionStatus.datasetUpload) && (
-          <div className={`action-note ${actionStatus.datasetUpload.kind === "error" ? "action-note-error" : actionStatus.datasetUpload.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.datasetUpload)}`}>
             {statusMessage(actionStatus.datasetUpload)}
           </div>
         )}
@@ -1606,7 +1635,7 @@ function ProjectSetupView({ state, actions }) {
           </div>
         )}
         {statusMessage(actionStatus.dictionaryUpload) && (
-          <div className={`action-note ${actionStatus.dictionaryUpload.kind === "error" ? "action-note-error" : actionStatus.dictionaryUpload.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.dictionaryUpload)}`}>
             {statusMessage(actionStatus.dictionaryUpload)}
           </div>
         )}
@@ -1641,7 +1670,7 @@ function ProjectSetupView({ state, actions }) {
           </div>
         )}
         {statusMessage(actionStatus.protocolUpload) && (
-          <div className={`action-note ${actionStatus.protocolUpload.kind === "error" ? "action-note-error" : actionStatus.protocolUpload.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.protocolUpload)}`}>
             {statusMessage(actionStatus.protocolUpload)}
           </div>
         )}
@@ -1660,7 +1689,7 @@ function ProjectSetupView({ state, actions }) {
         </div>
         <UploadDropzone label="One or more published papers · PDF" multiple compact accept=".pdf" onFiles={addPapers} />
         {statusMessage(actionStatus.paperUpload) && (
-          <div className={`action-note ${actionStatus.paperUpload.kind === "error" ? "action-note-error" : actionStatus.paperUpload.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.paperUpload)}`}>
             {statusMessage(actionStatus.paperUpload)}
           </div>
         )}
@@ -1690,7 +1719,7 @@ function ProjectSetupView({ state, actions }) {
         </div>
         <UploadDropzone label="One or more guideline or guidance documents · PDF / DOCX / TXT" multiple compact accept=".pdf,.docx,.txt" onFiles={addGuidelines} />
         {statusMessage(actionStatus.guidelineUpload) && (
-          <div className={`action-note ${actionStatus.guidelineUpload.kind === "error" ? "action-note-error" : actionStatus.guidelineUpload.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.guidelineUpload)}`}>
             {statusMessage(actionStatus.guidelineUpload)}
           </div>
         )}
@@ -1723,12 +1752,12 @@ function ProjectSetupView({ state, actions }) {
           {ingestedChunks > 0 && <span className="chip chip-success">{ingestedChunks} chunks indexed</span>}
         </div>
         {statusMessage(actionStatus.documentIngestion) && (
-          <div className={`action-note ${actionStatus.documentIngestion.kind === "error" ? "action-note-error" : actionStatus.documentIngestion.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.documentIngestion)}`}>
             {statusMessage(actionStatus.documentIngestion)}
           </div>
         )}
         {statusMessage(actionStatus.ragCheck) && (
-          <div className={`action-note ${actionStatus.ragCheck.kind === "error" ? "action-note-error" : actionStatus.ragCheck.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.ragCheck)}`}>
             {statusMessage(actionStatus.ragCheck)}
           </div>
         )}
@@ -1837,6 +1866,16 @@ function DataFoundationView({ state, actions }) {
             ? `${selectedDataset.name}: ${selectedSchema.number_of_rows.toLocaleString()} rows and ${selectedSchema.number_of_columns} columns parsed by FastAPI.`
             : "Upload a CSV dataset in Project Setup to populate this with the real backend schema."}
         </p>
+        {selectedSchema && (
+          <div className="real-summary-grid">
+            <div className="real-summary-card"><span>Duplicate rows</span><strong>{selectedSchema.duplicate_row_count ?? "not checked"}</strong></div>
+            <div className="real-summary-card"><span>Participant-time duplicates</span><strong>{selectedSchema.duplicate_participant_time_records?.length || 0}</strong></div>
+            <div className="real-summary-card"><span>Constant variables</span><strong>{formatList(selectedSchema.constant_or_no_variation_columns || [])}</strong></div>
+            <div className="real-summary-card"><span>Timezone</span><strong>{formatList(Object.values(selectedSchema.timezone_by_timestamp_column || {}), "unknown")}</strong></div>
+            <div className="real-summary-card real-summary-card-wide"><span>Timestamp ranges</span><strong>{Object.entries(selectedSchema.timestamp_ranges || {}).slice(0, 2).map(([column, range]) => `${column}: ${range.min_timestamp || "?"} to ${range.max_timestamp || "?"}`).join("; ") || "not inferable"}</strong></div>
+            <div className="real-summary-card real-summary-card-wide"><span>Impossible value checks</span><strong>{selectedSchema.possible_impossible_numeric_values?.length ? selectedSchema.possible_impossible_numeric_values.map((item) => `${item.column}: ${item.warning}`).join("; ") : "No simple-rule warnings"}</strong></div>
+          </div>
+        )}
         <table className="mini-table">
           <thead><tr><th>Variable</th><th>Type</th><th>Source</th><th>Descriptive label</th><th>Missing</th></tr></thead>
           <tbody>
@@ -1994,8 +2033,8 @@ function RelevanceTag({ level }) {
 }
 
 function ExploreView({ state, actions, onGoNext }) {
-  const { datasets, promotedPatterns, actionStatus, broadExploration } = state;
-  const { promotePattern, showToast, pushAssistantNote, handleBroadExploration, runAssistantAction } = actions;
+  const { datasets, promotedPatterns, actionStatus, broadExploration, savedExploreViews } = state;
+  const { promotePattern, saveExploreView, showToast, pushAssistantNote, handleBroadExploration, runAssistantAction } = actions;
   // Turn-based guidance: each flag fires its message exactly once per mount
   const windowGuidanceFired = useRef(false);
   const layerGuidanceFired = useRef(false);
@@ -2073,10 +2112,22 @@ function ExploreView({ state, actions, onGoNext }) {
           <button className="btn btn-secondary" onClick={() => runAssistantAction?.("Ask AI What to Explore Next")}>
             <Compass size={14} /> Ask AI What to Explore Next
           </button>
+          <button className="btn btn-secondary" onClick={() => saveExploreView?.({
+            label: `${tempMetricInfo?.label || tempMetric} by ${windowDays} days`,
+            settings: { primary_variable: tempMetric, comparison_variable: distMetric, time_range: `${windowDays} days`, chart_type: tempChartType, aggregation_level: "population-level", missing_data_option: "available-case display" },
+          })}>
+            <Save size={14} /> Save View
+          </button>
+          <button className="btn btn-secondary" onClick={() => {
+            pushAssistantNote(`Compare variables request captured: ${tempMetricInfo?.label || tempMetric} versus ${distMetricInfo?.label || distMetric}. Review correlation and distribution panels; exploratory comparisons do not establish causality.`);
+            showToast("Variable comparison noted.");
+          }}>
+            <Search size={14} /> Compare Variables
+          </button>
           {firstRealDataset(datasets) && <span className="chip chip-accent">{realDatasetFilename(firstRealDataset(datasets))}</span>}
         </div>
         {statusMessage(actionStatus.broadExploration) && (
-          <div className={`action-note ${actionStatus.broadExploration.kind === "error" ? "action-note-error" : actionStatus.broadExploration.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.broadExploration)}`}>
             {statusMessage(actionStatus.broadExploration)}
           </div>
         )}
@@ -2119,6 +2170,11 @@ function ExploreView({ state, actions, onGoNext }) {
         <div className="helper">
           <ShieldAlert size={13} /> Numerical results must come from Python/R computation, not the LLM.
         </div>
+        {savedExploreViews?.length > 0 && (
+          <div className="action-note">
+            <strong>Saved views:</strong> {savedExploreViews.map((view) => view.label).join("; ")}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -3199,7 +3255,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
           </button>
         </div>
         {statusMessage(actionStatus.targetedFeasibility) && (
-          <div className={`action-note ${actionStatus.targetedFeasibility.kind === "error" ? "action-note-error" : actionStatus.targetedFeasibility.kind === "success" ? "action-note-success" : ""}`}>
+          <div className={`action-note ${actionNoteClass(actionStatus.targetedFeasibility)}`}>
             {statusMessage(actionStatus.targetedFeasibility)}
           </div>
         )}
@@ -6054,6 +6110,7 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
     papers,
     guidelines,
     broadExploration,
+    savedExploreViews,
     promotedPatterns,
     questionFields,
     questionCandidates,
@@ -6135,7 +6192,10 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
         : [],
     },
     phase_3_broad_exploration: {
-      saved_views: broadExploration ? [broadExploration] : [],
+      saved_views: [
+        ...(savedExploreViews || []),
+        ...(broadExploration ? [{ label: "Latest backend broad exploration", result: broadExploration }] : []),
+      ],
       promoted_patterns: promotedPatterns,
       exploration_warnings: [
         broadExploration?.exploration_warning,
@@ -6408,8 +6468,14 @@ function ReviewView({ state, actions }) {
 
   async function handleExportReviewPackage(format) {
     if (format === "pdf") {
-      showToast("PDF export is planned but not implemented in this proof of concept.");
-      pushAssistantNote("PDF export is planned later. Use JSON or Markdown for this proof of concept.");
+      if (!exportReady) {
+        showToast("Resolve export blockers before PDF preview.");
+        pushAssistantNote("PDF preview is blocked until the report includes a selected Phase 8 run, claim audit, and sign-off checks.");
+        return;
+      }
+      downloadPDFReport(state);
+      showToast("Print-ready report opened - use your browser's Print dialog to save as PDF.");
+      pushAssistantNote("I opened a print-ready report preview. This proof of concept uses browser Save as PDF; a server-generated PDF can be added later.");
       return;
     }
     if (!reportDraft || !claimAudit) {
@@ -6705,14 +6771,14 @@ function ReviewView({ state, actions }) {
       <div className="card">
         <div className="card-head">
           <div className="card-title">Report preview and export</div>
-          <CardInfo text="Generate a structured draft package. JSON and Markdown are enabled; PDF remains a browser print preview/planned backend export." />
+          <CardInfo text="Generate a structured draft package. JSON and Markdown are saved directly; PDF opens a browser print preview for this proof of concept." />
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
           <button className="btn" onClick={() => setIsEditingReport((value) => !value)} disabled={!reportDraft}><FileText size={13} /> {isEditingReport ? "Preview Report" : "Edit Report"}</button>
           <button className="btn" onClick={() => handleExportReviewPackage("json")} disabled={!exportReady}><Save size={13} /> Export JSON</button>
           <button className="btn" onClick={() => handleExportReviewPackage("markdown")} disabled={!exportReady}><FileText size={13} /> Export Markdown</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("pdf")}><Lock size={13} /> Export PDF placeholder</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("pdf")} disabled={!exportReady}><FileCheck2 size={13} /> Export PDF Preview</button>
         </div>
         {!exportReady && (
           <div className="status-box status-warning" style={{ marginBottom: 12 }}>
@@ -6842,6 +6908,7 @@ export default function CausalStudioApp() {
   const [papers, setPapers] = useState([]);
   const [guidelines, setGuidelines] = useState([]);
   const [promotedPatterns, setPromotedPatterns] = useState([]);
+  const [savedExploreViews, setSavedExploreViews] = useState([]);
   const [variableRoles, setVariableRoles] = useState({});
   const [selectedQuestionId, setSelectedQuestionId] = useState(null);
   const [questionFields, setQuestionFields] = useState(null);
@@ -7031,9 +7098,10 @@ export default function CausalStudioApp() {
     if (!f) return;
     setAction("dictionaryUpload", { kind: "loading", message: "Uploading data dictionary..." });
     try {
-      await uploadDocument(f, "data_dictionary");
+      const uploaded = await uploadDocument(f, "data_dictionary");
+      const validation = await validateDocumentCategory(uploaded.saved_filename, "data_dictionary");
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      setAction("dictionaryUpload", { kind: "success", message: "Data dictionary stored in the backend document library." });
+      setAction("dictionaryUpload", { kind: documentValidationKind(validation), message: documentValidationMessage(validation, "Data dictionary stored in the backend document library.") });
     } catch (error) {
       setAction("dictionaryUpload", { kind: "error", message: friendlyError(error, "Data dictionary upload failed.") });
       pushAssistantNote(`Data dictionary upload failed: ${friendlyError(error)} Backend document upload currently accepts PDF, DOCX, and TXT.`);
@@ -7061,9 +7129,10 @@ export default function CausalStudioApp() {
     if (!files?.[0]) return;
     setAction("protocolUpload", { kind: "loading", message: "Uploading protocol..." });
     try {
-      await uploadDocument(files[0], "protocol");
+      const uploaded = await uploadDocument(files[0], "protocol");
+      const validation = await validateDocumentCategory(uploaded.saved_filename, "protocol");
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      setAction("protocolUpload", { kind: "success", message: "Protocol stored in the backend document library." });
+      setAction("protocolUpload", { kind: documentValidationKind(validation), message: documentValidationMessage(validation, "Protocol stored in the backend document library.") });
     } catch (error) {
       setAction("protocolUpload", { kind: "error", message: friendlyError(error, "Protocol upload failed.") });
       pushAssistantNote(`Protocol upload failed: ${friendlyError(error)}`);
@@ -7076,9 +7145,14 @@ export default function CausalStudioApp() {
     if (!files?.length) return;
     setAction("paperUpload", { kind: "loading", message: "Uploading research papers..." });
     try {
-      for (const file of files) await uploadDocument(file, "research_paper");
+      const validations = [];
+      for (const file of files) {
+        const uploaded = await uploadDocument(file, "research_paper");
+        validations.push(await validateDocumentCategory(uploaded.saved_filename, "research_paper"));
+      }
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      setAction("paperUpload", { kind: "success", message: "Research papers stored in the backend document library." });
+      const needsReview = validations.find((item) => documentValidationKind(item) !== "success");
+      setAction("paperUpload", { kind: needsReview ? documentValidationKind(needsReview) : "success", message: needsReview ? documentValidationMessage(needsReview) : "Research papers uploaded and validated." });
     } catch (error) {
       setAction("paperUpload", { kind: "error", message: friendlyError(error, "Research paper upload failed.") });
       pushAssistantNote(`Research paper upload failed: ${friendlyError(error)}`);
@@ -7101,9 +7175,14 @@ export default function CausalStudioApp() {
     if (!files?.length) return;
     setAction("guidelineUpload", { kind: "loading", message: "Uploading guidance documents..." });
     try {
-      for (const file of files) await uploadDocument(file, "domain_guidance");
+      const validations = [];
+      for (const file of files) {
+        const uploaded = await uploadDocument(file, "domain_guidance");
+        validations.push(await validateDocumentCategory(uploaded.saved_filename, "domain_guidance"));
+      }
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      setAction("guidelineUpload", { kind: "success", message: "Guidance documents stored in the backend document library." });
+      const needsReview = validations.find((item) => documentValidationKind(item) !== "success");
+      setAction("guidelineUpload", { kind: needsReview ? documentValidationKind(needsReview) : "success", message: needsReview ? documentValidationMessage(needsReview) : "Guidance documents uploaded and validated." });
     } catch (error) {
       setAction("guidelineUpload", { kind: "error", message: friendlyError(error, "Guidance upload failed.") });
       pushAssistantNote(`Guidance upload failed: ${friendlyError(error)}`);
@@ -7416,6 +7495,17 @@ export default function CausalStudioApp() {
   function promotePattern(id) {
     setPromotedPatterns((p) => (p.includes(id) ? p : [...p, id]));
     pushAssistantNote("Pattern promoted ✓ — it will seed a suggested question in Step 4. Promote 1–2 more if relevant, then continue.");
+  }
+
+  function saveExploreView(view) {
+    const savedView = {
+      id: `explore-view-${Date.now()}`,
+      created_at: new Date().toISOString(),
+      ...view,
+    };
+    setSavedExploreViews((views) => [...views, savedView]);
+    pushAssistantNote(`Saved exploration view: ${savedView.label}. Treat it as hypothesis-generating context only, not causal evidence.`);
+    showToast("Exploration view saved.");
   }
 
   function toggleSensitivity(id) {
@@ -8250,7 +8340,7 @@ export default function CausalStudioApp() {
   const actions = {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
-    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, goToPage,
+    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
     handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
@@ -8267,7 +8357,7 @@ export default function CausalStudioApp() {
     lockContent, unlockContent, lockedContent,
   };
   const state = {
-    objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns,
+    objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns, savedExploreViews,
     backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
     variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
     lagHours, exposureThreshold, sensitivityChecks, feasibility, targetedFeasibilityResult,

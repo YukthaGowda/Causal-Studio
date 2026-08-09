@@ -59,6 +59,7 @@ import {
   validateAnalysisStrategy,
   validateCausalGraph,
 } from "../lib/api.js";
+import { getReviewExportBlockers, normalizeClaimAuditResult } from "../lib/reviewExport";
 
 const CHART_TYPE_OPTIONS = [
   { key: "bar", label: "Bar" },
@@ -6334,7 +6335,14 @@ function ReviewView({ state, actions }) {
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
-  const exportReady = Boolean(reportDraft && claimAudit && claimAudit.status !== "fail" && selectedRun && signoffBlockers.length === 0);
+  const reviewExportBlockers = useMemo(() => getReviewExportBlockers({
+    selectedRun,
+    claimAudit,
+    reportDraft,
+    backendConnected: backendStatus.connected,
+    signoffBlockers,
+  }), [selectedRun, claimAudit, reportDraft, backendStatus.connected, signoffBlockers]);
+  const exportReady = reviewExportBlockers.length === 0;
 
   function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
     setReportHistory((prev) => [
@@ -6452,13 +6460,13 @@ function ReviewView({ state, actions }) {
         safe_language_suggestions: ["under the specified model and assumptions", "requires expert review"],
         ready_for_export: false,
       };
-      setClaimAudit(audit);
+      setClaimAudit(normalizeClaimAuditResult(audit));
       saveReportVersion("Claim-audited draft", reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }), assembled, audit);
       const blockingCount = (audit.flagged_claims || []).filter((item) => item.severity === "blocking").length;
       pushAssistantNote(`Claim audit returned ${audit.status}. ${blockingCount} blocking issue(s) must be revised before external export.`);
       showToast("Claim audit complete.");
     } catch (error) {
-      setClaimAudit({ status: "fail", flagged_claims: [{ text: "Claim audit request", issue_type: "diagnostic_conflict", severity: "blocking", explanation: friendlyError(error), suggested_revision: "Fix the audit request and rerun before export." }], blocked_phrases: [], safe_language_suggestions: [], ready_for_export: false });
+      setClaimAudit(normalizeClaimAuditResult({ status: "fail", flagged_claims: [{ text: "Claim audit request", issue_type: "diagnostic_conflict", severity: "blocking", explanation: friendlyError(error), suggested_revision: "Fix the audit request and rerun before export." }], blocked_phrases: [], safe_language_suggestions: [], ready_for_export: false }));
       pushAssistantNote(`Claim audit failed: ${friendlyError(error)} Keep report language conservative until this is resolved.`);
       showToast("Claim audit failed.");
     } finally {
@@ -6470,7 +6478,7 @@ function ReviewView({ state, actions }) {
     if (format === "pdf") {
       if (!exportReady) {
         showToast("Resolve export blockers before PDF preview.");
-        pushAssistantNote("PDF preview is blocked until the report includes a selected Phase 8 run, claim audit, and sign-off checks.");
+        pushAssistantNote(`PDF preview is blocked: ${reviewExportBlockers.join(" | ")}`);
         return;
       }
       downloadPDFReport(state);
@@ -6478,33 +6486,18 @@ function ReviewView({ state, actions }) {
       pushAssistantNote("I opened a print-ready report preview. This proof of concept uses browser Save as PDF; a server-generated PDF can be added later.");
       return;
     }
-    if (!reportDraft || !claimAudit) {
-      showToast("Generate the report and run claim audit before export.");
-      pushAssistantNote("Generate the report and run claim audit before export so the package includes diagnostics, warnings, and claim-safety checks.");
-      return;
-    }
-    if (!selectedRun) {
-      showToast("Select a primary Phase 8 run before export.");
-      pushAssistantNote("Phase 9 export is blocked until a Phase 8 estimation run is selected as primary. This keeps the report tied to a specific computed run and diagnostics.");
-      return;
-    }
-    if (signoffBlockers.length > 0) {
-      showToast("Resolve sign-off blockers before export.");
-      pushAssistantNote(`Export is blocked: ${signoffBlockers.join(" ")}`);
-      return;
-    }
-    if (claimAudit.status === "fail" || (claimAudit.flagged_claims || []).some((item) => item.severity === "blocking")) {
-      showToast("Claim audit has blocking issues.");
-      pushAssistantNote("Export is blocked until unsafe causal or predictive claims are revised and claim audit is rerun.");
+    if (reviewExportBlockers.length > 0) {
+      showToast("Resolve export blockers before export.");
+      pushAssistantNote(`Export is blocked: ${reviewExportBlockers.join(" | ")}`);
       return;
     }
     const assembled = reportDraft || (backendStatus.connected ? await assembleReviewPackage(reviewExportPayloadFromState(state)) : reportDraft);
     if (!reportDraft) setReportDraft(assembled);
-    const audit = claimAudit || {
+    const audit = normalizeClaimAuditResult(claimAudit || {
       status: "warning",
       flagged_claims: [{ text: "claim audit", issue_type: "missing_limitation", severity: "medium", explanation: "Run claim audit before export.", suggested_revision: "Run claim audit before external use." }],
       ready_for_export: false,
-    };
+    });
     const result = backendStatus.connected
       ? await exportReviewPackage({
           assembled_package: assembled,
@@ -6780,14 +6773,9 @@ function ReviewView({ state, actions }) {
           <button className="btn" onClick={() => handleExportReviewPackage("markdown")} disabled={!exportReady}><FileText size={13} /> Export Markdown</button>
           <button className="btn" onClick={() => handleExportReviewPackage("pdf")} disabled={!exportReady}><FileCheck2 size={13} /> Export PDF Preview</button>
         </div>
-        {!exportReady && (
+        {reviewExportBlockers.length > 0 && (
           <div className="status-box status-warning" style={{ marginBottom: 12 }}>
-            Review missing items and unresolved warnings before exporting.
-          </div>
-        )}
-        {!claimAudit && (
-          <div className="status-box status-warning" style={{ marginBottom: 12 }}>
-            Run claim audit before export.
+            {reviewExportBlockers.join(" • ")}
           </div>
         )}
         {reportDraft ? (

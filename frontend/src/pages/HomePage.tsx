@@ -17,6 +17,8 @@ import { runIdentificationCheck } from "../api/identification";
 import { generateAnalysisStrategy } from "../api/analysisStrategy";
 import { reviewAssumptions } from "../api/assumptions";
 import { generateReport } from "../api/reports";
+import { listEstimationRuns, runEstimation, selectPrimaryEstimationRun, validateEstimationConfig } from "../api/estimation";
+import { assembleReviewPackage, auditReviewClaims, exportReviewPackage } from "../api/reviewExport";
 import { CausalGraphCanvas } from "../components/CausalGraphCanvas";
 import type {
   AnalysisStrategyResponse,
@@ -102,7 +104,7 @@ const pageCopy: Record<PageId, { title: string; subtitle: string; assistant: str
     title: "Welcome — I’m your Causal Design Agent",
     subtitle: "Set up your study, connect your evidence, and begin the guided causal design workflow",
     assistant:
-      "Welcome to your Causal Design workspace. You’re on the Home page. Here’s a quick guide to what you’re looking at. The top timeline shows the workflow: Project Setup → Data Foundation → Explore → Causal Design Agent → Estimator → Review & Report. The left panel is navigation. The center panel is your active workspace. I’ll help check whether your study materials are complete enough to continue. Let’s start with your Study Dataset — upload the raw CSV, JSON, or TSV file from your study.",
+      "Welcome to your Causal Design workspace. You’re on the Home page. Here’s a quick guide to what you’re looking at. The top timeline shows the workflow: Project Setup → Data Foundation → Explore → Causal Design Agent → Estimator → Review & Report. The left panel is navigation. The center panel is your active workspace. I’ll help check whether your study materials are complete enough to continue. Let’s start with your Study Dataset — upload the raw CSV file from your study. CSV is the currently supported dataset format.",
   },
   data: {
     title: "Data Foundation",
@@ -156,7 +158,7 @@ function getIssueText(error: unknown) {
 }
 
 function pickColumns(schema: DatasetSchemaResponse | null) {
-  if (!schema) return demoVariables;
+  if (!schema) return [];
   const preferred = demoVariables.filter((column) =>
     schema.column_names.includes(column),
   );
@@ -293,8 +295,8 @@ export function HomePage() {
     useState<TargetedFeasibilityResponse | null>(null);
   const [causalEvidenceSummary, setCausalEvidenceSummary] = useState("");
   const [temporalRagSummary, setTemporalRagSummary] = useState("");
-  const [researchObjective, setResearchObjective] = useState(demoObjective);
-  const [confirmedQuestion, setConfirmedQuestion] = useState(demoQuestion);
+  const [researchObjective, setResearchObjective] = useState("");
+  const [confirmedQuestion, setConfirmedQuestion] = useState("");
   const [candidateQuestions, setCandidateQuestions] = useState<CandidateCausalQuestion[]>([]);
   const [candidateVariables, setCandidateVariables] = useState<
     CandidateVariableRecommendation[]
@@ -2179,7 +2181,7 @@ function ExploreStage({
                 {item}
                 {!broadExploration && <small>Demo/example placeholder</small>}
               </span>
-              <button type="button">Annotate</button>
+              <button disabled title="Annotation is not implemented in this proof of concept." type="button">Annotate (coming later)</button>
               <button onClick={() => handlePromotePattern(item)} type="button">Promote</button>
             </div>
           ))}
@@ -2203,7 +2205,7 @@ function ExploreStage({
           <article className="panel chart-panel">
             <div className="panel-heading">
               <div>
-                <h2>Sleep vs Alcohol Events (7-day)</h2>
+                <h2>Sleep vs Alcohol Events (7-day demo preview)</h2>
                 <small>Click legend to toggle - drag brush to zoom</small>
               </div>
               <select aria-label="chart type"><option>Line</option></select>
@@ -2221,7 +2223,7 @@ function ExploreStage({
             <div className="chart-legend"><span className="legend-blue">Sleep (hrs)</span><span className="legend-green">Alcohol events</span></div>
           </article>
           <article className="panel">
-            <h2>Missing Data by Participant (%)</h2>
+            <h2>Missing Data by Participant (%) — demo preview</h2>
             <table className="compact-table">
               <thead><tr><th>Participant</th><th>EMA</th><th>Acti.</th><th>Phone</th><th>GPS</th></tr></thead>
               <tbody>
@@ -2245,7 +2247,7 @@ function ExploreStage({
           <article className="panel chart-panel">
             <div className="panel-heading">
               <div>
-                <h2>Within-Person Stress Variability</h2>
+                <h2>Within-Person Stress Variability — demo preview</h2>
                 <small>Week-over-week stress SD - click legend to toggle</small>
               </div>
               <select aria-label="chart type"><option>Area</option></select>
@@ -2952,7 +2954,7 @@ function TemporalStage({
         )}
       </article>
 
-      <article className="panel sensitivity-card">
+      <Phase8Panel datasetFilename={schema?.filename ?? ""} schema={schema} />\n\n      <article className="panel sensitivity-card">
         <div className="panel-heading">
           <h2>Sensitivity Plan</h2>
           <span className="soft-count">{completedRequired}/5 Required Checks Complete</span>
@@ -3476,7 +3478,7 @@ No causal effect is estimated here. Do not make clinical prediction, clinical cl
         {approvalMessage && <p className={approvalMessage.startsWith("Design artifact approved") ? "status-strip" : "status-strip status-strip--error"}>{approvalMessage}</p>}
       </article>
 
-      <article className="panel wide review-assistant-actions">
+      <Phase9Panel />\n\n      <article className="panel wide review-assistant-actions">
         <div>
           <h2>Assistant Review</h2>
           <p>I am reviewing the Analysis Story for completeness, evidence links, unsafe claims, and missing assumptions.</p>
@@ -3490,6 +3492,13 @@ No causal effect is estimated here. Do not make clinical prediction, clinical cl
     </section>
   );
 }
+
+function Phase8Panel({ datasetFilename, schema }: { datasetFilename: string; schema: DatasetSchemaResponse | null }) {
+  const cols=schema?.column_names??[]; const [x,setX]=useState(cols[0]??""); const [y,setY]=useState(cols[1]??""); const [out,setOut]=useState<Record<string,unknown>|null>(null); const [runs,setRuns]=useState<Record<string,unknown>[]>([]); const [msg,setMsg]=useState(""); const p={dataset_filename:datasetFilename,exposure:x,outcome:y,adjustment_set:[],participant_id:schema?.possible_id_columns[0]??"pid",timestamp:schema?.possible_timestamp_date_columns[0]??"time_stamp"};
+  const validate=async()=>{try{setOut(await validateEstimationConfig(p));setMsg("Configuration validated by backend.")}catch(e){setMsg(getIssueText(e))}}; const run=async()=>{try{setOut(await runEstimation({...p,estimator:"statsmodels_linear",identification_confirmed:false,graph_confirmed:false,assumptions_reviewed:false}));setMsg("Backend Python result returned; no LLM generated numerical results.")}catch(e){setMsg(getIssueText(e))}}; const list=async()=>{try{const r=await listEstimationRuns();setRuns(Array.isArray(r.runs)?r.runs as Record<string,unknown>[]:[])}catch(e){setMsg(getIssueText(e))}};
+  return <article className="panel wide"><h2>Phase 8 — Estimation & Calculation</h2><small>Numerical results come from backend Python/statsmodels, not the LLM.</small>{!datasetFilename?<p className="info-banner">Upload a CSV dataset and run schema parsing before estimation.</p>:<><label>Exposure<select value={x} onChange={e=>setX(e.target.value)}>{cols.map(c=><option key={c}>{c}</option>)}</select></label><label>Outcome<select value={y} onChange={e=>setY(e.target.value)}>{cols.map(c=><option key={c}>{c}</option>)}</select></label><button onClick={validate} type="button">Validate Estimation Config</button><button onClick={run} type="button">Run Backend Estimation</button><button onClick={list} type="button">List Runs</button>{msg&&<p>{msg}</p>}{out&&<pre>{JSON.stringify(out,null,2)}</pre>}{runs.map((r,i)=>{const id=String(r.run_id??r.id??"");return <button disabled={!id} key={id||i} onClick={async()=>{const primary=await selectPrimaryEstimationRun(id); localStorage.setItem("causalStudioPrimaryRun", JSON.stringify(primary)); setMsg("Primary run selected for Phase 9.")}} type="button">Select {String(r.run_label ?? id ?? "Run")} as Primary</button>})}</>}</article>;
+}
+function Phase9Panel() { const [pkg,setPkg]=useState<Record<string,unknown>|null>(null);const [audit,setAudit]=useState<Record<string,unknown>|null>(null);const [msg,setMsg]=useState(""); const assemble=async()=>{try{setPkg(await assembleReviewPackage({project:{project_title:"Causal Design Agent"},phase_8_estimation:{selected_primary_run:JSON.parse(localStorage.getItem("causalStudioPrimaryRun")??"{}")}}));setMsg("Backend review package assembled.")}catch(e){setMsg(getIssueText(e))}}; const check=async()=>{try{setAudit(await auditReviewClaims({report_text:""}));setMsg("Backend claim audit completed.")}catch(e){setMsg(getIssueText(e))}}; const exportPkg=async()=>{if(!pkg){setMsg("Assemble package first.");return}try{const r=await exportReviewPackage({assembled_package:pkg,claim_audit_result:audit??{},format:"json"});setMsg(`Backend export prepared: ${String(r.filename??"")}`)}catch(e){setMsg(getIssueText(e))}}; return <article className="panel wide"><h2>Phase 9 — Backend Review & Export</h2><small>Uses review-export assemble, claim-audit, and export APIs.</small><button onClick={assemble} type="button">Assemble Review Package</button><button onClick={check} type="button">Run Claim Audit</button><button onClick={exportPkg} type="button">Export Package</button>{msg&&<p>{msg}</p>}{pkg&&<pre>{JSON.stringify(pkg,null,2)}</pre>}{audit&&<pre>{JSON.stringify(audit,null,2)}</pre>}</article>; }
 
 function InfoList({ items }: { items: Array<[string, string]> }) {
   return (

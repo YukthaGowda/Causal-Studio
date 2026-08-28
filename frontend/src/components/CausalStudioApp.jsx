@@ -816,6 +816,28 @@ function friendlyError(error, fallback = "The backend request failed.") {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+const ASSISTANT_RESPONSE_UNAVAILABLE = "Assistant response is unavailable. Please try again.";
+
+function assistantMessageFromResponse(response) {
+  if (!response || typeof response !== "object") return ASSISTANT_RESPONSE_UNAVAILABLE;
+
+  const directMessage = [
+    response.assistant_message,
+    response.assistantMessage,
+    response.message,
+    typeof response.response === "string" ? response.response : null,
+  ].find((value) => typeof value === "string" && value.trim());
+  if (directMessage) return directMessage.trim();
+
+  const suggestionText = [response.recommendations, response.suggestions]
+    .filter(Array.isArray)
+    .flat()
+    .map((item) => typeof item === "string" ? item : item?.message || item?.text || item?.label)
+    .filter((item) => typeof item === "string" && item.trim())
+    .join(" ");
+  return suggestionText || ASSISTANT_RESPONSE_UNAVAILABLE;
+}
+
 function describeColumnSource(name) {
   const lower = name.toLowerCase();
   if (lower.includes("pid") || lower.includes("participant") || lower.endsWith("_id")) return "Identifier";
@@ -6407,7 +6429,7 @@ function ReviewView({ state, actions }) {
         user_feedback: prompt,
         rag_evidence: reportDraft?.rag_evidence || [],
       });
-      pushAssistantNote(response.assistant_message || "Review assistant action completed.");
+      pushAssistantNote(assistantMessageFromResponse(response));
     } catch (error) {
       pushAssistantNote(`Review assistant action failed: ${friendlyError(error)} Use deterministic report sections and claim audit as the source of truth.`);
     }
@@ -8321,10 +8343,10 @@ export default function CausalStudioApp() {
       });
       setAssistantThreads((t) => ({
         ...t,
-        [page]: [...(t[page] || []), { role: "assistant", text: response.assistant_message || localAssistantAnswer(prompt) }],
+        [page]: [...(t[page] || []), { role: "assistant", text: assistantMessageFromResponse(response) }],
       }));
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      return response.assistant_message || localAssistantAnswer(prompt);
+      return assistantMessageFromResponse(response);
     } catch (error) {
       const fallbackText = `I could not complete this assistant action through FastAPI: ${friendlyError(error)}\n\n${localAssistantAnswer(prompt)}`;
       setAssistantThreads((t) => ({
@@ -8425,6 +8447,7 @@ export default function CausalStudioApp() {
       </div>
 
       <div className="assistant-col">
+        <PanelErrorBoundary key={page}>
         <div className="assistant-head"><Sparkles size={15} color="var(--accent)" /><span>AI research assistant</span></div>
         <div className="assistant-body" ref={assistantScrollRef}>
           {assistantThread.map((m, i) => (
@@ -8459,6 +8482,7 @@ export default function CausalStudioApp() {
           <input placeholder="Ask a question\u2026" value={assistantInput} onChange={(e) => setAssistantInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAssistantInput()} />
           <button className="assistant-send" aria-label="Send" onClick={submitAssistantInput}><Send size={15} /></button>
         </div>
+        </PanelErrorBoundary>
       </div>
 
       {ackOpen && (

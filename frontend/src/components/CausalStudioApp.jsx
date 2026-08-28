@@ -69,8 +69,35 @@ const CHART_TYPE_OPTIONS = [
 ];
 const CHART_PALETTE = ["#2F5D8A", "#B8382B", "#3E8E7E", "#C4933F", "#7B5EA7", "#4A6FA5"];
 
+class PanelErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("Causal Studio panel error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="card" role="alert">
+          <div className="card-head"><div className="card-title">Panel unavailable</div></div>
+          <p className="card-desc">Something went wrong in this panel. Please go back or refresh.</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function FlexibleChart({ data, xKey, series, type = "bar", height = 145, layout = "horizontal", xLabel, yLabel }) {
-  if (!data || data.length === 0) return <div style={{ padding: 12, fontSize: 12, color: "#5B6472" }}>No data yet.</div>;
+  if (!Array.isArray(data) || data.length === 0) return <div style={{ padding: 12, fontSize: 12, color: "#5B6472" }}>No data yet.</div>;
   const seriesArr = Array.isArray(series) ? series : [series];
   const effectiveHeight = Math.max(height, 210);
   const chartMargin = { left: 28, right: 20, bottom: 44, top: 10 };
@@ -8372,6 +8399,7 @@ export default function CausalStudioApp() {
       </div>
 
       <div className={`main-col text-justify ${page === "graph" ? "main-col-canvas" : ""}`}>
+        <PanelErrorBoundary key={page}>
         {page === "setup" && <ProjectSetupView state={state} actions={actions} />}
         {page === "data-foundation" && <DataFoundationView state={state} actions={actions} />}
         {page === "explore" && (
@@ -8393,6 +8421,7 @@ export default function CausalStudioApp() {
           <EstimationView state={state} actions={actions} onGoNext={() => goToPage("review")} />
         )}
         {page === "review" && <ReviewView state={state} actions={actions} />}
+        </PanelErrorBoundary>
       </div>
 
       <div className="assistant-col">

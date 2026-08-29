@@ -8224,10 +8224,35 @@ export default function CausalStudioApp() {
   function buildAssistantPageState(pageKey) {
     const dataset = firstRealDataset(datasets);
     const schema = dataset?.schema;
+    const activeWarnings = [
+      ...(targetedFeasibilityResult?.warnings || []),
+      ...(graphValidationResult?.warnings || []),
+      ...(analysisStrategyValidation?.warnings || []),
+      ...estimationRunWarnings(primaryEstimationRun || latestEstimationRun),
+    ].filter(Boolean);
     const base = {
       page: pageKey,
       research_objective: objective,
       backend_connected: backendStatus.connected,
+      study_mode_active: Boolean(studyMode),
+      study_mode: studyMode ? {
+        label: studyMode.label,
+        task: "Fixed BDE causal-design task",
+        approved_dataset: studyMode.dataset?.label || "Approved study dataset",
+        frozen_artifacts: "Frozen study draft — editable, not yet confirmed.",
+        graph_boundary: "Assumption-based graph draft — not causal proof.",
+        numerical_boundary: "Numerical values must be backend-computed.",
+      } : null,
+      selected_question: questionFields || {},
+      selected_exposure: questionFields?.exposure || Object.entries(variableRoles).find(([, role]) => role === "Exposure")?.[0] || null,
+      selected_outcome: questionFields?.outcome || Object.entries(variableRoles).find(([, role]) => role === "Outcome")?.[0] || null,
+      selected_covariates: Object.entries(variableRoles).filter(([, role]) => role === "Confounder").map(([name]) => name),
+      feasibility_status: targetedFeasibilityResult?.status || feasibility?.verdict || "not run",
+      graph_status: graphValidationResult?.status || (confirmedGraph ? "confirmed" : "draft/not validated"),
+      strategy_status: analysisStrategyConfirmed ? "confirmed" : analysisStrategyValidation?.status || "draft/not validated",
+      estimation_status: primaryEstimationRun ? "primary selected" : latestEstimationRun ? "computed/not selected" : "not run",
+      report_status: primaryEstimationRun ? "ready for review and claim audit" : "draft/incomplete",
+      active_warnings: activeWarnings,
     };
 
     if (pageKey === "setup") {
@@ -8477,62 +8502,10 @@ export default function CausalStudioApp() {
     return { prompt };
   }
 
-  function localAssistantAnswer(q) {
-    return ANSWERS[q] || "This assistant explains setup requirements, but doesn't have a canned answer for that yet in this prototype.";
-  }
-
-  function askAssistant(q) {
-    setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: q }] }));
-    setAssistantThinking(true);
-    setAssistantThinkingMessage("Thinking...");
-    setTimeout(() => {
-      setAssistantThinking(false);
-      setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: localAssistantAnswer(q) }] }));
-    }, 650);
-  }
-  async function runGeneralAssistantChat(prompt) {
-    setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
-    setAssistantThinking(true);
-    setAssistantThinkingMessage("Thinking...");
-    try {
-      const response = await assistantChat({
-        message: prompt,
-        workflow_step: ASSISTANT_PHASE_MAP[page],
-      });
-      const assistantText = assistantMessageFromResponse(response);
-      setAssistantThreads((t) => ({
-        ...t,
-        [page]: [...(t[page] || []), { role: "assistant", text: assistantText }],
-      }));
-      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      return assistantText;
-    } catch (error) {
-      const fallbackText = "I could not complete this chat request: " + friendlyError(error);
-      setAssistantThreads((t) => ({
-        ...t,
-        [page]: [...(t[page] || []), { role: "assistant", text: fallbackText }],
-      }));
-      return fallbackText;
-    } finally {
-      setAssistantThinking(false);
-    }
-  }
-
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
-    const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation", "review"].includes(page);
+    const useBackendAction = Boolean(ASSISTANT_PHASE_MAP[page]);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
-
-    if (!useBackendAction) {
-      const fallbackText = localAssistantAnswer(prompt);
-      setAssistantThinking(true);
-      setAssistantThinkingMessage("Thinking...");
-      setTimeout(() => {
-        setAssistantThinking(false);
-        setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: fallbackText }] }));
-      }, 650);
-      return fallbackText;
-    }
 
     setAssistantThinking(true);
     setAssistantThinkingMessage("Assistant is reviewing the current page state...");
@@ -8553,7 +8526,7 @@ export default function CausalStudioApp() {
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       return assistantMessageFromResponse(response);
     } catch (error) {
-      const fallbackText = `I could not complete this assistant action through FastAPI: ${friendlyError(error)}\n\n${localAssistantAnswer(prompt)}`;
+      const fallbackText = `LLM response is unavailable, but I can still explain the current workflow state using deterministic dashboard information.\n\n${friendlyError(error)}`;
       setAssistantThreads((t) => ({
         ...t,
         [page]: [
@@ -8573,7 +8546,7 @@ export default function CausalStudioApp() {
     const q = assistantInput.trim();
     if (!q) return;
     setAssistantInput("");
-    askAssistant(q);
+    runAssistantAction(q);
   }
 
   const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);

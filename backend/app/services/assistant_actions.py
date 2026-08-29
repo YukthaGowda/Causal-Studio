@@ -129,6 +129,27 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
             f"with {len(warnings)} warning(s). {caution}"
         )
 
+    if phase == "phase_4_question_variables":
+        question = page_state.get("selected_question") or page_state.get("confirmed_question") or {}
+        if isinstance(question, str):
+            question_text = question
+        else:
+            question_text = question.get("question") or "not yet confirmed"
+        exposure = page_state.get("selected_exposure") or (question.get("exposure") if isinstance(question, dict) else None) or "not selected"
+        outcome = page_state.get("selected_outcome") or (question.get("outcome") if isinstance(question, dict) else None) or "not selected"
+        covariates = page_state.get("selected_covariates") or []
+        study_mode = page_state.get("study_mode") or {}
+        parts = [
+            f"Phase 4 is for reviewing the research question and variable roles.",
+            f"Current question: {question_text}.",
+            f"Exposure: {exposure}. Outcome: {outcome}.",
+            f"Selected candidate confounders: {', '.join(map(str, covariates)) or 'none'}.",
+        ]
+        if study_mode:
+            parts.append("Study Mode is active: frozen artifacts are editable drafts and must be confirmed before downstream use.")
+        parts.append("Confirm the question and review variable roles before feasibility; this does not establish a causal claim.")
+        return " ".join(parts)
+
     if phase == "phase_5_feasibility":
         result = page_state.get("targeted_feasibility_result") or {}
         status = result.get("status") or page_state.get("feasibility_status") or "not run"
@@ -328,6 +349,17 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
     )
 
 
+
+def _safe_question_guidance(question: str) -> str:
+    lowered = str(question or "").lower()
+    if any(term in lowered for term in ("diagnos", "treatment", "medication", "clinical advice", "medical advice", "should i drink", "should i stop drinking")):
+        return "I can help with the Causal Studio study workflow, but I cannot provide clinical advice or unsupported causal conclusions."
+    if any(term in lowered for term in ("prove", "causes", "cause binge", "causal proof")):
+        return "No. This workflow can document assumptions, feasibility, and backend-computed associations, but it cannot prove that movement causes binge drinking without reviewed causal assumptions and validation."
+    if any(term in lowered.split() for term in ("hi", "hello", "hey")):
+        return "Hello. I can help you use the current Causal Studio phase, review frozen study drafts, explain warnings, and identify the next required check."
+    return "I can explain the current Causal Studio workflow state using the dashboard information below."
+
 def _fallback_response(
     *,
     phase: str,
@@ -337,13 +369,15 @@ def _fallback_response(
     rag_evidence: list[dict[str, Any]],
     warning: str | None = None,
     unavailable_reason: str | None = None,
+    user_question: str = "",
 ) -> dict[str, Any]:
     fallback_note = unavailable_reason or (
         "LLM interpretation is unavailable because the API key is not configured, "
         "but deterministic checks and backend outputs are still available."
     )
     summary = _summarize_page_state(phase, page_state)
-    assistant_message = f"{fallback_note}\n\n{summary}"
+    question_guidance = _safe_question_guidance(user_question)
+    assistant_message = f"{fallback_note}\n\n{question_guidance}\n\n{summary}"
     if selected_item:
         assistant_message += "\n\nSelected item was included in the request and should be reviewed against deterministic backend output."
     if rag_evidence:
@@ -403,7 +437,8 @@ def _build_system_prompt() -> str:
         "- Numerical values must come only from Python/R backend outputs already present in page_state.\n"
         "- Graph validity, identification, estimation, diagnostics, and claims must come from deterministic backend checks.\n"
         "- Always distinguish Python/R computation from GenAI explanation.\n"
-        "- Causal Design Agent is not a diagnostic tool or treatment-decision system.\n\n"
+        "- Causal Design Agent is not a diagnostic tool or treatment-decision system.\n"
+        "- For clinical, diagnosis, treatment, or unsupported-causality requests, state that you can help with the workflow but cannot provide clinical advice or unsupported causal conclusions.\n\n"
         "Return concise, state-specific guidance. If a value or evidence source is missing, say so clearly."
     )
 
@@ -438,9 +473,9 @@ def run_assistant_action(
             selected_item=normalized_selected_item,
             rag_evidence=normalized_rag_evidence,
             unavailable_reason=(
-                "LLM interpretation is unavailable because the API key is not configured, "
-                "but deterministic checks and backend outputs are still available."
+                "LLM response is unavailable, but I can still explain the current workflow state using deterministic dashboard information."
             ),
+            user_question=user_feedback,
         )
     else:
         safe_state = compact_value(page_state, max_items=20)
@@ -487,8 +522,8 @@ def run_assistant_action(
                 "used_llm": True,
                 "used_rag": bool(normalized_rag_evidence),
             }
-        except OpenAIError as error:
-            warning = format_openai_error(error)
+        except Exception as error:
+            warning = format_openai_error(error) if isinstance(error, OpenAIError) else "OpenAI request failed; deterministic workflow guidance is shown instead."
             response = _fallback_response(
                 phase=phase,
                 action=action,
@@ -497,9 +532,9 @@ def run_assistant_action(
                 rag_evidence=normalized_rag_evidence,
                 warning=warning,
                 unavailable_reason=(
-                    "LLM interpretation is unavailable because the configured OpenAI request failed, "
-                    "but deterministic checks and backend outputs are still available."
+                    "LLM response is unavailable, but I can still explain the current workflow state using deterministic dashboard information."
                 ),
+                user_question=user_feedback,
             )
 
     record_trace_event(

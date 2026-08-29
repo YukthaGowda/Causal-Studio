@@ -1833,10 +1833,10 @@ function DataFoundationView({ state, actions }) {
   const highMissingRows = missingnessRows.filter((row) => row.pct >= 30);
   const stableStructureRows = hasRealSchema
     ? parsedRows.filter((row) => ["Identifier", "Timestamp", "Baseline"].includes(row.tag)).slice(0, 8)
-    : BASELINE_VARIABLES.map((name) => ({ name, tag: "Baseline" }));
+    : [];
   const repeatedStructureRows = hasRealSchema
     ? parsedRows.filter((row) => !["Identifier", "Baseline"].includes(row.tag)).slice(0, 12)
-    : DATA_SCHEMA.filter((v) => v.frequency).map((v) => ({ name: v.name, tag: v.frequency }));
+    : [];
 
   const parsedOk = datasets.length > 0 && !datasets.some((d) => d.status === "blocking");
   const participantFields = [...new Set(datasets.map((d) => d.participantField).filter(Boolean))];
@@ -1846,18 +1846,6 @@ function DataFoundationView({ state, actions }) {
   const isComplete = parsedOk && linkingStatus !== "review" && timestampStatus !== "review";
 
   const hasData = datasets.length > 0;
-  const seed = hasData ? seedFromName(datasets[0].name, datasets.length) : 0;
-  const participants = hasData ? 60 + (seed % 100) : 0;
-  const days = hasData ? 14 + (seed % 20) : 0;
-  const maxRows = participants * days;
-
-  const qualityRows = [
-    { name: "sleep_quality", pct: hasData ? 3 + (seed % 8) : 0 },
-    { name: "stress_level", pct: hasData ? 6 + (seed % 8) : 0 },
-    { name: "actigraphy_activity", pct: hasData ? 10 + (seed % 10) : 0 },
-    { name: "phone_screen_time", pct: hasData ? 16 + (seed % 14) : 0 },
-  ];
-  const worstRow = qualityRows.reduce((a, b) => (b.pct > a.pct ? b : a), qualityRows[0]);
   const barColor = (pct) => (pct > 20 ? "var(--danger)" : pct > 10 ? "var(--warning)" : "var(--success)");
 
   return (
@@ -1904,7 +1892,7 @@ function DataFoundationView({ state, actions }) {
             <Compass size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
             {hasRealSchema
               ? `Backend schema loaded: ${selectedSchema.number_of_rows?.toLocaleString()} rows, ${selectedSchema.number_of_columns} columns, ${formatList(realIdColumns, "no obvious ID field")}, and ${formatList(realTimestampColumns, "no obvious timing field")}.`
-              : `Fallback structure estimate: participant-day - ${participants} participants, up to ${days} days each (up to ${maxRows.toLocaleString()} possible rows per variable).`}
+              : "A dataset is listed, but its backend schema is not available yet. Parse the CSV before interpreting its structure."}
           </div>
         )}
       </div>
@@ -1944,31 +1932,28 @@ function DataFoundationView({ state, actions }) {
 
       <div className="card">
         <div className="card-head"><div className="card-title"><Clock size={16} color="var(--accent)" /> Timestamps & measurement frequency</div><CardInfo text="When each variable was collected and how often — daily, hourly, event-triggered. Critical for checking whether the lag window you choose later can actually be constructed from the data." /></div>
-        <table className="mini-table">
-          <thead><tr><th>Source</th><th>Frequency</th><th>Example</th></tr></thead>
-          <tbody>
-            <tr><td>EMA survey</td><td>3x/day</td><td>Morning, afternoon, and evening prompts</td></tr>
-            <tr><td>Actigraphy</td><td>Continuous</td><td>1-minute epochs</td></tr>
-            <tr><td>Passive sensing</td><td>Event-based</td><td>Logged on each screen unlock or session</td></tr>
-          </tbody>
-        </table>
+        {hasRealSchema ? (
+          <div className="helper"><Info size={13} /> Detected timing fields: {formatList(realTimestampColumns, "none detected")}. Per-variable measurement frequency is not derived by the current backend and must not be inferred from this screen.</div>
+        ) : (
+          <div className="helper"><Info size={13} /> Upload and parse a CSV before reviewing timing fields. No example measurement schedule is substituted for study data.</div>
+        )}
       </div>
 
       <div className="two-col">
         <div className="card">
           <div className="card-head"><div className="card-title">Stable or linking fields</div><CardInfo text="Fields that look like identifiers, timestamps, or baseline descriptors. Phase 2 describes measurement structure only; it does not assign final causal roles." /></div>
-          <p className="card-desc">{hasRealSchema ? "Detected from the parsed backend schema." : "Shown from demo examples until a CSV schema is parsed."}</p>
+          <p className="card-desc">{hasRealSchema ? "Detected from the parsed backend schema." : "Available after a CSV schema is parsed."}</p>
           <ul className="plain-list">
-            {stableStructureRows.map((v) => <li key={v.name || v}>{v.name || v} {v.tag && <span className="chip chip-muted freq-tag">{v.tag}</span>}</li>)}
+            {stableStructureRows.length ? stableStructureRows.map((v) => <li key={v.name || v}>{v.name || v} {v.tag && <span className="chip chip-muted freq-tag">{v.tag}</span>}</li>) : <li className="helper">No parsed structure is available yet.</li>}
           </ul>
         </div>
         <div className="card">
           <div className="card-head"><div className="card-title">Repeated or measured fields</div><CardInfo text="Fields that appear time-indexed, self-reported, wearable-derived, smartphone-derived, or otherwise measured repeatedly. Causal labels are intentionally deferred to later phases." /></div>
-          <p className="card-desc">{hasRealSchema ? "Descriptive labels inferred from column names and backend schema metadata." : "Repeated across the study period in the demo scaffold."}</p>
+          <p className="card-desc">{hasRealSchema ? "Descriptive labels inferred from column names and backend schema metadata." : "Available after a CSV schema is parsed."}</p>
           <ul className="plain-list">
-            {repeatedStructureRows.map((v) => (
+            {repeatedStructureRows.length ? repeatedStructureRows.map((v) => (
               <li key={v.name}><span className="mono">{v.name}</span> <span className="chip chip-muted freq-tag">{v.tag}</span></li>
-            ))}
+            )) : <li className="helper">No parsed repeated-measure fields are available yet.</li>}
           </ul>
         </div>
       </div>
@@ -1977,19 +1962,20 @@ function DataFoundationView({ state, actions }) {
         <div className="card-head"><div className="card-title">Missingness & data quality</div><CardInfo text="Flags variables with high missing rates, implausible values, or inconsistent formatting. High missingness in key variables can threaten feasibility or introduce bias." /></div>
         {hasData ? (
           <>
-            {(missingnessRows.length ? missingnessRows : qualityRows).map((r) => (
+            {missingnessRows.map((r) => (
               <div className="metric-bar-row" key={r.name}>
                 <span className="metric-bar-label mono">{r.name}</span>
                 <div className="metric-bar-track"><div className="metric-bar-fill" style={{ width: `${Math.min(r.pct, 100)}%`, background: barColor(r.pct) }} /></div>
                 <span className="metric-bar-value">{r.pct.toFixed ? r.pct.toFixed(2) : r.pct}%</span>
               </div>
             ))}
-            {(missingnessRows[0]?.pct ?? worstRow.pct) > 15 && (
+            {missingnessRows[0]?.pct > 15 && (
               <div className="helper" style={{ marginTop: 8 }}>
                 <AlertTriangle size={13} color="var(--warning)" style={{ flexShrink: 0, marginTop: 1 }} />
-                <span><span className="mono">{missingnessRows[0]?.name || worstRow.name}</span> missingness is high enough to flag \u2014 worth checking device or survey compliance for the affected participants.</span>
+                <span><span className="mono">{missingnessRows[0]?.name}</span> missingness is high enough to flag — review the source data and measurement process before analysis.</span>
               </div>
             )}
+            {!missingnessRows.length && <div className="helper"><Info size={13} /> The parsed schema did not return variable-level missingness for display.</div>}
           </>
         ) : (
           <div className="helper"><Info size={13} /> Upload a dataset to compute missingness.</div>
@@ -2014,13 +2000,10 @@ function DataFoundationView({ state, actions }) {
         <div className="card-head"><div className="card-title">Inconsistency detected</div><CardInfo text="A mismatch between the data dictionary and the actual data — for example, a variable declared numeric that contains text values, or a range that's violated in the data." /></div>
         {!dictionary ? (
           <div className="helper"><Info size={13} /> Upload a data dictionary in Project Setup to run this check.</div>
+        ) : selectedSchema?.possible_impossible_numeric_values?.length ? (
+          <div className="inconsistency-card"><p>{selectedSchema.possible_impossible_numeric_values.map((item) => `${item.column}: ${item.warning}`).join(" ")}</p></div>
         ) : (
-          <div className="inconsistency-card">
-            <p>
-              Your data dictionary lists <span className="mono">phone_screen_time</span> in hours, but the dataset values range 0\u2013540 \u2014
-              consistent with minutes, not hours. Confirm the correct unit before this is used in analysis.
-            </p>
-          </div>
+          <div className="helper"><Info size={13} /> No dictionary-to-data inconsistency result is available from the current backend. Review units and coding before analysis.</div>
         )}
       </div>
     </>
@@ -2127,13 +2110,10 @@ function ExploreView({ state, actions, onGoNext }) {
   const sleepDistribution = useMemo(() => buildDistribution(seed, distMetric), [seed, distMetric]);
   const distMetricInfo = DIST_VARIABLE_OPTIONS.find((o) => o.key === distMetric);
 
-  const patterns = [
-    { id: "p1", text: "Poor sleep quality precedes same-week alcohol-use events at a higher rate than chance.", stat: "r = 0.34, p = 0.02" },
-    { id: "p2", text: "Self-reported alcohol use is more frequent following high phone screen-time days.", stat: "r = 0.21, p = 0.07" },
-    { id: "p3", text: "Within-person stress shows more variability on weekend days than weekdays.", stat: "\u0394 = 12 pts, p = 0.04" },
-  ];
-
-  const highMissingParticipant = missingRows.reduce((a, b) => (b.phone > a.phone ? b : a), missingRows[0]);
+  // The current backend returns a structural broad-exploration summary, not chart-ready
+  // series. Keep prototype visualizations out of the study workflow until matching
+  // Python-backed endpoints exist.
+  const showPrototypeVisualizations = false;
 
   return (
     <>
@@ -2214,7 +2194,7 @@ function ExploreView({ state, actions, onGoNext }) {
         )}
         {!broadExploration && (
           <div className="action-note action-note-warning">
-            No backend exploration result is loaded yet. The charts below remain frontend demo visualizations until "Run broad exploration" succeeds.
+            No backend exploration result is loaded yet. Run the Python broad-exploration check; chart-ready visualizations remain unavailable until a matching backend response exists.
           </div>
         )}
         <div className="helper">
@@ -2227,6 +2207,13 @@ function ExploreView({ state, actions, onGoNext }) {
         )}
       </div>
 
+      <div className="card">
+        <div className="card-head"><div className="card-title">Additional visual exploration</div></div>
+        <p className="card-desc">Chart-ready distributions, temporal series, participant-level missingness, and correlation patterns are not yet returned by the backend.</p>
+        <div className="helper"><Info size={13} /> These visual summaries are intentionally unavailable rather than populated with demonstration values. Use the Python-backed broad-exploration summary above, then continue to Phase 4.</div>
+      </div>
+
+      {showPrototypeVisualizations && <>
       <div className="card">
         <div className="card-head"><div className="card-title">Filters</div><CardInfo text="Narrow the displayed data by variable domain, participant group, or date window. Use these to focus your exploration on a relevant subset before assigning causal roles." /></div>
         <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
@@ -2457,6 +2444,8 @@ function ExploreView({ state, actions, onGoNext }) {
           </tbody>
         </table>
       </div>
+
+      </>}
 
       <div className="next-bar">
         <p><strong style={{ color: "var(--navy)" }}>Next:</strong> formalize a causal question and provisional variable roles.</p>
@@ -3293,6 +3282,10 @@ function FeasibilityView({ state, actions, onGoNext }) {
     return pairs;
   }, [targetedVars, seed]);
 
+  // These cards were previously populated from seeded demonstration values. Keep
+  // them unavailable until the backend supplies matching Python-derived outputs.
+  const showPrototypeVisualizations = false;
+
   return (
     <>
       <div className="ps-header">
@@ -3448,6 +3441,13 @@ function FeasibilityView({ state, actions, onGoNext }) {
         </div>
       )}
 
+      <div className="card">
+        <div className="card-head"><div className="card-title">Additional feasibility visualizations</div></div>
+        <p className="card-desc">Distribution, temporal, frequency, correlation, and analysis-ready sample visualizations require matched Python outputs that the current backend does not provide.</p>
+        <div className="helper"><Info size={13} /> These prototype cards are intentionally unavailable rather than populated with demonstration values. Use the Python targeted-feasibility results above for the current decision.</div>
+      </div>
+
+      {showPrototypeVisualizations && <>
       <div className="card">
         <div className="card-head">
           <div className="card-title">Which variable do you want to inspect?</div>
@@ -3783,27 +3783,25 @@ function FeasibilityView({ state, actions, onGoNext }) {
         </div>
       </div>
 
+      </>}
+
       <div className="next-bar">
-        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> build the causal graph only after feasibility limitations are reviewed.</p>
+        <p><strong style={{ color: "var(--navy)" }}>Next:</strong> build the causal graph only after Python feasibility limitations are reviewed.</p>
         <div className="button-row">
           {(feasibilityStatus === "requires_revision" || feasibilityStatus === "not_feasible") && (
             <button className="btn btn-secondary" onClick={() => actions.showToast("Use Phase 4 in the left navigation to revise the question, exposure, comparator, timing, or variables.")}>
               Revise Phase 4 inputs
             </button>
           )}
-          {feasibilityStatus === "marginal" && (
+          {feasibilityStatus === "marginal" && targetedFeasibilityResult?.safe_to_continue_to_graph && (
             <button className="btn btn-secondary" onClick={() => { showToast("Limitations accepted for this design draft. Keep them in the final report."); onGoNext(); }}>
               Proceed with limitations <ArrowRight size={14} />
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => {
-            if (feasibilityStatus === "not_run") {
-              showToast("Run Python feasibility checks first, or proceed only as a demo draft.");
-            } else if (feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision") {
-              showToast("Feasibility is inadequate. Revise Phase 4 inputs before graph design.");
+          <button className="btn btn-primary" disabled={!targetedFeasibilityResult?.safe_to_continue_to_graph} onClick={() => {
+            if (!targetedFeasibilityResult?.safe_to_continue_to_graph) {
+              showToast("Run and pass the Python feasibility check before continuing to Causal Graph.");
               return;
-            } else if (feas.verdict === "Not feasible") {
-              showToast("Local demo feasibility is \"Not feasible\"; review the backend result before continuing.");
             }
             onGoNext();
           }}>Causal graph <ArrowRight size={14} /></button>
@@ -5509,7 +5507,7 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
 }
 
 function EstimationView({ state, actions, onGoNext }) {
-  const { questionFields, feasibility, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed } = state;
+  const { questionFields, feasibility, targetedFeasibilityResult, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed } = state;
   const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
@@ -5814,9 +5812,9 @@ function EstimationView({ state, actions, onGoNext }) {
               <tr><td style={{ color: "#5B6472" }}>Library / function</td><td className="mono">statsmodels OLS/Logit with robust or clustered standard errors</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Repeated-measures strategy</td><td>{phase7Strategy.repeated_measures_strategy || "Clustered standard errors when participant ID is available"}</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Missing-data handling</td><td>{phase7Strategy.missing_data_strategy || "Complete-case analysis only in this proof of concept"}</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Analysis sample</td><td>{feasibility.finalSample.toLocaleString()} participant-days</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Exclusions</td><td>{Math.round(feasibility.finalSample * 0.08).toLocaleString()} participant-days (lag + missingness filter)</td></tr>
-              <tr><td style={{ color: "#5B6472" }}>Person-time</td><td>{Math.round(feasibility.finalSample / 4.2).toLocaleString()} person-study-weeks</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Analysis sample</td><td>{targetedFeasibilityResult?.analysis_ready_sample_check?.complete_case_rows_for_exposure_outcome_and_selected ?? targetedFeasibilityResult?.analysis_ready_sample_check?.complete_case_rows_for_selected_variables ?? "Not computed — run Python feasibility checks."}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Exclusions</td><td>{targetedFeasibilityResult?.analysis_ready_sample_check ? "See the Python feasibility result for filtering and exclusions." : "Not computed — run Python feasibility checks."}</td></tr>
+              <tr><td style={{ color: "#5B6472" }}>Person-time</td><td>Not calculated until a backend computation provides it.</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Random seed</td><td className="mono">42</td></tr>
               <tr><td style={{ color: "#5B6472" }}>Software version</td><td className="mono">Python backend / statsmodels / pandas / numpy / scipy</td></tr>
             </tbody>

@@ -4784,10 +4784,20 @@ const REPEATED_MEASURES_ITEMS = [
 ];
 
 function computeAdjustment(variableRoles) {
-  const confounders = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Confounder").map((v) => v.name);
-  const mediators = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Mediator").map((v) => v.name);
-  const proxies = ROLE_TABLE_VARIABLES.filter((v) => (variableRoles[v.name] || v.roleGuess) === "Proxy").map((v) => v.name);
-  return { confounders, mediators, proxies };
+  const roles = variableRoles || {};
+  const hasFixedBdeRoles = ["acc_mean_magnitude", "binge_drinking_event", "time_of_day", "day_of_week"]
+    .some((name) => Object.prototype.hasOwnProperty.call(roles, name));
+  const roleEntries = hasFixedBdeRoles
+    ? Object.entries(roles).map(([name, role]) => ({ name, role }))
+    : ROLE_TABLE_VARIABLES.map((variable) => ({ name: variable.name, role: roles[variable.name] || variable.roleGuess }));
+  const namesWithRole = (role) => roleEntries
+    .filter((item) => item.role === role)
+    .map((item) => item.name);
+  return {
+    confounders: namesWithRole("Confounder"),
+    mediators: namesWithRole("Mediator"),
+    proxies: namesWithRole("Proxy"),
+  };
 }
 
 function StrategyView({ state, actions, onGoNext }) {
@@ -6267,7 +6277,9 @@ function activeReportConfiguration(state, selectedRun = state.primaryEstimationR
   const config = selectedRun?.config || {};
   const runExposure = selectedRun?.results?.exposure || config.exposure || "";
   const runOutcome = selectedRun?.results?.outcome || config.outcome || "";
-  const adjustmentSet = reportValueList(config.adjustmentSet || config.adjustment_set || state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+  const estimationCovariates = reportValueList(config.adjustmentSet || config.adjustment_set);
+  const reportAdjustmentSet = reportValueList(state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+  const adjustmentSet = estimationCovariates.length ? estimationCovariates : reportAdjustmentSet;
   const graphNodes = (state.graphNodes || []).map((node) => node?.id || node?.label).filter(Boolean);
   const names = [...new Set([
     ...Object.keys(state.variableRoles || {}),
@@ -6285,15 +6297,23 @@ function activeReportConfiguration(state, selectedRun = state.primaryEstimationR
   if (selectedRun) {
     if (question.exposure && runExposure && question.exposure !== runExposure) issues.push(`Research-question exposure (${question.exposure}) does not match the selected estimation exposure (${runExposure}).`);
     if (question.outcome && runOutcome && question.outcome !== runOutcome) issues.push(`Research-question outcome (${question.outcome}) does not match the selected estimation outcome (${runOutcome}).`);
-    const runAdjustment = reportValueList(config.adjustmentSet || config.adjustment_set);
-    const selectedAdjustment = reportValueList(state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+    const runAdjustment = estimationCovariates;
+    const selectedAdjustment = reportAdjustmentSet;
     if (runAdjustment.length && selectedAdjustment.join("|") !== runAdjustment.join("|")) issues.push("The selected adjustment set does not match the adjustment set recorded for the selected estimation run.");
     const expectedGraphNodes = [runExposure, runOutcome, ...runAdjustment].filter(Boolean);
     if (graphNodes.length && expectedGraphNodes.some((name) => !graphNodes.includes(name))) issues.push("The confirmed graph does not contain all variables used by the selected estimation run.");
     if (state.studyMode?.active && runExposure && runExposure !== "acc_mean_magnitude") issues.push("The fixed BDE task requires acc_mean_magnitude as the selected exposure.");
     if (state.studyMode?.active && runOutcome && runOutcome !== "binge_drinking_event") issues.push("The fixed BDE task requires the backend-derived binge_drinking_event outcome (label == BD).");
   }
-  return { adjustmentSet, roleTable, issues: [...new Set(issues)], runExposure, runOutcome };
+  return {
+    adjustmentSet,
+    reportAdjustmentSet,
+    estimationCovariates,
+    roleTable,
+    issues: [...new Set(issues)],
+    runExposure,
+    runOutcome,
+  };
 }
 
 function reviewExportPayloadFromState(state, reportPreferences = {}) {
@@ -6553,12 +6573,32 @@ function ReviewView({ state, actions }) {
   const exportReady = reviewExportBlockers.length === 0;
   const hasAlignmentBlocker = Boolean(studyMode && (reportConfiguration.issues.length || !selectedRun));
 
+  const blockedPreviewExportMessage = "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. Reset to the approved BDE workspace variables, then rerun feasibility, graph validation, strategy confirmation, and estimation.";
+
+  function notifyPreviewExportBlocked() {
+    showToast(blockedPreviewExportMessage);
+    pushAssistantNote(blockedPreviewExportMessage, "review");
+  }
+
   function handleResetApprovedBdeVariables() {
     if (!resetApprovedBdeWorkspaceVariables?.()) return;
     setReportDraft(null);
     setReportPreview("");
+    setReportHistory([]);
     setClaimAudit(null);
     setIsEditingReport(false);
+  }
+
+  function handlePreviewReport() {
+    if (hasAlignmentBlocker) {
+      notifyPreviewExportBlocked();
+      return;
+    }
+    if (!reportDraft) {
+      showToast("Generate the report before switching between edit and preview.");
+      return;
+    }
+    setIsEditingReport((value) => !value);
   }
 
   function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
@@ -6604,6 +6644,10 @@ function ReviewView({ state, actions }) {
   }
 
   async function handleGenerateReport() {
+    if (hasAlignmentBlocker) {
+      notifyPreviewExportBlocked();
+      return;
+    }
     setReportLoading(true);
     const payload = reviewExportPayloadFromState(state, {
       unresolved_warnings_acknowledged: false,
@@ -6697,8 +6741,7 @@ function ReviewView({ state, actions }) {
     actions.recordStudyEvent?.("export_attempted", { format });
     if (format === "pdf") {
       if (!exportReady) {
-        showToast("Resolve export blockers before PDF preview.");
-        pushAssistantNote(`PDF preview is blocked: ${reviewExportBlockers.join(" | ")}`);
+        notifyPreviewExportBlocked();
         return;
       }
       downloadPDFReport(state, reportDraft);
@@ -6707,8 +6750,7 @@ function ReviewView({ state, actions }) {
       return;
     }
     if (reviewExportBlockers.length > 0) {
-      showToast("Resolve export blockers before export.");
-      pushAssistantNote(`Export is blocked: ${reviewExportBlockers.join(" | ")}`);
+      notifyPreviewExportBlocked();
       return;
     }
     const assembled = reportDraft || (backendStatus.connected ? await assembleReviewPackage(reviewExportPayloadFromState(state)) : reportDraft);
@@ -6990,15 +7032,28 @@ function ReviewView({ state, actions }) {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
-          <button className="btn" onClick={() => setIsEditingReport((value) => !value)} disabled={!reportDraft}><FileText size={13} /> {isEditingReport ? "Preview Report" : "Edit Report"}</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("json")} disabled={!exportReady}><Save size={13} /> Export JSON</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("markdown")} disabled={!exportReady}><FileText size={13} /> Export Markdown</button>
-          <button className="btn" onClick={() => handleExportReviewPackage("pdf")} disabled={!exportReady}><FileCheck2 size={13} /> Export PDF Preview</button>
+          <button className="btn" onClick={handlePreviewReport}><FileText size={13} /> {isEditingReport ? "Preview Report" : "Edit Report"}</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("json")}><Save size={13} /> Export JSON</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("markdown")}><FileText size={13} /> Export Markdown</button>
+          <button className="btn" onClick={() => handleExportReviewPackage("pdf")}><FileCheck2 size={13} /> Export PDF Preview</button>
         </div>
         {reviewExportBlockers.length > 0 && (
           <div className="status-box status-warning" style={{ marginBottom: 12 }}>
             <div>{reviewExportBlockers.join(" • ")}</div>
-            {hasAlignmentBlocker && <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>}
+            {hasAlignmentBlocker && (
+              <>
+                <div className="mini-stat-row" style={{ marginTop: 10 }}>
+                  <div className="mini-stat"><span className="mini-stat-label">Question exposure</span><span className="mini-stat-value mono">{questionFields?.exposure || "Not selected"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Estimation exposure</span><span className="mini-stat-value mono">{reportConfiguration.runExposure || "No selected run"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Question outcome</span><span className="mini-stat-value mono">{questionFields?.outcome || "Not selected"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Estimation outcome</span><span className="mini-stat-value mono">{reportConfiguration.runOutcome || "No selected run"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Report adjustment set</span><span className="mini-stat-value mono">{reportConfiguration.reportAdjustmentSet.join(", ") || "None"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Estimation covariates</span><span className="mini-stat-value mono">{reportConfiguration.estimationCovariates.join(", ") || "No selected run"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Selected estimation run</span><span className="mini-stat-value mono">{selectedRun?.id || "None"}</span></div>
+                </div>
+                <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>
+              </>
+            )}
           </div>
         )}
         {reportDraft ? (
@@ -7241,7 +7296,7 @@ export default function CausalStudioApp() {
       const result = await startStudyMode();
       const dataset = schemaToDataset({ name: result.dataset.original_filename, size: result.dataset.file_size_bytes }, result.dataset, result.dataset.schema, { rows: 0, cols: 0 });
       const drafts = result.frozen_drafts || {};
-      setStudyMode(result);
+      setStudyMode({ ...result, active: true });
       recordStudyEvent("study_mode_started");
       setObjective(result.objective || "");
       setDatasets([{ ...dataset, studyMode: true, studyLabel: "Approved study dataset" }]);
@@ -7285,7 +7340,12 @@ export default function CausalStudioApp() {
       showToast("Load the approved BDE workspace before resetting its variables.");
       return false;
     }
+
+    // Reuse the canonical payload returned by /study-mode/start. This reset does
+    // not preserve any selected analysis artifact from the prior workspace state.
     const question = drafts.question || {};
+    setStudyMode((current) => ({ ...current, active: true }));
+    const adjustmentSet = ["time_of_day", "day_of_week"];
     const roles = {
       acc_mean_magnitude: "Exposure",
       binge_drinking_event: "Outcome",
@@ -7294,8 +7354,16 @@ export default function CausalStudioApp() {
     };
     const nodeNames = drafts.graph?.nodes || ["time_of_day", "day_of_week", "acc_mean_magnitude", "binge_drinking_event"];
     const positions = [[180, 120], [180, 355], [465, 235], [740, 235]];
+    const canonicalQuestion = question.question_text || "Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?";
+    const canonicalReportDraft = {
+      label: drafts.label || "Prepared draft — editable, not yet confirmed.",
+      title: drafts.report?.title || "Fixed BDE study report draft",
+      content: drafts.report?.content || "Not yet available",
+    };
+
+    // Phase 4: replace question/candidate/role state rather than updating fields.
     setQuestionFields({
-      question: question.question_text || "Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?",
+      question: canonicalQuestion,
       population: "Participants in the approved BDE study dataset",
       exposure: "acc_mean_magnitude",
       comparator: "Lower movement values",
@@ -7306,9 +7374,46 @@ export default function CausalStudioApp() {
     });
     setSelectedQuestionId("study-frozen");
     setPhase4Status({ kind: "success", message: "Approved BDE question restored for targeted feasibility review." });
+    setQuestionCandidates([{
+      id: "study-frozen",
+      status: "Prepared draft — editable, not yet confirmed.",
+      question_text: canonicalQuestion,
+      exposure: "acc_mean_magnitude",
+      outcome: "binge_drinking_event",
+      limitations: ["Observational design; no causal conclusion without reviewed assumptions."],
+    }]);
+    setCandidateVariables([]);
+    setDerivedFeatureCandidates([]);
+    setDerivedFeatures(DERIVED_FEATURE_OPTIONS.map((feature) => ({ ...feature, selected: false })));
+    setPhase4Feedback("");
     setVariableRoles(roles);
-    setGraphNodes(nodeNames.map((id, index) => ({ id, label: id, role: roles[id] || "Unassigned", isCore: true, x: positions[index]?.[0] || 450, y: positions[index]?.[1] || 260, notes: "Prepared draft — editable, not yet confirmed." })));
-    setGraphEdges((drafts.graph?.edges || []).map(([from, to], index) => ({ id: `study-edge-${index + 1}`, from, to, type: "uncertain", edgeType: "uncertain", notes: "Assumption-based graph draft — not causal proof." })));
+    setLockedContent({});
+
+    // Phase 5: no previous diagnostic is valid after restoring the design.
+    setLagHours(1);
+    setExposureThreshold(30);
+    setSensitivityChecks({ missingData: true, positivity: true, unmeasuredConf: false, consistency: false, exclusionRestriction: false });
+    setTargetedFeasibilityResult(null);
+
+    // Phase 6: retain only the approved draft graph; validation must be rerun.
+    setGraphType("DAG");
+    setGraphNodes(nodeNames.map((id, index) => ({
+      id,
+      label: id,
+      role: roles[id] || "Unassigned",
+      isCore: true,
+      x: positions[index]?.[0] || 450,
+      y: positions[index]?.[1] || 260,
+      notes: "Prepared draft — editable, not yet confirmed.",
+    })));
+    setGraphEdges((drafts.graph?.edges || []).map(([from, to], index) => ({
+      id: `study-edge-${index + 1}`,
+      from,
+      to,
+      type: "uncertain",
+      edgeType: "uncertain",
+      notes: "Assumption-based graph draft — not causal proof.",
+    })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setGraphAlternatives([]);
@@ -7316,8 +7421,11 @@ export default function CausalStudioApp() {
     setConfirmedGraph(null);
     setGraphVersionLabel("Prepared draft — editable, not yet confirmed.");
     setGraphActionStatus({ kind: "warning", message: "Approved BDE graph draft restored. Validate and confirm it before continuing." });
-    setTargetedFeasibilityResult(null);
-    const adjustmentSet = drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"];
+
+    // Phase 7 and 8: discard all prior strategy/estimation selections.
+    setEffectType("total");
+    setEstimatorFamily("mixed_logistic");
+    setRepeatedMeasuresChecks({ randomIntercept: true, multipleImputation: false, robustSE: false });
     setEditableAdjustmentSet(adjustmentSet);
     setAnalysisStrategyDraft({
       estimand: { label: drafts.strategy?.estimand || "Association only — not a causal effect claim.", exposure: "acc_mean_magnitude", outcome: "binge_drinking_event", comparator: "one-unit higher movement value", time_window: "prior analysis window to later binge-drinking event", unit_of_analysis: "participant-window" },
@@ -7329,10 +7437,40 @@ export default function CausalStudioApp() {
     setAnalysisStrategyStatus({ kind: "warning", message: "Approved BDE strategy draft restored. Run identification, validate, and confirm it before estimation." });
     setPrimaryEstimationRun(null);
     setLatestEstimationRun(null);
-    recordStudyEvent("approved_bde_variables_reset", { exposure: "acc_mean_magnitude", outcome: "binge_drinking_event", adjustment_set: adjustmentSet });
-    const message = "The report variables have been reset to the approved BDE workspace. Please rerun feasibility, graph validation, strategy confirmation, and estimation before export.";
+    setPrimaryEstimationRun(null);
+
+    // Phase 9: clear generated artifacts; retain only the canonical editable draft.
+    setStudyReportDraft(canonicalReportDraft);
+    setAckOpen(false);
+    setBroadExploration(null);
+    setSavedExploreViews([]);
+    setPromotedPatterns([]);
+    setActionStatus((current) => {
+      const {
+        targetedFeasibility,
+        estimationValidation,
+        estimationRun,
+        estimationInterpretation,
+        reviewPackage,
+        claimAudit,
+        ...remaining
+      } = current;
+      return {
+        ...remaining,
+        targetedFeasibility: { kind: "warning", message: "Approved BDE variables restored. Rerun feasibility diagnostics." },
+      };
+    });
+
+    const message = "The approved BDE workspace variables were restored. Please rerun Feasibility, validate/confirm the graph, confirm the analysis strategy, and rerun estimation before exporting.";
+    recordStudyEvent("approved_bde_variables_reset", {
+      exposure: "acc_mean_magnitude",
+      outcome: "binge_drinking_event",
+      adjustment_set: adjustmentSet,
+      next_phase: "feasibility",
+    });
     showToast(message);
-    pushAssistantNote(message, "review");
+    pushAssistantNote(message, "feasibility");
+    goToPage("feasibility");
     return true;
   }
 

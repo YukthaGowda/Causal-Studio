@@ -4235,6 +4235,7 @@ function GraphView({ state, actions, onGoNext }) {
   const [edgeMode, setEdgeMode] = useState(false);
   const [edgeFrom, setEdgeFrom] = useState(null);
   const [showAnalysis, setShowAnalysis] = useState(true);
+  const [showGraphHelper, setShowGraphHelper] = useState(true);
   const analysis = useMemo(() => analyzeGraph(graphNodes, graphEdges, variableRoles), [graphNodes, graphEdges, variableRoles]);
   const graphTypeInfo = GRAPH_TYPE_OPTIONS.find((o) => o.key === graphType);
 
@@ -4381,6 +4382,7 @@ function GraphView({ state, actions, onGoNext }) {
           <button className="btn btn-sm" onClick={addGraphNode}><ClipboardList size={13} /> Add node</button>
           <button className="btn btn-sm" onClick={resetGraph}><RefreshCw size={13} /> Reset layout</button>
           <button className="btn btn-sm" onClick={() => setShowAnalysis((s) => !s)}>{showAnalysis ? "Hide analysis" : "Show analysis"}</button>
+          {!showGraphHelper && <button className="btn btn-sm" aria-label="Show graph helper" onClick={() => setShowGraphHelper(true)}>Show graph helper</button>}
           <button className="btn btn-sm" onClick={() => runAssistantAction("Interpret This Graph")}><Info size={13} /> Interpret This Graph</button>
           <button className="btn btn-primary btn-sm" onClick={handleContinueToStrategy}>Analysis strategy <ArrowRight size={13} /></button>
         </div>
@@ -4578,9 +4580,12 @@ function GraphView({ state, actions, onGoNext }) {
           </div>
         )}
 
-        {!selectedNode && !selectedEdge && (
+        {!selectedNode && !selectedEdge && showGraphHelper && (
           <div className="graph-side-panel">
-            <h4>Graph helper</h4>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <h4 style={{ margin: 0 }}>Graph helper</h4>
+              <button className="btn btn-sm" aria-label="Close graph helper" onClick={() => setShowGraphHelper(false)}>Close</button>
+            </div>
             <p>Click a node or edge to inspect role, timing, evidence rationale, confidence, and lock status. Drag nodes to edit layout; use Connect nodes to add arrows.</p>
           </div>
         )}
@@ -6513,7 +6518,7 @@ function reportToMarkdown(report, state) {
 
 function ReviewView({ state, actions }) {
   const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary, studyMode, studyReportDraft } = state;
-  const { showToast, pushAssistantNote, runAssistantAction } = actions;
+  const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables } = actions;
   const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
   const checkedAssumptions = SENSITIVITY_ITEMS.filter((i) => sensitivityChecks[i.id]);
@@ -6546,6 +6551,15 @@ function ReviewView({ state, actions }) {
     signoffBlockers,
   }), [selectedRun, claimAudit, reportDraft, backendStatus.connected, signoffBlockers]);
   const exportReady = reviewExportBlockers.length === 0;
+  const hasAlignmentBlocker = Boolean(studyMode && (reportConfiguration.issues.length || !selectedRun));
+
+  function handleResetApprovedBdeVariables() {
+    if (!resetApprovedBdeWorkspaceVariables?.()) return;
+    setReportDraft(null);
+    setReportPreview("");
+    setClaimAudit(null);
+    setIsEditingReport(false);
+  }
 
   function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
     setReportHistory((prev) => [
@@ -6983,7 +6997,8 @@ function ReviewView({ state, actions }) {
         </div>
         {reviewExportBlockers.length > 0 && (
           <div className="status-box status-warning" style={{ marginBottom: 12 }}>
-            {reviewExportBlockers.join(" • ")}
+            <div>{reviewExportBlockers.join(" • ")}</div>
+            {hasAlignmentBlocker && <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>}
           </div>
         )}
         {reportDraft ? (
@@ -7262,6 +7277,63 @@ export default function CausalStudioApp() {
     } catch (error) {
       setAction("studyMode", { kind: "error", message: friendlyError(error, "Approved BDE workspace could not be loaded.") });
     }
+  }
+
+  function resetApprovedBdeWorkspaceVariables() {
+    const drafts = studyMode?.frozen_drafts;
+    if (!drafts) {
+      showToast("Load the approved BDE workspace before resetting its variables.");
+      return false;
+    }
+    const question = drafts.question || {};
+    const roles = {
+      acc_mean_magnitude: "Exposure",
+      binge_drinking_event: "Outcome",
+      time_of_day: "Confounder",
+      day_of_week: "Confounder",
+    };
+    const nodeNames = drafts.graph?.nodes || ["time_of_day", "day_of_week", "acc_mean_magnitude", "binge_drinking_event"];
+    const positions = [[180, 120], [180, 355], [465, 235], [740, 235]];
+    setQuestionFields({
+      question: question.question_text || "Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?",
+      population: "Participants in the approved BDE study dataset",
+      exposure: "acc_mean_magnitude",
+      comparator: "Lower movement values",
+      outcome: "binge_drinking_event",
+      timeWindow: "Prior analysis window to later binge-drinking event",
+      unitOfAnalysis: "participant-window",
+      estimand: "Association; causal interpretation requires reviewed assumptions",
+    });
+    setSelectedQuestionId("study-frozen");
+    setPhase4Status({ kind: "success", message: "Approved BDE question restored for targeted feasibility review." });
+    setVariableRoles(roles);
+    setGraphNodes(nodeNames.map((id, index) => ({ id, label: id, role: roles[id] || "Unassigned", isCore: true, x: positions[index]?.[0] || 450, y: positions[index]?.[1] || 260, notes: "Prepared draft — editable, not yet confirmed." })));
+    setGraphEdges((drafts.graph?.edges || []).map(([from, to], index) => ({ id: `study-edge-${index + 1}`, from, to, type: "uncertain", edgeType: "uncertain", notes: "Assumption-based graph draft — not causal proof." })));
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setGraphAlternatives([]);
+    setGraphValidationResult(null);
+    setConfirmedGraph(null);
+    setGraphVersionLabel("Prepared draft — editable, not yet confirmed.");
+    setGraphActionStatus({ kind: "warning", message: "Approved BDE graph draft restored. Validate and confirm it before continuing." });
+    setTargetedFeasibilityResult(null);
+    const adjustmentSet = drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"];
+    setEditableAdjustmentSet(adjustmentSet);
+    setAnalysisStrategyDraft({
+      estimand: { label: drafts.strategy?.estimand || "Association only — not a causal effect claim.", exposure: "acc_mean_magnitude", outcome: "binge_drinking_event", comparator: "one-unit higher movement value", time_window: "prior analysis window to later binge-drinking event", unit_of_analysis: "participant-window" },
+      strategy: { estimator_family: "logistic_regression", adjustment_set: adjustmentSet, repeated_measures_strategy: drafts.strategy?.repeated_measures_note || "Requires review", missing_data_strategy: "complete_case", warning: drafts.strategy?.warning || "Residual confounding and temporal assumptions require review." },
+    });
+    setAnalysisStrategyResult(null);
+    setAnalysisStrategyValidation(null);
+    setAnalysisStrategyConfirmed(null);
+    setAnalysisStrategyStatus({ kind: "warning", message: "Approved BDE strategy draft restored. Run identification, validate, and confirm it before estimation." });
+    setPrimaryEstimationRun(null);
+    setLatestEstimationRun(null);
+    recordStudyEvent("approved_bde_variables_reset", { exposure: "acc_mean_magnitude", outcome: "binge_drinking_event", adjustment_set: adjustmentSet });
+    const message = "The report variables have been reset to the approved BDE workspace. Please rerun feasibility, graph validation, strategy confirmation, and estimation before export.";
+    showToast(message);
+    pushAssistantNote(message, "review");
+    return true;
   }
 
   async function addDatasets(files) {
@@ -8656,7 +8728,7 @@ export default function CausalStudioApp() {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
-    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, recordStudyEvent, exportStudySessionLog,
+    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, resetApprovedBdeWorkspaceVariables, recordStudyEvent, exportStudySessionLog,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
     handleRunFeasibilityCheck,

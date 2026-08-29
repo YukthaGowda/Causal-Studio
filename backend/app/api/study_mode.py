@@ -64,11 +64,11 @@ def start_study_mode() -> dict[str, Any]:
         "documents": documents,
         "frozen_drafts": {
           "label": "Prepared draft — editable, not yet confirmed.",
-          "question": {"question_text": QUESTION, "exposure": "acc_mean_magnitude", "outcome": "label", "confounders": ["time_of_day", "day_of_week"]},
-          "graph": {"nodes": ["time_of_day", "day_of_week", "acc_mean_magnitude", "label"], "edges": [["time_of_day", "acc_mean_magnitude"], ["time_of_day", "label"], ["day_of_week", "acc_mean_magnitude"], ["day_of_week", "label"], ["acc_mean_magnitude", "label"]]},
+          "question": {"question_text": QUESTION, "exposure": "acc_mean_magnitude", "outcome": "binge_drinking_event", "confounders": ["time_of_day", "day_of_week"]},
+          "graph": {"nodes": ["time_of_day", "day_of_week", "acc_mean_magnitude", "binge_drinking_event"], "edges": [["time_of_day", "acc_mean_magnitude"], ["time_of_day", "binge_drinking_event"], ["day_of_week", "acc_mean_magnitude"], ["day_of_week", "binge_drinking_event"], ["acc_mean_magnitude", "binge_drinking_event"]]},
           "strategy": {
                 "adjustment_set": ["time_of_day", "day_of_week"],
-                "estimand": "Association between acc_mean_magnitude and the approved label outcome; not a causal effect claim.",
+                "estimand": "Association between acc_mean_magnitude and backend-derived binge_drinking_event; not a causal effect claim.",
                 "estimator": "Backend Python/statsmodels logistic or linear model selected only after configuration validation.",
                 "repeated_measures_note": "Participant-window observations may be repeated; repeated-measures handling remains a preliminary proof-of-concept limitation.",
                 "missing_data_note": "Complete-case preprocessing is used by the current backend estimation path.",
@@ -76,7 +76,7 @@ def start_study_mode() -> dict[str, Any]:
             },
             "report": {
                 "title": "Fixed BDE study report draft",
-                "content": "Research question: Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?\n\nExposure: acc_mean_magnitude\nOutcome: label (backend-derived binary outcome may be used only when shown in Phase 8).\nAdjustment draft: time_of_day; day_of_week.\nGraph status: draft — must be saved, validated, and confirmed.\nFeasibility status: not yet run.\nStrategy status: draft — must be validated and confirmed.\nEstimation status: not yet run.\n\nWarnings and limitations: This is an observational, assumption-based workflow. Residual confounding, timing assumptions, missing-data handling, repeated measurements, and support must be reviewed. Numerical results come only from the backend.\n\nClaim boundary: Do not interpret an association or model estimate as proof that movement causes a binge-drinking event.",
+                "content": "Research question: Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?\n\nExposure: acc_mean_magnitude\nOutcome: binge_drinking_event (backend-derived from label == BD and used only when shown in Phase 8).\nAdjustment draft: time_of_day; day_of_week.\nGraph status: draft — must be saved, validated, and confirmed.\nFeasibility status: not yet run.\nStrategy status: draft — must be validated and confirmed.\nEstimation status: not yet run.\n\nWarnings and limitations: This is an observational, assumption-based workflow. Residual confounding, timing assumptions, missing-data handling, repeated measurements, and support must be reviewed. Numerical results come only from the backend.\n\nClaim boundary: Do not interpret an association or model estimate as proof that movement causes a binge-drinking event.",
             },
         },
         "study_summary": {"label": "Backend-computed study summary", "exposure": exposure_summary, "outcome_distribution": outcome_distribution, "key_missingness": key_missingness, "candidate_variables": candidate_summaries},

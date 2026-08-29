@@ -5434,7 +5434,7 @@ ${SENSITIVITY_ITEMS.map((item) => `<tr><td>${item.label}</td><td>${sensitivityCh
 <h2>12. Supporting Evidence</h2>
 ${papers.length === 0 && guidelines.length === 0
   ? '<p style="color:#888;font-size:10.5pt">No supporting evidence uploaded in Project Setup.</p>'
-  : `${papers.length > 0 ? `<h3>Research papers</h3><ul>${papers.map((p) => `<li>${p.title} (${p.year}) — ${p.authors}</li>`).join("")}</ul>` : ""}${guidelines.length > 0 ? `<h3>Clinical guidelines / domain guidance</h3><ul>${guidelines.map((g) => `<li>${g.name} — ${g.sourceType}</li>`).join("")}</ul>` : ""}`}
+  : `${papers.length > 0 ? `<h3>Research papers</h3><ul>${papers.map((p) => `<li>${p.title || p.name || "Evidence metadata unavailable."}${p.year ? ` (${p.year})` : ""}${p.authors ? ` — ${p.authors}` : ""}</li>`).join("")}</ul>` : ""}${guidelines.length > 0 ? `<h3>Clinical guidelines / domain guidance</h3><ul>${guidelines.map((g) => `<li>${g.name || "Evidence metadata unavailable."}${g.sourceType ? ` — ${g.sourceType}` : ""}</li>`).join("")}</ul>` : ""}`}
 
 <h2>13. Limitations</h2>
 <div class="box-warn"><ul style="margin:0">
@@ -5459,8 +5459,14 @@ ${papers.length === 0 && guidelines.length === 0
 </div></body></html>`;
 }
 
-function downloadPDFReport(state) {
-  const html = buildReportHTML(state);
+function buildPackageReportHTML(report) {
+  const escape = (value) => String(value ?? "Not available.").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
+  const sections = Array.isArray(report?.sections) ? report.sections : [];
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</title><style>body{font-family:Georgia,serif;color:#16233D;margin:42px;line-height:1.5}h1{border-bottom:2px solid #2F5D8A;padding-bottom:10px}h2{color:#2F5D8A;margin-top:28px;white-space:pre-wrap}pre{white-space:pre-wrap;font-family:inherit} .warning{background:#fff8e8;border-left:4px solid #b8760e;padding:10px 14px;margin:10px 0}</style></head><body><h1>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</h1><p>${escape(report?.executive_summary || "This package supports review and reporting. It does not prove causality.")}</p>${sections.map((section) => `<h2>${escape(section?.title || "Report section")}</h2><pre>${escape(section?.content ?? "Not available.")}</pre>${Array.isArray(section?.warnings) && section.warnings.length ? `<div class="warning"><strong>Warnings</strong><ul>${section.warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></div>` : ""}`).join("")}</body></html>`;
+}
+
+function downloadPDFReport(state, report) {
+  const html = Array.isArray(report?.sections) ? buildPackageReportHTML(report) : buildReportHTML(state);
   const w = window.open("", "_blank", "width=960,height=800,scrollbars=yes");
   if (!w) { alert("Pop-up blocked — please allow pop-ups for this page and try again."); return; }
   w.document.write(html);
@@ -5494,7 +5500,7 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
       comparator: fallbackConfig.comparator || "one-unit lower vs one-unit higher",
       outcome: estimate.outcome || fallbackConfig.outcome || "",
       timeWindow: fallbackConfig.timeWindow || "",
-      adjustmentSet: (reproducibility.variables_used || []).filter((v) => v !== estimate.exposure && v !== estimate.outcome).join(", ") || fallbackConfig.adjustmentSet || "(none)",
+      adjustmentSet: fallbackConfig.adjustmentSet || (reproducibility.variables_used || []).filter((v) => v !== estimate.exposure && v !== estimate.outcome).join(", ") || "(none)",
       effectType: fallbackConfig.effectType || "ATE",
       estimator: estimate.estimator || reproducibility.estimator || fallbackConfig.estimator || "statsmodels",
       library: "statsmodels backend computation",
@@ -6245,6 +6251,46 @@ function reportPayloadFromState(state, claimAudit = null) {
   };
 }
 
+function reportValueList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean).filter((item) => item !== "(none)");
+  return value ? [String(value).trim()] : [];
+}
+
+function activeReportConfiguration(state, selectedRun = state.primaryEstimationRun) {
+  const question = state.questionFields || {};
+  const config = selectedRun?.config || {};
+  const runExposure = selectedRun?.results?.exposure || config.exposure || "";
+  const runOutcome = selectedRun?.results?.outcome || config.outcome || "";
+  const adjustmentSet = reportValueList(config.adjustmentSet || config.adjustment_set || state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+  const graphNodes = (state.graphNodes || []).map((node) => node?.id || node?.label).filter(Boolean);
+  const names = [...new Set([
+    ...Object.keys(state.variableRoles || {}),
+    question.exposure, question.outcome, runExposure, runOutcome, ...adjustmentSet,
+  ].filter(Boolean))];
+  const roleTable = names.map((name) => ({
+    variable_name: name,
+    source: name === "binge_drinking_event" ? "Backend-derived from label == BD" : "Active study dataset",
+    final_role: state.variableRoles?.[name]
+      || (name === (runExposure || question.exposure) ? "Exposure" : name === (runOutcome || question.outcome) ? "Outcome" : adjustmentSet.includes(name) ? "Confounder" : "Unassigned"),
+    descriptive_meaning: name === "binge_drinking_event" ? "Derived binary BDE event indicator" : "Selected in the active workflow.",
+    missingness_warning: "",
+  }));
+  const issues = [];
+  if (selectedRun) {
+    if (question.exposure && runExposure && question.exposure !== runExposure) issues.push(`Research-question exposure (${question.exposure}) does not match the selected estimation exposure (${runExposure}).`);
+    if (question.outcome && runOutcome && question.outcome !== runOutcome) issues.push(`Research-question outcome (${question.outcome}) does not match the selected estimation outcome (${runOutcome}).`);
+    const runAdjustment = reportValueList(config.adjustmentSet || config.adjustment_set);
+    const selectedAdjustment = reportValueList(state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+    if (runAdjustment.length && selectedAdjustment.join("|") !== runAdjustment.join("|")) issues.push("The selected adjustment set does not match the adjustment set recorded for the selected estimation run.");
+    const expectedGraphNodes = [runExposure, runOutcome, ...runAdjustment].filter(Boolean);
+    if (graphNodes.length && expectedGraphNodes.some((name) => !graphNodes.includes(name))) issues.push("The confirmed graph does not contain all variables used by the selected estimation run.");
+    if (state.studyMode?.active && runExposure && runExposure !== "acc_mean_magnitude") issues.push("The fixed BDE task requires acc_mean_magnitude as the selected exposure.");
+    if (state.studyMode?.active && runOutcome && runOutcome !== "binge_drinking_event") issues.push("The fixed BDE task requires the backend-derived binge_drinking_event outcome (label == BD).");
+  }
+  return { adjustmentSet, roleTable, issues: [...new Set(issues)], runExposure, runOutcome };
+}
+
 function reviewExportPayloadFromState(state, reportPreferences = {}) {
   const {
     objective,
@@ -6278,20 +6324,15 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
     latestEstimationRun,
     ragSummary,
     ingestionInfo,
+    studyMode,
   } = state;
   const dataset = firstRealDataset(datasets) || datasets?.[0] || {};
   const schema = dataset.schema || {};
   const { confounders, mediators } = computeAdjustment(variableRoles);
-  const fallbackAdjustmentSet = editableAdjustmentSet?.length
-    ? editableAdjustmentSet
-    : confounders;
-  const roleTable = ROLE_TABLE_VARIABLES.map((item) => ({
-    variable_name: item.name,
-    source: item.source,
-    final_role: variableRoles[item.name] || item.roleGuess,
-    descriptive_meaning: item.meaning,
-    missingness_warning: item.name === "avg_latitude" ? "Review GPS/mobility missingness before relying on this proxy." : "",
-  }));
+  const selectedRun = primaryEstimationRun || null;
+  const reportConfiguration = activeReportConfiguration(state, selectedRun);
+  const fallbackAdjustmentSet = reportConfiguration.adjustmentSet;
+  const roleTable = reportConfiguration.roleTable;
   const confirmedQuestion = {
     question_text: questionFields?.question || "",
     population: questionFields?.population || "",
@@ -6302,7 +6343,6 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
     unit_of_analysis: questionFields?.unitOfAnalysis || "",
     estimand: questionFields?.estimand || analysisStrategyDraft?.estimand?.label || "",
   };
-  const selectedRun = primaryEstimationRun || null;
 
   return {
     project: {
@@ -6316,6 +6356,7 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
         guidance_document_count: guidelines.length,
       },
       rag_status: ingestionInfo || { summary: ragSummary || "No RAG status attached." },
+      study_workspace: { active: Boolean(studyMode?.active), label: studyMode?.label || "" },
     },
     phase_2_data_foundation: {
       schema_summary: {
@@ -6385,6 +6426,7 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
       selected_primary_run: selectedRun,
       estimation_runs: [selectedRun, latestEstimationRun].filter(Boolean),
     },
+    artifact_consistency: { issues: reportConfiguration.issues, source: "active_dashboard_state" },
     rag_evidence: [
       ...(ragSummary ? [{ summary: ragSummary, document_type: "rag_summary" }] : []),
       ...papers.map((item) => ({ source_filename: item.name || item.title, document_type: "research_paper" })),
@@ -6402,6 +6444,21 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
 }
 
 function reportToMarkdown(report, state) {
+  if (Array.isArray(report?.sections)) {
+    return [
+      `# ${report.package_title || "Causal Design, Estimation, and Evidence Report"}`,
+      "",
+      report.executive_summary || "This package supports review and reporting. It does not prove causality.",
+      "",
+      ...report.sections.flatMap((section) => [
+        `## ${section?.title || "Report section"}`,
+        "",
+        String(section?.content ?? "Not available."),
+        ...(Array.isArray(section?.warnings) && section.warnings.length ? ["", "Warnings:", ...section.warnings.map((warning) => `- ${warning}`)] : []),
+        "",
+      ]),
+    ].join("\n");
+  }
   const primaryRun = state.primaryEstimationRun;
   const estimate = primaryRun?.results || {};
   const diagnostics = estimate.diagnostics || {};
@@ -6464,12 +6521,15 @@ function ReviewView({ state, actions }) {
   const latestDraftRun = latestEstimationRun && latestEstimationRun.id !== selectedRun?.id ? latestEstimationRun : null;
   const estimationWarnings = estimationRunWarnings(selectedRun);
   const severeDiagnostics = estimationWarnings.filter((warning) => /blocked|failed|severe|not ready|positivity|convergence/i.test(String(warning)));
+  const reportConfiguration = useMemo(() => activeReportConfiguration(state, selectedRun), [state, selectedRun]);
+  const consistencyMessage = "Report cannot be exported yet because the selected question, graph, adjustment set, and estimation run are not aligned.";
   const signoffBlockers = [
     !questionFields?.question && "No confirmed research question.",
     !(confirmedGraph || graphEdges.length) && "No final graph is available.",
     !graphValidationResult && "Graph/identification validation has not been reviewed.",
-    !selectedRun && "No primary Phase 8 estimation run has been selected.",
+    !selectedRun && consistencyMessage,
     severeDiagnostics.length > 0 && "Severe diagnostics or estimation warnings remain unresolved.",
+    reportConfiguration.issues.length > 0 && consistencyMessage,
   ].filter(Boolean);
   const [reportDraft, setReportDraft] = useState(() => studyReportDraft ? { package_title: studyReportDraft.title, status: "frozen_study_draft", warnings: ["Prepared draft — editable, not yet confirmed.", "No Phase 8 estimate has been selected yet."], ready_for_export: false, requires_user_review: true } : null);
   const [claimAudit, setClaimAudit] = useState(null);
@@ -6627,7 +6687,7 @@ function ReviewView({ state, actions }) {
         pushAssistantNote(`PDF preview is blocked: ${reviewExportBlockers.join(" | ")}`);
         return;
       }
-      downloadPDFReport(state);
+      downloadPDFReport(state, reportDraft);
       showToast("Print-ready report opened - use your browser's Print dialog to save as PDF.");
       pushAssistantNote("I opened a print-ready report preview. This proof of concept uses browser Save as PDF; a server-generated PDF can be added later.");
       return;
@@ -6705,11 +6765,11 @@ function ReviewView({ state, actions }) {
         <table className="mini-table">
           <thead><tr><th>Variable</th><th>Source</th><th>Final role</th></tr></thead>
           <tbody>
-            {ROLE_TABLE_VARIABLES.map((v) => (
-              <tr key={v.name}>
-                <td className="mono">{v.name}</td>
-                <td>{v.source}</td>
-                <td><span className={`chip ${ROLE_COLORS[variableRoles[v.name] || v.roleGuess] || "chip-muted"}`}>{variableRoles[v.name] || v.roleGuess}</span></td>
+            {reportConfiguration.roleTable.map((item) => (
+              <tr key={item.variable_name}>
+                <td className="mono">{item.variable_name}</td>
+                <td>{item.source}</td>
+                <td><span className={`chip ${ROLE_COLORS[item.final_role] || "chip-muted"}`}>{item.final_role}</span></td>
               </tr>
             ))}
           </tbody>
@@ -6748,7 +6808,7 @@ function ReviewView({ state, actions }) {
       <div className="card">
         <div className="card-head"><div className="card-title">Adjustment set & identification</div><CardInfo text="The adjustment set and effect type confirmed in Step 7. Defines what the causal estimate controls for and what causal quantity is being estimated (total vs. direct effect)." /></div>
         <div className="filter-pills">
-          {confounders.length ? confounders.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">None identified.</span>}
+          {reportConfiguration.adjustmentSet.length ? reportConfiguration.adjustmentSet.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">None identified.</span>}
         </div>
         <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>Effect type: {effectType === "direct" ? "Direct effect" : "Total effect"}{mediators.length ? ` \u2014 mediator(s): ${mediators.join(", ")}` : ""}{proxies.length ? ` \u2014 proxy: ${proxies.join(", ")}` : ""}</p>
       </div>
@@ -7008,7 +7068,7 @@ function ReviewView({ state, actions }) {
           <li>The observation window may not capture longer-term patterns.</li>
         </ul>
         <div className="inconsistency-card" style={{ marginTop: 12, background: "var(--accent-soft)", borderColor: "#CFE0EE" }}>
-          <p style={{ color: "var(--navy)" }}>This analysis can support an association consistent with a causal interpretation, under the stated assumptions. It cannot prove causation on its own, and shouldn't drive individual clinical decisions without further validation.</p>
+          <p style={{ color: "var(--navy)" }}>{reportConfiguration.issues.length ? "Report requires revision before interpretation because the selected question, graph, adjustment set, and estimation run are not aligned." : "If the active artifacts are aligned, this backend-computed run may be described only as an association under the selected model and reviewed assumptions. It cannot prove causation or support individual clinical decisions."}</p>
         </div>
       </div>
 
@@ -7020,7 +7080,7 @@ function ReviewView({ state, actions }) {
           disabled={signoffBlockers.length > 0 || claimAudit?.status === "fail"}
           style={{ opacity: signoffBlockers.length > 0 || claimAudit?.status === "fail" ? 0.55 : 1 }}
           onClick={() => {
-            downloadPDFReport(state);
+            downloadPDFReport(state, reportDraft);
             showToast("Report opened - use your browser's Print dialog to save as PDF.");
           }}
         >
@@ -7173,10 +7233,10 @@ export default function CausalStudioApp() {
       setDictionary({ name: "BDE data description.docx", savedFilename: "BDE data description.docx", total: result.dataset.schema?.number_of_columns || 0, described: result.dataset.schema?.number_of_columns || 0, studyMode: true });
       setProtocol({ name: "BDE Data collection.pdf", savedFilename: "BDE Data collection.pdf", studyMode: true });
       setPapers([{ id: "study-paper", name: "BDE Research paper.pdf", title: "Approved study evidence", studyMode: true }]);
-      setQuestionFields({ question: drafts.question?.question_text || "", population: "Participants in the approved BDE study dataset", exposure: drafts.question?.exposure || "acc_mean_magnitude", comparator: "Lower movement values", outcome: drafts.question?.outcome || "label", timeWindow: "Prior analysis window to later label", unitOfAnalysis: "participant-window", estimand: "Association; causal interpretation requires reviewed assumptions" });
+      setQuestionFields({ question: drafts.question?.question_text || "", population: "Participants in the approved BDE study dataset", exposure: drafts.question?.exposure || "acc_mean_magnitude", comparator: "Lower movement values", outcome: drafts.question?.outcome || "binge_drinking_event", timeWindow: "Prior analysis window to later binge-drinking event", unitOfAnalysis: "participant-window", estimand: "Association; causal interpretation requires reviewed assumptions" });
       setQuestionCandidates([{ id: "study-frozen", status: "Prepared draft — editable, not yet confirmed.", question_text: drafts.question?.question_text || "", exposure: drafts.question?.exposure, outcome: drafts.question?.outcome, limitations: ["Observational design; no causal conclusion without reviewed assumptions."] }]);
-      const studyRoles = { acc_mean_magnitude: "Exposure", label: "Outcome", time_of_day: "Confounder", day_of_week: "Confounder" };
-      const graphNodeNames = drafts.graph?.nodes || ["time_of_day", "day_of_week", "acc_mean_magnitude", "label"];
+      const studyRoles = { acc_mean_magnitude: "Exposure", binge_drinking_event: "Outcome", time_of_day: "Confounder", day_of_week: "Confounder" };
+      const graphNodeNames = drafts.graph?.nodes || ["time_of_day", "day_of_week", "acc_mean_magnitude", "binge_drinking_event"];
       const graphPositions = [[180, 120], [180, 355], [465, 235], [740, 235]];
       const graphNodesDraft = graphNodeNames.map((id, index) => ({ id, label: id, role: studyRoles[id] || "Unassigned", isCore: true, x: graphPositions[index]?.[0] || 450, y: graphPositions[index]?.[1] || 260, notes: "Prepared draft — editable, not yet confirmed." }));
       const graphEdgesDraft = (drafts.graph?.edges || []).map(([from, to], index) => ({ id: `study-edge-${index + 1}`, from, to, type: "uncertain", edgeType: "uncertain", notes: "Assumption-based graph draft — not causal proof." }));
@@ -7189,7 +7249,7 @@ export default function CausalStudioApp() {
       setGraphActionStatus({ kind: "warning", message: "Assumption-based graph draft — not causal proof. Save, validate, and confirm before Phase 7." });
       setEditableAdjustmentSet(drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"]);
       setAnalysisStrategyDraft({
-        estimand: { label: drafts.strategy?.estimand || "Association only — not a causal effect claim.", exposure: "acc_mean_magnitude", outcome: "label", comparator: "one-unit higher movement value", time_window: "prior analysis window to later label", unit_of_analysis: "participant-window" },
+        estimand: { label: drafts.strategy?.estimand || "Association only — not a causal effect claim.", exposure: "acc_mean_magnitude", outcome: "binge_drinking_event", comparator: "one-unit higher movement value", time_window: "prior analysis window to later binge-drinking event", unit_of_analysis: "participant-window" },
         strategy: { estimator_family: "logistic_regression", adjustment_set: drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"], repeated_measures_strategy: drafts.strategy?.repeated_measures_note || "Requires review", missing_data_strategy: "complete_case", warning: drafts.strategy?.warning || "Residual confounding and temporal assumptions require review." },
       });
       setAnalysisStrategyResult(null);

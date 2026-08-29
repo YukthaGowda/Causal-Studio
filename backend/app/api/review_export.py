@@ -24,6 +24,7 @@ class ReviewPackageRequest(BaseModel):
     phase_7_strategy: dict[str, Any] = Field(default_factory=dict)
     phase_8_estimation: dict[str, Any] = Field(default_factory=dict)
     rag_evidence: list[Any] = Field(default_factory=list)
+    artifact_consistency: dict[str, Any] = Field(default_factory=dict)
     user_notes: str = ""
     report_preferences: dict[str, Any] = Field(default_factory=dict)
 

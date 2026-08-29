@@ -85,7 +85,7 @@ def _selected_estimation_summary(run: dict[str, Any] | None) -> dict[str, Any]:
     primary = source.get("primary_result") or source.get("results") or source.get("estimate") or {}
     diagnostics = source.get("diagnostics") or primary.get("diagnostics") or {}
     provenance = source.get("provenance") or source.get("reproducibility") or {}
-    config = source.get("config") or {}
+    config = source.get("config") or (run.get("config") if isinstance(run, dict) else {}) or {}
     return {
         "available": True,
         "run_id": _first_present(source.get("run_id"), source.get("id"), run.get("id")),
@@ -96,6 +96,7 @@ def _selected_estimation_summary(run: dict[str, Any] | None) -> dict[str, Any]:
         "estimand_label": _first_present(source.get("estimand_label"), primary.get("estimandLabel"), primary.get("estimand")),
         "exposure": _first_present(primary.get("exposure"), config.get("exposure")),
         "outcome": _first_present(primary.get("outcome"), config.get("outcome")),
+        "adjustment_set": _as_list(_first_present(config.get("adjustmentSet"), config.get("adjustment_set"), source.get("adjustment_set"), default=[])),
         "point_estimate": _first_present(primary.get("point_estimate"), primary.get("pointEstimate")),
         "standard_error": _first_present(primary.get("standard_error"), primary.get("se")),
         "confidence_interval": _first_present(
@@ -133,7 +134,8 @@ def _evidence_summary(rag_evidence: list[Any]) -> dict[str, Any]:
         "source_filenames": unique_sources,
         "summary": (
             f"{len(rag_evidence)} evidence item(s) linked from {len(unique_sources)} source file(s)."
-            if rag_evidence
+            if rag_evidence and unique_sources
+            else "Evidence metadata unavailable." if rag_evidence
             else "No RAG evidence was linked to this review package."
         ),
         "evidence_boundary": "Evidence snippets support design reasoning and limitations; they do not prove causal claims.",
@@ -162,6 +164,65 @@ def _unique_strings(values: list[Any]) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
+
+
+def _normalized_names(value: Any) -> list[str]:
+    values = _as_list(value)
+    names: list[str] = []
+    for value_item in values:
+        names.extend(str(value_item).split(","))
+    return _unique_strings([item.strip() for item in names if item.strip() and item.strip() != "(none)"])
+
+
+def _graph_node_names(graph: dict[str, Any]) -> list[str]:
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    names = []
+    for node in _as_list(nodes):
+        if isinstance(node, dict):
+            names.append(node.get("id") or node.get("label"))
+        else:
+            names.append(node)
+    return _normalized_names(names)
+
+
+def _artifact_consistency_issues(
+    project: dict[str, Any],
+    question: dict[str, Any],
+    graph: dict[str, Any],
+    adjustment_set: list[Any],
+    estimation: dict[str, Any],
+    supplied_issues: Any = None,
+) -> list[str]:
+    issues = _normalized_names(supplied_issues)
+    if not estimation.get("available"):
+        return issues
+
+    question_exposure = _text(question.get("exposure"), "")
+    question_outcome = _text(question.get("outcome"), "")
+    run_exposure = _text(estimation.get("exposure"), "")
+    run_outcome = _text(estimation.get("outcome"), "")
+    if question_exposure and run_exposure and question_exposure != run_exposure:
+        issues.append(f"Research-question exposure ({question_exposure}) does not match the selected estimation exposure ({run_exposure}).")
+    if question_outcome and run_outcome and question_outcome != run_outcome:
+        issues.append(f"Research-question outcome ({question_outcome}) does not match the selected estimation outcome ({run_outcome}).")
+
+    strategy_adjustments = _normalized_names(adjustment_set)
+    run_adjustments = _normalized_names(estimation.get("adjustment_set"))
+    if strategy_adjustments != run_adjustments:
+        issues.append("The selected adjustment set does not match the adjustment set recorded for the selected estimation run.")
+
+    graph_nodes = set(_graph_node_names(graph))
+    expected_graph_nodes = set(_normalized_names([run_exposure, run_outcome, *run_adjustments]))
+    if graph_nodes and expected_graph_nodes and not expected_graph_nodes.issubset(graph_nodes):
+        issues.append("The confirmed graph does not contain all variables used by the selected estimation run.")
+
+    workspace = project.get("study_workspace") if isinstance(project, dict) else {}
+    if isinstance(workspace, dict) and workspace.get("active"):
+        if run_exposure and run_exposure != "acc_mean_magnitude":
+            issues.append("The fixed BDE task requires acc_mean_magnitude as the selected exposure.")
+        if run_outcome and run_outcome != "binge_drinking_event":
+            issues.append("The fixed BDE task requires the backend-derived binge_drinking_event outcome (label == BD).")
+    return _unique_strings(issues)
 
 
 def _section(section_id: str, title: str, content: str, status: str = "complete", warnings: list[str] | None = None, evidence: list[Any] | None = None) -> dict[str, Any]:
@@ -198,8 +259,17 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
     identification = p7.get("identification_result") or {}
     strategy = p7.get("strategy") or {}
     estimand = p7.get("estimand") or {}
-    adjustment_set = _as_list(p7.get("adjustment_set"))
+    adjustment_set = _normalized_names(p7.get("adjustment_set"))
     assumptions = _as_list(p7.get("assumption_checklist"))
+    supplied_consistency = payload.get("artifact_consistency") or {}
+    consistency_issues = _artifact_consistency_issues(
+        project,
+        confirmed_question if isinstance(confirmed_question, dict) else {},
+        graph,
+        adjustment_set,
+        estimation_summary,
+        supplied_consistency.get("issues") if isinstance(supplied_consistency, dict) else None,
+    )
     schema = p2.get("schema_summary") or {}
     feasibility = p5.get("feasibility_result") or {}
 
@@ -212,6 +282,8 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         missing_required.append("analysis_strategy")
     if not estimation_summary.get("available"):
         missing_required.append("selected_primary_estimation_run")
+    if consistency_issues:
+        missing_required.append("artifact_consistency")
     if unresolved_warnings and not preferences.get("unresolved_warnings_acknowledged", False):
         missing_required.append("unresolved_warnings_acknowledged")
 
@@ -251,13 +323,13 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         _section("graph_validation", "Graph validation summary", json.dumps(graph_validation or {"status": "not provided"}, indent=2, default=str), _status_for(graph_validation)),
         _section("identification", "Identification result", json.dumps(identification or {"status": "not provided"}, indent=2, default=str), _status_for(identification)),
         _section("adjustment_estimand", "Adjustment set and estimand", json.dumps({"adjustment_set": adjustment_set, "estimand": estimand}, indent=2, default=str), _status_for(adjustment_set or estimand)),
-        _section("strategy_assumptions", "Analysis strategy and assumptions", json.dumps({"strategy": strategy, "assumptions": assumptions}, indent=2, default=str), _status_for(strategy)),
+        _section("strategy_assumptions", "Recommended strategy and assumptions", json.dumps({"recommended_strategy": strategy, "assumptions": assumptions, "actual_estimation_run": {"estimator": estimation_summary.get("model_type"), "formula": estimation_summary.get("formula"), "adjustment_set": estimation_summary.get("adjustment_set"), "proof_of_concept_note": "The actual run is a backend-computed proof-of-concept unless the recorded estimator explicitly implements repeated-measures handling."}}, indent=2, default=str), _status_for(strategy)),
         _section("selected_estimation", "Selected primary estimation run", json.dumps(estimation_summary, indent=2, default=str), _status_for(estimation_summary.get("available")), [estimation_summary.get("warning")] if not estimation_summary.get("available") else []),
         _section("estimate_diagnostics", "Estimate, uncertainty, diagnostics, and sensitivity results", json.dumps({"estimate": estimation_summary, "diagnostics": estimation_summary.get("diagnostics"), "sensitivity_results": (p8.get("selected_primary_run") or {}).get("sensitivity_results")}, indent=2, default=str), _status_for(estimation_summary.get("available"), bool(estimation_summary.get("warnings")))),
         _section("rag_evidence", "RAG evidence summary", evidence_summary["summary"], _status_for(rag_evidence), evidence=evidence_summary.get("source_filenames")),
         _section("evidence_limitations", "Evidence limitations", evidence_summary["evidence_boundary"], "warning" if not rag_evidence else "complete"),
         _section("unresolved_warnings", "Unresolved warnings", "\n".join(unresolved_warnings) if unresolved_warnings else "No unresolved warnings were supplied.", "warning" if unresolved_warnings else "complete", unresolved_warnings),
-        _section("claim_boundaries", "What can and cannot be claimed", "Can claim: conditional design and estimation summaries.\nCannot claim: causal proof, true graph structure, clinical prediction, diagnosis, or treatment recommendations.", "complete"),
+        _section("claim_boundaries", "What can and cannot be claimed", "Report requires revision before any interpretation because the selected question, graph, adjustment set, and estimation run are not aligned." if consistency_issues else "Can claim: a cautious association under the selected backend-computed model and reviewed assumptions.\nCannot claim: causal proof, true graph structure, clinical prediction, diagnosis, or treatment recommendations.", "warning" if consistency_issues else "complete", consistency_issues),
         _section("reproducibility", "Reproducibility and provenance", json.dumps(estimation_summary.get("provenance") or {}, indent=2, default=str), _status_for(estimation_summary.get("provenance"))),
         _section("user_notes", "User notes and review history", _text(payload.get("user_notes"), "No user notes provided."), "complete"),
     ]
@@ -267,13 +339,8 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
     if not preferences.get("include_evidence_table", True):
         sections = [section for section in sections if section["section_id"] != "rag_evidence"]
 
-    blocking_required = [
-        item
-        for item in missing_required
-        if item != "selected_primary_estimation_run"
-    ]
-    ready_for_export = not blocking_required
-    status = "success" if ready_for_export else "fallback"
+    ready_for_export = not missing_required
+    status = "success" if ready_for_export else "requires_revision"
 
     return {
         "status": status,
@@ -286,6 +353,7 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         "final_design_summary": final_design_summary,
         "selected_estimation_summary": estimation_summary,
         "evidence_summary": evidence_summary,
+        "artifact_consistency": {"status": "aligned" if not consistency_issues else "mismatch", "issues": consistency_issues},
         "unresolved_warnings": _unique_strings(unresolved_warnings),
         "limitations": _unique_strings(limitations),
         "missing_required_items": _unique_strings(missing_required),
@@ -433,7 +501,9 @@ def export_review_package(payload: dict[str, Any]) -> dict[str, Any]:
     if not package:
         raise ReviewExportError("assembled_package is required.")
     if not package.get("ready_for_export"):
-        warnings.append("Package has missing required items. Export is a draft only.")
+        if any(item in package.get("missing_required_items", []) for item in ("artifact_consistency", "selected_primary_estimation_run")):
+            raise ReviewExportError("Report cannot be exported yet because the selected question, graph, adjustment set, and estimation run are not aligned.")
+        raise ReviewExportError("Report cannot be exported yet because required review artifacts are incomplete.")
     if "selected_primary_estimation_run" in package.get("missing_required_items", []):
         warnings.append("No selected primary estimation run is available. This export is a design-only draft, not a complete design and analysis package.")
     if audit.get("status") == "fail" or any(item.get("severity") == "blocking" for item in audit.get("flagged_claims", [])):

@@ -88,7 +88,7 @@ class PanelErrorBoundary extends React.Component {
       return (
         <div className="card" role="alert">
           <div className="card-head"><div className="card-title">Panel unavailable</div></div>
-          <p className="card-desc">Something went wrong in this panel. Please go back or refresh.</p>
+          <p className="card-desc">Something went wrong in this panel. Please refresh or go back to the previous step.</p>
         </div>
       );
     }
@@ -2538,6 +2538,26 @@ function QuestionView({ state, actions, onGoNext }) {
   const hasParsedDataset = Boolean(firstRealDataset(datasets)?.schema);
   const hasQuestionDraft = Boolean(questionFields?.question || questionCandidates.length);
 
+  function handleContinueToFeasibility() {
+    if (!questionFields?.question?.trim()) {
+      showToast("Please confirm or use a research question before continuing.");
+      return;
+    }
+    if (!questionFields.exposure?.trim()) {
+      showToast("Please select one exposure variable before continuing to Feasibility.");
+      return;
+    }
+    if (!questionFields.outcome?.trim()) {
+      showToast("Please select one outcome variable before continuing to Feasibility.");
+      return;
+    }
+    if (!selectedQuestionId && phase4Status?.kind !== "success") {
+      showToast("Please confirm or use a research question before continuing.");
+      return;
+    }
+    onGoNext();
+  }
+
   return (
     <>
       <div className="ps-header">
@@ -3089,7 +3109,7 @@ function QuestionView({ state, actions, onGoNext }) {
 
       <div className="next-bar">
         <p><strong style={{ color: "var(--navy)" }}>Next:</strong> check whether the data can actually support this question.</p>
-        <button className="btn btn-primary" onClick={() => { if (!questionFields || !questionFields.question) { showToast("Choose or write a research question first."); return; } onGoNext(); }}>Feasibility check <ArrowRight size={14} /></button>
+        <button className="btn btn-primary" onClick={handleContinueToFeasibility}>Feasibility check <ArrowRight size={14} /></button>
       </div>
     </>
   );
@@ -3204,6 +3224,30 @@ function FeasibilityView({ state, actions, onGoNext }) {
     not_run: "Run Python feasibility checks before proceeding.",
   }[feasibilityStatus] || "Review required before proceeding.";
   const missingRows = targetedFeasibilityResult?.missingness_check?.variables || [];
+
+  function requestFeasibilityCheck() {
+    if (!questionFields?.question?.trim()) {
+      showToast("Please confirm or use a research question before continuing.");
+      return;
+    }
+    if (!questionFields.exposure?.trim()) {
+      showToast("Please select one exposure variable before continuing to Feasibility.");
+      return;
+    }
+    if (!questionFields.outcome?.trim()) {
+      showToast("Please select one outcome variable before continuing to Feasibility.");
+      return;
+    }
+    if (!backendDataset?.savedFilename) {
+      showToast("Upload and parse a CSV dataset before running feasibility checks.");
+      return;
+    }
+    if (!resolvedExposure || !resolvedOutcome) {
+      showToast("Feasibility cannot run yet because selected variables are missing from the parsed dataset.");
+      return;
+    }
+    handleRunFeasibilityCheck();
+  }
   const coverage = targetedFeasibilityResult?.coverage_check || {};
   const sampleCheck = targetedFeasibilityResult?.analysis_ready_sample_check || {};
   const exposureCheck = targetedFeasibilityResult?.exposure_check || {};
@@ -3271,7 +3315,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
           <div className="question-field"><span className="filter-label">Selected variables</span><div className="helper" style={{ margin: 0 }}>{targetedVars.join(", ")}</div></div>
         </div>
         <div className="button-row" style={{ marginTop: 10 }}>
-          <button className="btn btn-primary btn-sm" onClick={handleRunFeasibilityCheck} disabled={!canRunFeasibility || actionStatus.targetedFeasibility?.kind === "loading"}>
+          <button className="btn btn-primary btn-sm" onClick={requestFeasibilityCheck} disabled={actionStatus.targetedFeasibility?.kind === "loading"}>
             <RefreshCw size={13} className={actionStatus.targetedFeasibility?.kind === "loading" ? "spin" : ""} /> Run Feasibility Checks
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Feasibility Results")}>
@@ -3283,7 +3327,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Reprocess with Feedback")}>
             <Sparkles size={13} /> Reprocess with Feedback
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleRunFeasibilityCheck} disabled={!canRunFeasibility || actionStatus.targetedFeasibility?.kind === "loading"}>
+          <button className="btn btn-secondary btn-sm" onClick={requestFeasibilityCheck} disabled={actionStatus.targetedFeasibility?.kind === "loading"}>
             <RefreshCw size={13} /> Recalculate
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => { showToast("Returning to Phase 4 to revise the question."); goToPage?.("question"); }}>
@@ -3311,7 +3355,13 @@ function FeasibilityView({ state, actions, onGoNext }) {
         )}
         {!canRunFeasibility && (
           <div className="status-box status-warning" style={{ marginTop: 10 }}>
-            Confirm a question and variables before running feasibility checks.
+            {!questionFields?.question?.trim()
+              ? "Please confirm or use a research question before continuing."
+              : !questionFields.exposure?.trim()
+                ? "Please select one exposure variable before continuing to Feasibility."
+                : !questionFields.outcome?.trim()
+                  ? "Please select one outcome variable before continuing to Feasibility."
+                  : "Feasibility cannot run yet because selected variables are missing from the parsed dataset."}
           </div>
         )}
         <div className={`helper ${feasibilityStatus === "not_feasible" || feasibilityStatus === "requires_revision" ? "" : ""}`} style={{ marginTop: 10 }}>
@@ -4156,6 +4206,7 @@ function GraphView({ state, actions, onGoNext }) {
     runAssistantAction,
     lockContent,
     unlockContent,
+    showToast,
   } = actions;
 
   const svgRef = useRef(null);
@@ -4259,6 +4310,17 @@ function GraphView({ state, actions, onGoNext }) {
   const validationBadge = graphValidationBadge(graphValidationResult);
   const canUseGraphBackend = Boolean(targetedFeasibilityResult);
 
+  function handleContinueToStrategy() {
+    if (!confirmedGraph && !graphAlternatives.length) {
+      showToast("Please confirm the graph or save it as a draft before continuing to Analysis Strategy.");
+      return;
+    }
+    if (!confirmedGraph) {
+      showToast("Continuing with a saved graph draft. Its assumptions and warnings remain subject to review.");
+    }
+    onGoNext();
+  }
+
   return (
     <div className="graph-page">
       <div className="graph-toolbar">
@@ -4300,7 +4362,7 @@ function GraphView({ state, actions, onGoNext }) {
           <button className="btn btn-sm" onClick={resetGraph}><RefreshCw size={13} /> Reset layout</button>
           <button className="btn btn-sm" onClick={() => setShowAnalysis((s) => !s)}>{showAnalysis ? "Hide analysis" : "Show analysis"}</button>
           <button className="btn btn-sm" onClick={() => runAssistantAction("Interpret This Graph")}><Info size={13} /> Interpret This Graph</button>
-          <button className="btn btn-primary btn-sm" onClick={onGoNext}>Analysis strategy <ArrowRight size={13} /></button>
+          <button className="btn btn-primary btn-sm" onClick={handleContinueToStrategy}>Analysis strategy <ArrowRight size={13} /></button>
         </div>
       </div>
 
@@ -4310,6 +4372,9 @@ function GraphView({ state, actions, onGoNext }) {
         </span>
         {graphType !== "DAG" && (
           <span className="chip chip-warning">{graphType} experimental: full representation-specific validation is not yet implemented.</span>
+        )}
+        {!confirmedGraph && !graphAlternatives.length && (
+          <span className="chip chip-warning">Save a draft or validate and confirm the graph before Phase 7.</span>
         )}
         {graphActionStatus?.message && (
           <span className={`chip ${graphActionStatus.kind === "error" ? "chip-danger" : graphActionStatus.kind === "success" ? "chip-success" : "chip-muted"}`}>
@@ -5120,6 +5185,7 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
       <div className="next-bar">
         <p><strong style={{ color: "var(--navy)" }}>Next:</strong> Phase 8 can run only after this plan is reviewed and validated. No numerical effects are produced in Phase 7.</p>
         <button className="btn btn-primary" disabled={!canConfirm} onClick={onGoNext}>Estimation & calculation <ArrowRight size={14} /></button>
+        {!canConfirm && <span className="helper"><AlertTriangle size={13} /> Run identification, validate the adjustment set, and confirm the analysis strategy before continuing to Estimation.</span>}
       </div>
     </>
   );
@@ -7941,7 +8007,16 @@ export default function CausalStudioApp() {
   }
 
   function setVariableRole(name, role) {
-    setVariableRoles((r) => ({ ...r, [name]: role }));
+    setVariableRoles((r) => {
+      const next = { ...r };
+      if (role === "Exposure" || role === "Outcome") {
+        Object.keys(next).forEach((key) => {
+          if (key !== name && next[key] === role) next[key] = "Unassigned";
+        });
+      }
+      next[name] = role;
+      return next;
+    });
     setGraphValidationResult(null);
     const schemaVar = ROLE_TABLE_VARIABLES.find((v) => v.name === name);
     if (schemaVar) {
@@ -8012,7 +8087,7 @@ export default function CausalStudioApp() {
 
   const requiredCount = Object.values(checks).filter(Boolean).length;
   const requiredTotal = 6;
-  const canContinue = checks.datasetUploaded && checks.dictionaryUploaded && checks.blockingResolved;
+  const canContinue = checks.objectiveAdded && checks.datasetUploaded && checks.datasetParsed && checks.dictionaryUploaded && checks.blockingResolved;
 
   const dataFoundationComplete = useMemo(() => {
     const parsedOk = datasets.length > 0 && !blockingDatasets;
@@ -8374,6 +8449,46 @@ export default function CausalStudioApp() {
 
   const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
 
+  function handleAssistantNext() {
+    const nextPage = NEXT_PAGE[page];
+    if (!nextPage) return;
+    if (page === "setup") {
+      handleContinue();
+      return;
+    }
+    if (page === "question") {
+      if (!questionFields?.question?.trim() || (!selectedQuestionId && phase4Status?.kind !== "success")) {
+        showToast("Please confirm or use a research question before continuing.");
+        return;
+      }
+      if (!questionFields.exposure?.trim()) {
+        showToast("Please select one exposure variable before continuing to Feasibility.");
+        return;
+      }
+      if (!questionFields.outcome?.trim()) {
+        showToast("Please select one outcome variable before continuing to Feasibility.");
+        return;
+      }
+    }
+    if (page === "feasibility" && !targetedFeasibilityResult?.safe_to_continue_to_graph) {
+      showToast("Run feasibility checks and review the result before continuing to Causal Graph.");
+      return;
+    }
+    if (page === "graph" && !confirmedGraph && !graphAlternatives.length) {
+      showToast("Please confirm the graph or save it as a draft before continuing to Analysis Strategy.");
+      return;
+    }
+    if (page === "strategy" && !analysisStrategyConfirmed) {
+      showToast("Run identification, validate the adjustment set, and confirm the analysis strategy before continuing to Estimation.");
+      return;
+    }
+    if (page === "estimation" && !primaryEstimationRun) {
+      showToast("Run backend estimation and select a primary result before continuing to Review and Export.");
+      return;
+    }
+    goToPage(nextPage);
+  }
+
   const actions = {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
@@ -8472,7 +8587,7 @@ export default function CausalStudioApp() {
         </div>
         {NEXT_PAGE[page] && (
           <div className="assistant-next-row">
-            <button className="assistant-next-btn" onClick={() => goToPage(NEXT_PAGE[page])}>
+            <button className="assistant-next-btn" onClick={handleAssistantNext}>
               Next: {STEPS.find((s) => s.key === NEXT_PAGE[page])?.short} <ArrowRight size={13} />
             </button>
           </div>

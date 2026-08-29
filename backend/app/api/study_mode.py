@@ -40,7 +40,7 @@ def start_study_mode() -> dict[str, Any]:
             documents.append({"original_filename": filename, "saved_filename": filename, "category": category, "status": "registered"})
         frame = pd.read_csv(dataset_destination)
         if "label" not in frame.columns:
-            raise ValueError("Approved Study Mode dataset does not contain the required label field.")
+            raise ValueError("Approved fixed study dataset does not contain the required label field.")
         # This derived analysis field is computed transparently from the approved label
         # rather than supplied by an LLM or a hard-coded numerical result.
         frame["binge_drinking_event"] = (frame["label"].astype(str) == "BD").astype(int)
@@ -56,14 +56,14 @@ def start_study_mode() -> dict[str, Any]:
         candidate_columns = [column for column in ["acc_std_magnitude", "unlocks_per_minute", "number_of_minutes_interaction", "time_of_day", "day_of_week"] if column in frame.columns]
         candidate_summaries = [{"column": column, "missing_count": int(frame[column].isna().sum()), "unique_values": int(frame[column].nunique(dropna=True))} for column in candidate_columns]
     except (FileNotFoundError, OSError, ValueError) as error:
-        raise HTTPException(status_code=500, detail=f"Study Mode registration failed: {error}") from error
+        raise HTTPException(status_code=500, detail=f"Fixed study task registration failed: {error}") from error
     return {
-        "status": "ready", "label": "Study Mode: Fixed BDE causal-design task",
+        "status": "ready", "label": "Approved BDE workspace loaded",
         "objective": OBJECTIVE,
         "dataset": {"original_filename": DATASET, "saved_filename": DATASET, "file_size_bytes": dataset_destination.stat().st_size, "schema": schema, "label": "Approved study dataset", "derived_outcome": {"column": "binge_drinking_event", "source": "label", "rule": "1 if label == BD; 0 otherwise", "label": "Backend-derived binary outcome from approved label field."}},
         "documents": documents,
         "frozen_drafts": {
-          "label": "Frozen study draft — editable, not yet confirmed.",
+          "label": "Prepared draft — editable, not yet confirmed.",
           "question": {"question_text": QUESTION, "exposure": "acc_mean_magnitude", "outcome": "label", "confounders": ["time_of_day", "day_of_week"]},
           "graph": {"nodes": ["time_of_day", "day_of_week", "acc_mean_magnitude", "label"], "edges": [["time_of_day", "acc_mean_magnitude"], ["time_of_day", "label"], ["day_of_week", "acc_mean_magnitude"], ["day_of_week", "label"], ["acc_mean_magnitude", "label"]]},
           "strategy": {

@@ -146,7 +146,7 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
             f"Selected candidate confounders: {', '.join(map(str, covariates)) or 'none'}.",
         ]
         if study_mode:
-            parts.append("Study Mode is active: frozen artifacts are editable drafts and must be confirmed before downstream use.")
+            parts.append("The approved BDE workspace is loaded: prepared drafts are editable and must be confirmed before downstream use.")
         parts.append("Confirm the question and review variable roles before feasibility; this does not establish a causal claim.")
         return " ".join(parts)
 
@@ -350,15 +350,104 @@ def _summarize_page_state(phase: str, page_state: dict[str, Any]) -> str:
 
 
 
-def _safe_question_guidance(question: str) -> str:
-    lowered = str(question or "").lower()
-    if any(term in lowered for term in ("diagnos", "treatment", "medication", "clinical advice", "medical advice", "should i drink", "should i stop drinking")):
-        return "I can help with the Causal Studio study workflow, but I cannot provide clinical advice or unsupported causal conclusions."
+PHASE_LABELS = {
+    "phase_1_project_setup": "Project Setup",
+    "phase_2_data_foundation": "Data Foundation",
+    "phase_3_broad_exploration": "Broad Exploration",
+    "phase_4_question_variables": "Question & Variables",
+    "phase_5_feasibility": "Feasibility",
+    "phase_6_causal_graph": "Causal Graph",
+    "phase_7_analysis_strategy": "Analysis Strategy",
+    "phase_8_estimation": "Estimation & Calculation",
+    "phase_9_review_export": "Review & Export",
+}
+
+
+def _assistant_intent(question: str) -> str:
+    lowered = " ".join(str(question or "").lower().split())
+    bare = lowered.strip("!?.,;: ")
+    if any(term in lowered for term in (
+        "diagnos", "treatment", "medication", "clinical advice", "medical advice",
+        "should i drink", "should i stop drinking",
+    )):
+        return "clinical"
     if any(term in lowered for term in ("prove", "causes", "cause binge", "causal proof")):
-        return "No. This workflow can document assumptions, feasibility, and backend-computed associations, but it cannot prove that movement causes binge drinking without reviewed causal assumptions and validation."
-    if any(term in lowered.split() for term in ("hi", "hello", "hey")):
-        return "Hello. I can help you use the current Causal Studio phase, review frozen study drafts, explain warnings, and identify the next required check."
-    return "I can explain the current Causal Studio workflow state using the dashboard information below."
+        return "causal"
+    if bare in {"hi", "hello", "hey", "hello there", "hi there", "hey there"} or bare.startswith(("hi ", "hello ", "hey ")):
+        return "greeting"
+    if bare in {"help", "what can you do", "what do you do", "how can you help"}:
+        return "capabilities"
+    if bare in {"what is your name", "who are you", "what's your name"}:
+        return "identity"
+    if any(term in lowered for term in ("what should i do next", "what do i do next", "what next", "next step", "can i continue", "how do i", "how can i", "how do we")):
+        return "next_step"
+    if any(term in lowered for term in ("project status", "setup status", "readiness status", "show readiness", "what is the status")):
+        return "status"
+    if any(term in lowered for term in ("what is wrong", "what's wrong", "what am i missing", "what is missing", "why can't")):
+        return "issues"
+    if "warning" in lowered:
+        return "warning"
+    if "exposure" in lowered or "outcome" in lowered:
+        return "variables"
+    return "general"
+
+
+def _workspace_message(page_state: dict[str, Any]) -> str:
+    if page_state.get("study_mode_active") or page_state.get("study_mode"):
+        return (
+            "The approved BDE workspace is loaded. Its prepared drafts are editable and not yet confirmed; "
+            "the graph is assumption-based, and any numerical result must be computed by the backend."
+        )
+    return (
+        "You can load the approved BDE study workspace to begin the prepared task, "
+        "or manually upload a dataset and data dictionary."
+    )
+
+
+def _deterministic_guidance(*, phase: str, page_state: dict[str, Any], user_question: str) -> str:
+    intent = _assistant_intent(user_question)
+    phase_label = PHASE_LABELS.get(phase, "the current workflow phase")
+    workspace = _workspace_message(page_state)
+    warnings = page_state.get("active_warnings") or page_state.get("warnings") or []
+    exposure = page_state.get("selected_exposure") or "not selected"
+    outcome = page_state.get("selected_outcome") or "not selected"
+
+    if intent == "clinical":
+        return "I can help with the Causal Studio study workflow, but I cannot provide clinical advice or unsupported causal conclusions."
+    if intent == "causal":
+        return (
+            "No. This workflow cannot prove that movement causes binge drinking. It can support a reviewed, "
+            "backend-computed analysis only after assumptions, timing, graph validation, feasibility, and diagnostics are considered."
+        )
+    if intent == "greeting":
+        return f"Hi! I can help you work through the Causal Studio workflow. You are currently in {phase_label}. {workspace}"
+    if intent == "capabilities":
+        return (
+            f"I can explain the current {phase_label} step, warnings, variables, graph, feasibility, backend-computed results, "
+            f"and what to check next. {workspace}"
+        )
+    if intent == "identity":
+        return f"I’m the Causal Studio assistant. I can help you navigate {phase_label}, understand the dashboard state, and identify the next workflow check. {workspace}"
+    if intent == "status":
+        return _summarize_page_state(phase, page_state)
+    if intent == "next_step":
+        if phase == "phase_1_project_setup" and not (page_state.get("study_mode_active") or page_state.get("study_mode")):
+            return f"You are in Project Setup. {workspace}"
+        if phase == "phase_1_project_setup":
+            return "You are in Project Setup. Review the loaded objective, dataset, and data dictionary, then continue to Data Foundation."
+        return f"You are currently in {phase_label}. Review the visible required fields and warnings for this phase before continuing; use backend validation for any numerical or causal-design decision."
+    if intent == "issues":
+        if warnings:
+            return f"The current item to review is: {str(warnings[0])}. Resolve blocking issues before continuing; non-blocking warnings should remain documented."
+        return f"I do not see an active warning in the supplied dashboard state. In {phase_label}, review the required fields and any visible validation messages before continuing."
+    if intent == "warning":
+        if warnings:
+            return f"Current warning: {str(warnings[0])}. It should be reviewed and documented; it does not by itself establish a causal conclusion."
+        return "There is no active warning in the supplied dashboard state. If you see a warning in the interface, share its text and I can explain its workflow consequence."
+    if intent == "variables":
+        return f"Current exposure: {exposure}. Current outcome: {outcome}. These selections remain drafts until they are reviewed and confirmed in the workflow."
+    return f"I can help with the current {phase_label} workflow state, including warnings, variables, feasibility, graph review, and backend-computed outputs. {workspace}"
+
 
 def _fallback_response(
     *,
@@ -371,16 +460,21 @@ def _fallback_response(
     unavailable_reason: str | None = None,
     user_question: str = "",
 ) -> dict[str, Any]:
-    fallback_note = unavailable_reason or (
-        "LLM interpretation is unavailable because the API key is not configured, "
-        "but deterministic checks and backend outputs are still available."
+    intent = _assistant_intent(user_question)
+    guidance = _deterministic_guidance(
+        phase=phase,
+        page_state=page_state,
+        user_question=user_question,
     )
-    summary = _summarize_page_state(phase, page_state)
-    question_guidance = _safe_question_guidance(user_question)
-    assistant_message = f"{fallback_note}\n\n{question_guidance}\n\n{summary}"
-    if selected_item:
+    # Greetings and safety requests stay concise even when the model is unavailable.
+    show_availability_note = intent == "general"
+    fallback_note = unavailable_reason or (
+        "LLM response is unavailable, but I can still explain the current workflow state using deterministic dashboard information."
+    )
+    assistant_message = f"{fallback_note}\n\n{guidance}" if show_availability_note else guidance
+    if selected_item and intent == "general":
         assistant_message += "\n\nSelected item was included in the request and should be reviewed against deterministic backend output."
-    if rag_evidence:
+    if rag_evidence and intent == "general":
         assistant_message += f"\n\n{len(rag_evidence)} RAG evidence item(s) were provided. They can support explanation, but they do not prove causal claims."
     if warning:
         assistant_message += f"\n\nNote: {warning}"
@@ -388,7 +482,7 @@ def _fallback_response(
     return {
         "status": "fallback",
         "assistant_message": assistant_message,
-        "summary": summary,
+        "summary": _summarize_page_state(phase, page_state),
         "limitations": [
             "LLM generation was not used.",
             "No causal validity decision was made by the assistant.",
@@ -439,6 +533,7 @@ def _build_system_prompt() -> str:
         "- Always distinguish Python/R computation from GenAI explanation.\n"
         "- Causal Design Agent is not a diagnostic tool or treatment-decision system.\n"
         "- For clinical, diagnosis, treatment, or unsupported-causality requests, state that you can help with the workflow but cannot provide clinical advice or unsupported causal conclusions.\n\n"
+        "For greetings, help requests, and next-step questions, answer in one or two conversational sentences and do not dump a readiness checklist unless the user asks for status. "
         "Return concise, state-specific guidance. If a value or evidence source is missing, say so clearly."
     )
 
@@ -461,6 +556,16 @@ def run_assistant_action(
 
     normalized_selected_item = selected_item or {}
     normalized_rag_evidence = rag_evidence or []
+    direct_intent = _assistant_intent(user_feedback)
+    if direct_intent in {"greeting", "capabilities", "identity", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
+        return _fallback_response(
+            phase=phase,
+            action=action,
+            page_state=page_state,
+            selected_item=normalized_selected_item,
+            rag_evidence=normalized_rag_evidence,
+            user_question=user_feedback,
+        )
     load_dotenv()
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)

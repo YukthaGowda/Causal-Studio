@@ -313,5 +313,5 @@ export function exportReport(payload, format = "json") {
 
 export async function startStudyMode() {
   const response = await apiFetch("/study-mode/start", { method: "POST" });
-  return parseJsonResponse(response, "Study Mode could not be started.");
+  return parseJsonResponse(response, "Approved BDE workspace could not be loaded.");
 }

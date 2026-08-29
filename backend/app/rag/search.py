@@ -6,12 +6,16 @@ from app.core.langsmith_tracing import record_trace_event, summarize_sources
 from app.rag.ingestion import (
     CHROMA_DB_DIR,
     COLLECTION_NAME,
-    EMBEDDING_MODEL_NAME,
     IngestionDependencyError,
+    get_embedding_model,
 )
 
 
 class RagSearchError(RuntimeError):
+    pass
+
+
+class RagEmbeddingUnavailableError(RagSearchError):
     pass
 
 
@@ -29,7 +33,7 @@ def get_existing_chroma_collection() -> Any:
     client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
 
     try:
-        return client.get_collection(name=COLLECTION_NAME)
+        return client.get_collection(name=COLLECTION_NAME, embedding_function=None)
     except Exception as error:
         raise RagSearchError(
             "RAG collection was not found. Ingest documents before searching."
@@ -37,13 +41,13 @@ def get_existing_chroma_collection() -> Any:
 
 
 def create_query_embedding(query: str) -> list[float]:
+    model = get_embedding_model()
     try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as error:
-        raise IngestionDependencyError("Missing dependency: sentence-transformers") from error
-
-    model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    embedding = model.encode([query], normalize_embeddings=True)
+        embedding = model.encode([query], normalize_embeddings=True)
+    except Exception as error:
+        raise IngestionDependencyError(
+            "RAG query embedding could not be generated. Check model availability or server connectivity, then retry search."
+        ) from error
     return embedding.tolist()[0]
 
 
@@ -74,7 +78,13 @@ def search_rag_chunks(query: str, top_k: int = 5) -> dict[str, str | int | list[
         }
 
     result_limit = min(top_k, stored_chunks)
-    query_embedding = create_query_embedding(normalized_query)
+    try:
+        query_embedding = create_query_embedding(normalized_query)
+    except IngestionDependencyError as error:
+        raise RagEmbeddingUnavailableError(
+            "RAG search is unavailable because the embedding model could not be loaded. "
+            "Retry after model availability is restored."
+        ) from error
     query_results = collection.query(
         query_embeddings=[query_embedding],
         n_results=result_limit,

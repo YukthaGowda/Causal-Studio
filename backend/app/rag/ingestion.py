@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,22 @@ CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 
 
+logger = logging.getLogger(__name__)
+
+
 class IngestionDependencyError(RuntimeError):
     pass
+
+
+# Importing this module must not download model weights. The model is initialized
+# only by an ingestion or search request that needs embeddings.
+_embedding_model: Any | None = None
+_embedding_model_error: IngestionDependencyError | None = None
+
+
+logger.info(
+    "RAG embedding model loading is lazy and will initialize only when ingestion/search is requested."
+)
 
 
 @dataclass(frozen=True)
@@ -137,17 +152,51 @@ def get_chroma_collection() -> Any:
 
     CHROMA_DB_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
-    return client.get_or_create_collection(name=COLLECTION_NAME)
+    # Embeddings are supplied explicitly below, so prevent Chroma from selecting
+    # its own embedding function during normal collection access.
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=None,
+    )
+
+
+def get_embedding_model() -> Any:
+    """Initialize the sentence-transformers model only for a RAG operation."""
+    global _embedding_model, _embedding_model_error
+
+    if _embedding_model is not None:
+        return _embedding_model
+    if _embedding_model_error is not None:
+        raise _embedding_model_error
+
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        logger.info("Initializing RAG embedding model for an ingestion or search request.")
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        return _embedding_model
+    except ImportError as error:
+        _embedding_model_error = IngestionDependencyError(
+            "RAG embedding support is unavailable because sentence-transformers is not installed."
+        )
+        raise _embedding_model_error from error
+    except Exception as error:
+        logger.exception("RAG embedding model initialization failed.")
+        _embedding_model_error = IngestionDependencyError(
+            "RAG embedding model could not be initialized. Check model availability or server connectivity, then retry ingestion or search."
+        )
+        raise _embedding_model_error from error
 
 
 def create_embeddings(texts: list[str]) -> list[list[float]]:
+    model = get_embedding_model()
     try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as error:
-        raise IngestionDependencyError("Missing dependency: sentence-transformers") from error
-
-    model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    embeddings = model.encode(texts, normalize_embeddings=True)
+        embeddings = model.encode(texts, normalize_embeddings=True)
+    except Exception as error:
+        logger.exception("RAG embedding generation failed during document ingestion.")
+        raise IngestionDependencyError(
+            "RAG embeddings could not be generated. Check model availability or server connectivity, then retry ingestion."
+        ) from error
     return embeddings.tolist()
 
 

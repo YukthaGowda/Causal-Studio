@@ -104,7 +104,7 @@ def ingest_documents() -> dict[str, str | int | list[str]]:
         return ingest_uploaded_documents()
     except IngestionDependencyError as error:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(error),
         ) from error
 

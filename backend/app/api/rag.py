@@ -4,7 +4,11 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.rag.ingestion import IngestionDependencyError
-from app.rag.search import RagSearchError, search_rag_chunks
+from app.rag.search import (
+    RagEmbeddingUnavailableError,
+    RagSearchError,
+    search_rag_chunks,
+)
 
 
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -27,6 +31,11 @@ class RagSearchRequest(BaseModel):
 def search_documents(request: RagSearchRequest) -> dict[str, str | int | list[dict[str, Any]]]:
     try:
         return search_rag_chunks(query=request.query, top_k=request.top_k)
+    except RagEmbeddingUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
     except RagSearchError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -34,6 +43,6 @@ def search_documents(request: RagSearchRequest) -> dict[str, str | int | list[di
         ) from error
     except IngestionDependencyError as error:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(error),
         ) from error

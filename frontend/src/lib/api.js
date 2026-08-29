@@ -142,6 +142,7 @@ export async function runFeasibilityCheck(payload) {
   return parseJsonResponse(response, "Targeted feasibility check failed.");
 }
 
+
 export async function assistantAction(payload) {
   const response = await apiFetch("/assistant/action", {
     method: "POST",
@@ -308,4 +309,9 @@ export function exportReport(payload, format = "json") {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
   return filename;
+}
+
+export async function startStudyMode() {
+  const response = await apiFetch("/study-mode/start", { method: "POST" });
+  return parseJsonResponse(response, "Study Mode could not be started.");
 }

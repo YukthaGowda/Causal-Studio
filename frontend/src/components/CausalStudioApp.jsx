@@ -33,6 +33,7 @@ import {
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   assistantAction,
+  startStudyMode,
   assembleReviewPackage,
   checkBackendHealth,
   exportReviewPackage,
@@ -1493,11 +1494,11 @@ const STYLE = `
 `;
 
 function ProjectSetupView({ state, actions }) {
-  const { objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, backendStatus, actionStatus, ingestionInfo, ragSummary } = state;
+  const { objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, backendStatus, actionStatus, ingestionInfo, ragSummary, studyMode, studySessionLog } = state;
   const {
     setObjective, setShowFeedback, applyFeedback, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
-    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, handleDocumentIngestion, handleDictionaryRagCheck,
+    checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, handleDocumentIngestion, handleDictionaryRagCheck, startFixedBdeStudyMode, exportStudySessionLog,
   } = actions;
   const ingestedChunks = ingestionInfo?.number_of_stored_chunks ?? ingestionInfo?.stored_chunks ?? ingestionInfo?.lastResult?.number_of_chunks_created ?? ingestionInfo?.lastResult?.chunks_created ?? 0;
 
@@ -1517,6 +1518,11 @@ function ProjectSetupView({ state, actions }) {
       </div>
 
       <div className="card readiness-card">
+        <div className="button-row" style={{ marginBottom: 12 }}>
+          <button className="btn btn-primary" onClick={startFixedBdeStudyMode}><Sparkles size={14} /> Study Mode: Fixed BDE causal-design task</button>
+          {studyMode && <button className="btn btn-secondary" onClick={exportStudySessionLog}><Save size={14} /> Export study session log ({studySessionLog?.length || 0})</button>}
+          <span className="chip chip-warning">Frozen study draft — editable, not yet confirmed.</span>
+        </div>
         <div className="card-head">
           <div className="card-title"><ClipboardList size={16} color="var(--accent)" /> Project readiness</div>
           <span className="readiness-count-inline">{requiredCount} of {requiredTotal} required checks complete</span>
@@ -2066,7 +2072,7 @@ function RelevanceTag({ level }) {
 }
 
 function ExploreView({ state, actions, onGoNext }) {
-  const { datasets, promotedPatterns, actionStatus, broadExploration, savedExploreViews } = state;
+  const { datasets, promotedPatterns, actionStatus, broadExploration, savedExploreViews, studyMode } = state;
   const { promotePattern, saveExploreView, showToast, pushAssistantNote, handleBroadExploration, runAssistantAction } = actions;
   // Turn-based guidance: each flag fires its message exactly once per mount
   const windowGuidanceFired = useRef(false);
@@ -2183,6 +2189,21 @@ function ExploreView({ state, actions, onGoNext }) {
                   : "No participant ID summary available"}
               </strong>
             </div>
+          </div>
+        )}
+        {studyMode?.study_summary && (
+          <div className="card" style={{ marginTop: 14 }}>
+            <div className="card-head"><div className="card-title">Backend-computed study summary</div><span className="chip chip-accent">Backend-computed</span></div>
+            <div className="real-summary-grid">
+              <div className="real-summary-card"><span>Exposure</span><strong>{studyMode.study_summary.exposure?.column || "Not yet available"}</strong></div>
+              <div className="real-summary-card"><span>Non-missing exposure values</span><strong>{studyMode.study_summary.exposure?.count?.toLocaleString?.() ?? "Not yet available"}</strong></div>
+              <div className="real-summary-card"><span>Exposure mean (SD)</span><strong>{studyMode.study_summary.exposure ? `${studyMode.study_summary.exposure.mean?.toFixed?.(3) ?? "Not yet available"} (${studyMode.study_summary.exposure.std?.toFixed?.(3) ?? "Not yet available"})` : "Not yet available"}</strong></div>
+              <div className="real-summary-card"><span>Exposure range</span><strong>{studyMode.study_summary.exposure ? `${studyMode.study_summary.exposure.min?.toFixed?.(3) ?? "Not yet available"} to ${studyMode.study_summary.exposure.max?.toFixed?.(3) ?? "Not yet available"}` : "Not yet available"}</strong></div>
+            </div>
+            <div className="pattern-row"><span>Outcome distribution: <strong>label</strong></span><span>{studyMode.study_summary.outcome_distribution?.map((item) => `${item.value}: ${item.count} (${item.percentage}%)`).join("; ") || "Not yet available"}</span></div>
+            <div className="pattern-row"><span>Key-variable missingness</span><span>{studyMode.study_summary.key_missingness?.map((item) => `${item.column}: ${item.missing_percentage}%`).join("; ") || "Not yet available"}</span></div>
+            <div className="pattern-row"><span>Candidate-variable summaries</span><span>{studyMode.study_summary.candidate_variables?.map((item) => `${item.column}: ${item.unique_values} observed values`).join("; ") || "Not yet available"}</span></div>
+            <div className="helper"><ShieldAlert size={13} /> These are backend-computed descriptive values, not causal estimates or claims.</div>
           </div>
         )}
         {broadExploration?.data_quality_warnings?.length > 0 && (
@@ -4327,6 +4348,7 @@ function GraphView({ state, actions, onGoNext }) {
           <span className="chip chip-accent" style={{ marginLeft: 8, fontSize: 10.5, padding: "2px 8px" }}><Sparkles size={10} /> GenAI first-pass</span>
           <span className={`chip ${validationBadge.className}`} style={{ marginLeft: 4, fontSize: 10.5, padding: "2px 8px" }}>{validationBadge.label}</span>
           {graphVersionLabel && <span className="chip chip-muted" style={{ fontSize: 10.5, padding: "2px 8px" }}>{graphVersionLabel}</span>}
+          {state.studyMode && <span className="chip chip-warning" style={{ fontSize: 10.5, padding: "2px 8px" }}>Assumption-based graph draft — not causal proof.</span>}
         </div>
         <div className="graph-legend">
           {Object.entries(ROLE_NODE_COLOR).filter(([r]) => r !== "Unassigned").map(([role, color]) => (
@@ -5046,6 +5068,7 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
           </div>
           <span className={`chip ${analysisStrategyConfirmed ? "chip-success" : "chip-warning"}`}>{analysisStrategyConfirmed ? "Confirmed" : "Requires review"}</span>
         </div>
+        {state.studyMode && <div className="helper"><Info size={13} /> Frozen study draft — editable, not yet confirmed. Association wording only; residual confounding, timing, missing-data, and repeated-measures limitations require review.</div>}
         <div className="btn-row" style={{ flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={() => handleGenerateAnalysisStrategy("generate")} disabled={!canRunStrategy}><Play size={13} /> Run Identification</button>
           <button className="btn" onClick={() => runAssistantAction("Interpret Identification Results")}><Info size={13} /> Interpret Identification Results</button>
@@ -5507,8 +5530,8 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
 }
 
 function EstimationView({ state, actions, onGoNext }) {
-  const { questionFields, feasibility, targetedFeasibilityResult, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed } = state;
-  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction } = actions;
+  const { questionFields, feasibility, targetedFeasibilityResult, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed, studyMode } = state;
+  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction, recordStudyEvent } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
@@ -5516,7 +5539,9 @@ function EstimationView({ state, actions, onGoNext }) {
   const estimationDataset = firstRealDataset(datasets);
   const estimationColumns = estimationDataset?.schema?.column_names || [];
   const estimationExposure = estimationColumns.includes("acc_mean_magnitude") ? "acc_mean_magnitude" : questionFields?.exposure || "";
-  const estimationOutcome = estimationColumns.includes("label") ? "label" : questionFields?.outcome || "";
+  const estimationOutcome = studyMode?.dataset?.derived_outcome?.column && estimationColumns.includes(studyMode.dataset.derived_outcome.column)
+    ? studyMode.dataset.derived_outcome.column
+    : estimationColumns.includes("label") ? "label" : questionFields?.outcome || "";
   const estimationAdjustment = ["time_of_day", "day_of_week"].filter((name) => estimationColumns.includes(name));
   const readinessItems = [
     { label: "Backend connected", ok: backendStatus.connected },
@@ -5619,6 +5644,7 @@ function EstimationView({ state, actions, onGoNext }) {
         timestamp: payload.timestamp,
       });
       setEstimationValidation(response);
+      recordStudyEvent?.("estimation_validated", { status: response.status || "unknown" });
       setEstimationStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Configuration ${response.status}.` });
       pushAssistantNote(response.safe_to_run_estimation
         ? "Phase 8 configuration validation completed. Python will compute all numerical results; I will only interpret returned values."
@@ -5669,6 +5695,7 @@ function EstimationView({ state, actions, onGoNext }) {
     };
     try {
       const response = await runBackendEstimation(payload);
+      recordStudyEvent?.("estimation_run", { status: response.status || "unknown" });
       clearInterval(backendRunInterval);
       setRunProgress(100);
       if (response.status === "blocked_not_ready" || response.status === "not_runnable") {
@@ -5765,6 +5792,7 @@ function EstimationView({ state, actions, onGoNext }) {
   async function selectPrimaryRun(run) {
     setPrimaryRunId(run.id);
     setPrimaryEstimationRun(run);
+    recordStudyEvent?.("primary_estimation_selected", { run_id: run.id });
     if (backendStatus.connected) {
       try {
         const response = await selectPrimaryEstimationRun({ run_id: run.id });
@@ -5787,6 +5815,8 @@ function EstimationView({ state, actions, onGoNext }) {
       </div>
 
       {/* ── Section 1: Pre-Run Config Summary ── */}
+      {studyMode?.dataset?.derived_outcome && <div className="status-box status-warning"><strong>Backend-derived binary outcome from approved label field.</strong> {studyMode.dataset.derived_outcome.rule}. This transparent Study Mode calculation is used only for the Phase 8 model; it does not establish causality.</div>}
+
       <div className="card">
         <div className="card-head">
           <div className="card-title">Pre-run configuration summary</div>
@@ -6425,7 +6455,7 @@ function reportToMarkdown(report, state) {
 }
 
 function ReviewView({ state, actions }) {
-  const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary } = state;
+  const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary, studyMode, studyReportDraft } = state;
   const { showToast, pushAssistantNote, runAssistantAction } = actions;
   const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
@@ -6441,9 +6471,9 @@ function ReviewView({ state, actions }) {
     !selectedRun && "No primary Phase 8 estimation run has been selected.",
     severeDiagnostics.length > 0 && "Severe diagnostics or estimation warnings remain unresolved.",
   ].filter(Boolean);
-  const [reportDraft, setReportDraft] = useState(null);
+  const [reportDraft, setReportDraft] = useState(() => studyReportDraft ? { package_title: studyReportDraft.title, status: "frozen_study_draft", warnings: ["Frozen study draft — editable, not yet confirmed.", "No Phase 8 estimate has been selected yet."], ready_for_export: false, requires_user_review: true } : null);
   const [claimAudit, setClaimAudit] = useState(null);
-  const [reportPreview, setReportPreview] = useState("");
+  const [reportPreview, setReportPreview] = useState(() => studyReportDraft?.content || "");
   const [reportHistory, setReportHistory] = useState([]);
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
@@ -6513,6 +6543,7 @@ function ReviewView({ state, actions }) {
       const preview = reportToMarkdown(report, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(report);
       setReportPreview(preview);
+      actions.recordStudyEvent?.("report_generated", { source: "backend" });
       saveReportVersion("Draft 1", preview, report, claimAudit);
       pushAssistantNote("The Phase 9 review package is assembled. Review missing items, estimation diagnostics, evidence limits, and claim boundaries before exporting.");
       showToast("Review package assembled.");
@@ -6536,6 +6567,7 @@ function ReviewView({ state, actions }) {
       const preview = reportToMarkdown(localDraft, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(localDraft);
       setReportPreview(preview);
+      actions.recordStudyEvent?.("report_generated", { source: "local_incomplete_draft" });
       saveReportVersion("Draft 1 - local fallback", preview, localDraft, claimAudit);
       pushAssistantNote("I created a local incomplete report preview because the backend report endpoint was unavailable. Review it as a draft only.");
       showToast("Local report preview generated.");
@@ -6588,6 +6620,7 @@ function ReviewView({ state, actions }) {
   }
 
   async function handleExportReviewPackage(format) {
+    actions.recordStudyEvent?.("export_attempted", { format });
     if (format === "pdf") {
       if (!exportReady) {
         showToast("Resolve export blockers before PDF preview.");
@@ -6650,6 +6683,8 @@ function ReviewView({ state, actions }) {
         </div>
         <p>Everything confirmed across the workflow, assembled into one document you can export and share.</p>
       </div>
+
+      {studyMode && <div className="card"><div className="card-head"><div className="card-title">Frozen study report draft</div><span className="chip chip-warning">Frozen study draft — editable, not yet confirmed.</span></div><p className="card-desc">This draft preserves warnings, incomplete states, limitations, and claim boundaries. Generate the backend package and complete claim audit before external export.</p><textarea className="text-area" value={reportPreview} onChange={(event) => setReportPreview(event.target.value)} rows={12} aria-label="Editable frozen study report draft" /></div>}
 
       <div className="card">
         <div className="card-head"><div className="card-title">Final research question</div><CardInfo text="The formalized causal question from Step 4, shown here for final review before export. Includes the population, exposure, comparator, outcome, time window, and target estimand. Go back to Step 4 to adjust." /></div>
@@ -7058,6 +7093,9 @@ export default function CausalStudioApp() {
   const [ingestionInfo, setIngestionInfo] = useState(null);
   const [ragSummary, setRagSummary] = useState("");
   const [broadExploration, setBroadExploration] = useState(null);
+  const [studyMode, setStudyMode] = useState(null);
+  const [studySessionLog, setStudySessionLog] = useState([]);
+  const [studyReportDraft, setStudyReportDraft] = useState(null);
 
   const [assistantThreads, setAssistantThreads] = useState({
     setup: [
@@ -7106,6 +7144,65 @@ export default function CausalStudioApp() {
       active = false;
     };
   }, []);
+
+  function recordStudyEvent(event, details = {}) {
+    if (!studyMode && event !== "study_mode_started") return;
+    setStudySessionLog((log) => [...log, { event, at: new Date().toISOString(), ...details }]);
+  }
+
+  function exportStudySessionLog() {
+    recordStudyEvent("export_attempted", { export: "study_session_log" });
+    const blob = new Blob([JSON.stringify({ study_mode: studyMode?.label || "Study Mode", events: studySessionLog }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url; link.download = "causal_studio_study_session_log.json"; link.click();
+    URL.revokeObjectURL(url);
+    showToast("Study session log exported.");
+  }
+
+  async function startFixedBdeStudyMode() {
+    setAction("studyMode", { kind: "loading", message: "Registering approved Study Mode materials..." });
+    try {
+      const result = await startStudyMode();
+      const dataset = schemaToDataset({ name: result.dataset.original_filename, size: result.dataset.file_size_bytes }, result.dataset, result.dataset.schema, { rows: 0, cols: 0 });
+      const drafts = result.frozen_drafts || {};
+      setStudyMode(result);
+      recordStudyEvent("study_mode_started");
+      setObjective(result.objective || "");
+      setDatasets([{ ...dataset, studyMode: true, studyLabel: "Approved study dataset" }]);
+      setDictionary({ name: "BDE data description.docx", savedFilename: "BDE data description.docx", total: result.dataset.schema?.number_of_columns || 0, described: result.dataset.schema?.number_of_columns || 0, studyMode: true });
+      setProtocol({ name: "BDE Data collection.pdf", savedFilename: "BDE Data collection.pdf", studyMode: true });
+      setPapers([{ id: "study-paper", name: "BDE Research paper.pdf", title: "Approved study evidence", studyMode: true }]);
+      setQuestionFields({ question: drafts.question?.question_text || "", population: "Participants in the approved BDE study dataset", exposure: drafts.question?.exposure || "acc_mean_magnitude", comparator: "Lower movement values", outcome: drafts.question?.outcome || "label", timeWindow: "Prior analysis window to later label", unitOfAnalysis: "participant-window", estimand: "Association; causal interpretation requires reviewed assumptions" });
+      setQuestionCandidates([{ id: "study-frozen", status: "Frozen study draft — editable, not yet confirmed.", question_text: drafts.question?.question_text || "", exposure: drafts.question?.exposure, outcome: drafts.question?.outcome, limitations: ["Observational design; no causal conclusion without reviewed assumptions."] }]);
+      const studyRoles = { acc_mean_magnitude: "Exposure", label: "Outcome", time_of_day: "Confounder", day_of_week: "Confounder" };
+      const graphNodeNames = drafts.graph?.nodes || ["time_of_day", "day_of_week", "acc_mean_magnitude", "label"];
+      const graphPositions = [[180, 120], [180, 355], [465, 235], [740, 235]];
+      const graphNodesDraft = graphNodeNames.map((id, index) => ({ id, label: id, role: studyRoles[id] || "Unassigned", isCore: true, x: graphPositions[index]?.[0] || 450, y: graphPositions[index]?.[1] || 260, notes: "Frozen study draft — editable, not yet confirmed." }));
+      const graphEdgesDraft = (drafts.graph?.edges || []).map(([from, to], index) => ({ id: `study-edge-${index + 1}`, from, to, type: "uncertain", edgeType: "uncertain", notes: "Assumption-based graph draft — not causal proof." }));
+      setVariableRoles(studyRoles);
+      setGraphNodes(graphNodesDraft);
+      setGraphEdges(graphEdgesDraft);
+      setGraphVersionLabel("Frozen study draft — editable, not yet confirmed.");
+      setGraphValidationResult(null);
+      setConfirmedGraph(null);
+      setGraphActionStatus({ kind: "warning", message: "Assumption-based graph draft — not causal proof. Save, validate, and confirm before Phase 7." });
+      setEditableAdjustmentSet(drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"]);
+      setAnalysisStrategyDraft({
+        estimand: { label: drafts.strategy?.estimand || "Association only — not a causal effect claim.", exposure: "acc_mean_magnitude", outcome: "label", comparator: "one-unit higher movement value", time_window: "prior analysis window to later label", unit_of_analysis: "participant-window" },
+        strategy: { estimator_family: "logistic_regression", adjustment_set: drafts.strategy?.adjustment_set || ["time_of_day", "day_of_week"], repeated_measures_strategy: drafts.strategy?.repeated_measures_note || "Requires review", missing_data_strategy: "complete_case", warning: drafts.strategy?.warning || "Residual confounding and temporal assumptions require review." },
+      });
+      setAnalysisStrategyResult(null);
+      setAnalysisStrategyValidation(null);
+      setAnalysisStrategyConfirmed(null);
+      setAnalysisStrategyStatus({ kind: "warning", message: "Frozen strategy draft loaded. Run identification and validate it before confirmation." });
+      setStudyReportDraft({ label: drafts.label || "Frozen study draft — editable, not yet confirmed.", title: drafts.report?.title || "Fixed BDE study report draft", content: drafts.report?.content || "Not yet available" });
+      setAction("studyMode", { kind: "success", message: "Study Mode active. Frozen study drafts are editable and not yet confirmed." });
+      pushAssistantNote("Study Mode active: approved files are registered. Frozen study drafts are editable and not yet confirmed. Python computes all numerical outputs.", "setup");
+    } catch (error) {
+      setAction("studyMode", { kind: "error", message: friendlyError(error, "Study Mode could not be started.") });
+    }
+  }
 
   async function addDatasets(files) {
     if (!files?.length) return;
@@ -7487,6 +7584,7 @@ export default function CausalStudioApp() {
       return;
     }
     setPhase4Status({ kind: "success", message: "Question confirmed for targeted feasibility review." });
+    recordStudyEvent("question_confirmed");
     pushAssistantNote("Question confirmed for Phase 5 feasibility review. This confirms wording, not causal validity.");
   }
 
@@ -7573,6 +7671,7 @@ export default function CausalStudioApp() {
     try {
       const response = await runFeasibilityCheck(payload);
       setTargetedFeasibilityResult(response);
+      recordStudyEvent("feasibility_run", { status: response.status || "unknown" });
       const issueCount = (response.blocking_issues || []).length + (response.warnings || []).length;
       setAction("targetedFeasibility", {
         kind: response.status === "not_feasible" || response.status === "requires_revision" ? "warning" : "success",
@@ -7917,6 +8016,7 @@ export default function CausalStudioApp() {
       draft: analysisStrategyDraft,
       confirmedAt: new Date().toISOString(),
     });
+    recordStudyEvent("strategy_confirmed");
     pushAssistantNote("Analysis strategy confirmed for Phase 8. This confirms a reviewed plan, not a causal conclusion.");
   }
   async function generateFirstPassGraph(versionLabel = "Version 1", userFeedback = "") {
@@ -7958,6 +8058,7 @@ export default function CausalStudioApp() {
       const payload = graphBackendPayload();
       const response = await validateCausalGraph(payload);
       setGraphValidationResult(response);
+      recordStudyEvent("graph_saved_or_validated", { status: response.status || "unknown" });
       const problemCount = (response.errors?.length || 0) + (response.warnings?.length || 0);
       setGraphActionStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Validation ${response.status}; ${problemCount} issue${problemCount === 1 ? "" : "s"}.` });
       pushAssistantNote(response.safe_to_continue
@@ -7990,6 +8091,7 @@ export default function CausalStudioApp() {
       showToast("Confirmed with warnings. These limitations must stay visible in downstream reporting.");
     }
     setConfirmedGraph({ graphType, graphVersionLabel, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult });
+    recordStudyEvent("graph_saved_or_validated", { status: "confirmed" });
     pushAssistantNote("Graph confirmed for downstream planning. This confirms a reviewed design draft, not a proven causal structure.");
     showToast("Graph confirmed.");
   }
@@ -8016,6 +8118,7 @@ export default function CausalStudioApp() {
       return next;
     });
     setGraphValidationResult(null);
+    recordStudyEvent("variable_roles_confirmed", { variable: name, role });
     const schemaVar = ROLE_TABLE_VARIABLES.find((v) => v.name === name);
     if (schemaVar) {
       if (role === schemaVar.roleGuess) {
@@ -8102,6 +8205,7 @@ export default function CausalStudioApp() {
       return;
     }
     setPage(key);
+    recordStudyEvent("phase_changed", { phase: key });
     if (!visited[key]) {
       setVisited((v) => ({ ...v, [key]: true }));
       pushAssistantNote(PAGE_INTRO_MESSAGES[key], key);
@@ -8386,6 +8490,34 @@ export default function CausalStudioApp() {
       setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "assistant", text: localAssistantAnswer(q) }] }));
     }, 650);
   }
+  async function runGeneralAssistantChat(prompt) {
+    setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
+    setAssistantThinking(true);
+    setAssistantThinkingMessage("Thinking...");
+    try {
+      const response = await assistantChat({
+        message: prompt,
+        workflow_step: ASSISTANT_PHASE_MAP[page],
+      });
+      const assistantText = assistantMessageFromResponse(response);
+      setAssistantThreads((t) => ({
+        ...t,
+        [page]: [...(t[page] || []), { role: "assistant", text: assistantText }],
+      }));
+      setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      return assistantText;
+    } catch (error) {
+      const fallbackText = "I could not complete this chat request: " + friendlyError(error);
+      setAssistantThreads((t) => ({
+        ...t,
+        [page]: [...(t[page] || []), { role: "assistant", text: fallbackText }],
+      }));
+      return fallbackText;
+    } finally {
+      setAssistantThinking(false);
+    }
+  }
+
   async function runAssistantAction(prompt) {
     const phase = ASSISTANT_PHASE_MAP[page];
     const useBackendAction = ["setup", "data-foundation", "explore", "feasibility", "graph", "strategy", "estimation", "review"].includes(page);
@@ -8441,8 +8573,7 @@ export default function CausalStudioApp() {
     const q = assistantInput.trim();
     if (!q) return;
     setAssistantInput("");
-    const matched = Object.keys(ANSWERS).find((k) => k.toLowerCase() === q.toLowerCase());
-    runAssistantAction(matched || q);
+    askAssistant(q);
   }
 
   const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
@@ -8491,7 +8622,7 @@ export default function CausalStudioApp() {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
-    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration,
+    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, recordStudyEvent, exportStudySessionLog,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
     handleRunFeasibilityCheck,
@@ -8508,7 +8639,7 @@ export default function CausalStudioApp() {
   };
   const state = {
     objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns, savedExploreViews,
-    backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration,
+    backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration, studyMode, studySessionLog, studyReportDraft,
     variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
     lagHours, exposureThreshold, sensitivityChecks, feasibility, targetedFeasibilityResult,
     graphNodes, graphEdges, selectedNodeId, selectedEdgeId, graphType, graphValidationResult, graphAlternatives, confirmedGraph, graphVersionLabel, graphActionStatus,

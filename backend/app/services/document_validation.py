@@ -42,11 +42,19 @@ def _read_text(file_path: Path) -> str:
 def _latest_dataset_schema() -> dict[str, Any] | None:
     if not DATASET_UPLOAD_DIR.exists():
         return None
-    csv_files = sorted(DATASET_UPLOAD_DIR.glob("*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
-    if not csv_files:
+    dataset_files = sorted(
+        (
+            path
+            for path in DATASET_UPLOAD_DIR.iterdir()
+            if path.is_file() and path.suffix.lower() in {".csv", ".xlsx", ".xls"}
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not dataset_files:
         return None
     try:
-        return parse_dataset_schema(csv_files[0])
+        return parse_dataset_schema(dataset_files[0])
     except DatasetSchemaError:
         return None
 
@@ -139,6 +147,18 @@ def validate_document_category(filename: str, declared_category: str) -> dict[st
             "detected_information": [],
             "warnings": ["The saved filename does not exist in the document upload folder."],
             "recommended_next_actions": ["Upload the document again and validate the returned saved filename."],
+        }
+
+    if declared_category == "research_paper" and file_path.suffix.lower() != ".pdf":
+        return {
+            "status": "error",
+            "declared_category": declared_category,
+            "detected_category": "unknown",
+            "summary": "Research papers must be PDF files.",
+            "missing_information": [],
+            "detected_information": [],
+            "warnings": ["Research papers must be PDF files."],
+            "recommended_next_actions": ["Upload a PDF research paper."],
         }
 
     text = _read_text(file_path)

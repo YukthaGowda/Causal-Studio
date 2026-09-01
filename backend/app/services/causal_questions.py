@@ -14,6 +14,7 @@ from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
 
 
 DATASET_UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "datasets"
+DATASET_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 DEFAULT_MODEL = "gpt-4o-mini"
 MAX_EVIDENCE_CHUNKS = 10
 
@@ -60,16 +61,21 @@ def resolve_dataset_path(filename: str) -> Path:
 
     dataset_path = DATASET_UPLOAD_DIR / filename
     if dataset_path.exists() and dataset_path.is_file():
-        if dataset_path.suffix.lower() != ".csv":
-            raise CausalQuestionGenerationError("Candidate questions require a CSV dataset.")
+        if dataset_path.suffix.lower() not in DATASET_EXTENSIONS:
+            raise CausalQuestionGenerationError(
+                "Candidate questions require a CSV or Excel dataset."
+            )
         return dataset_path
 
-    if requested_path.suffix.lower() != ".csv":
-        raise CausalQuestionGenerationError("Candidate questions require a CSV dataset.")
+    if requested_path.suffix.lower() not in DATASET_EXTENSIONS:
+        raise CausalQuestionGenerationError(
+            "Candidate questions require a CSV or Excel dataset."
+        )
 
     matching_uploads = sorted(
         path
-        for path in DATASET_UPLOAD_DIR.glob(f"{requested_path.stem}_*.csv")
+        for extension in DATASET_EXTENSIONS
+        for path in DATASET_UPLOAD_DIR.glob(f"{requested_path.stem}_*{extension}")
         if path.is_file()
     )
     if len(matching_uploads) == 1:

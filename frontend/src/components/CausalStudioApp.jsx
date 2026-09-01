@@ -1102,14 +1102,14 @@ function splitAcceptedFiles(files, accept) {
   }, { accepted: [], rejected: [] });
 }
 
-function UploadDropzone({ label, onFiles, multiple, accept, compact }) {
+function UploadDropzone({ label, onFiles, multiple, accept, compact, rejectedMessage }) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
   function handleFiles(fileList) {
     const files = Array.from(fileList || []);
     const { accepted, rejected } = splitAcceptedFiles(files, accept);
     if (rejected.length > 0) {
-      window.alert(`Unsupported file type: ${rejected.map((file) => file.name).join(", ")}. Accepted formats: ${acceptedExtensions(accept).join(", ") || "listed formats"}.`);
+      window.alert(rejectedMessage || `Unsupported file type: ${rejected.map((file) => file.name).join(", ")}. Accepted formats: ${acceptedExtensions(accept).join(", ") || "listed formats"}.`);
     }
     if (accepted.length > 0) onFiles(multiple ? accepted : accepted.slice(0, 1));
   }
@@ -1642,15 +1642,21 @@ function ProjectSetupView({ state, actions }) {
         </div>
         <p className="card-desc">The raw data files collected for your study — EMA surveys, wearable sensor exports, smartphone logs, clinical records, or baseline assessments. Upload one file per data source; you can add more later.</p>
         <div className="upload-detail-box">
-          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>CSV</span></div>
-          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>ema_daily_survey.csv &nbsp;·&nbsp; actigraphy_30day.csv &nbsp;·&nbsp; baseline_clinical.csv</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>CSV or Excel (.xlsx, .xls)</span></div>
+          <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>ema_daily_survey.csv &nbsp;·&nbsp; actigraphy_30day.xlsx &nbsp;·&nbsp; baseline_clinical.xls</span></div>
           <div className="upload-detail-row"><span className="upload-detail-label">Must include</span><span>A participant identifier column (e.g. <code>participant_id</code>), at least one timestamp column, and the variables you plan to treat as exposure or outcome.</span></div>
         </div>
         <div className="helper" style={{ marginTop: 0, marginBottom: 12 }}>
           <ShieldAlert size={13} style={{ flexShrink: 0, marginTop: 1 }} />
           Upload only appropriately authorized and de-identified research data. The system may flag obvious direct identifiers, but it does not certify that a dataset is fully de-identified or compliant with institutional requirements.
         </div>
-        <UploadDropzone label="EMA, wearable, smartphone, clinical, or baseline data · CSV" multiple accept=".csv" onFiles={addDatasets} />
+        <UploadDropzone
+          label="Upload CSV or Excel dataset"
+          multiple
+          accept=".csv,.xlsx,.xls"
+          rejectedMessage="Unsupported dataset type. Upload a .csv, .xlsx, or .xls file."
+          onFiles={addDatasets}
+        />
         {statusMessage(actionStatus.datasetUpload) && (
           <div className={`action-note ${actionNoteClass(actionStatus.datasetUpload)}`}>
             {statusMessage(actionStatus.datasetUpload)}
@@ -1791,7 +1797,14 @@ function ProjectSetupView({ state, actions }) {
           <div className="upload-detail-row"><span className="upload-detail-label">Formats accepted</span><span>PDF only</span></div>
           <div className="upload-detail-row"><span className="upload-detail-label">Examples</span><span>RCTs, observational studies, systematic reviews, or meta-analyses related to your exposure or outcome of interest.</span></div>
         </div>
-        <UploadDropzone label="One or more published papers · PDF" multiple compact accept=".pdf" onFiles={addPapers} />
+        <UploadDropzone
+          label="Upload PDF research paper"
+          multiple
+          compact
+          accept=".pdf"
+          rejectedMessage="Research papers must be PDF files."
+          onFiles={addPapers}
+        />
         {statusMessage(actionStatus.paperUpload) && (
           <div className={`action-note ${actionNoteClass(actionStatus.paperUpload)}`}>
             {statusMessage(actionStatus.paperUpload)}

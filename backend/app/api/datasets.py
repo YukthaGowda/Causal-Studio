@@ -10,7 +10,7 @@ from app.services.dataset_schema import DatasetSchemaError, parse_dataset_schema
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "datasets"
-ALLOWED_EXTENSIONS = {".csv"}
+ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
 
 def get_file_extension(filename: str) -> str:
@@ -45,7 +45,7 @@ def resolve_dataset_path(filename: str) -> Path:
     if dataset_path.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only CSV datasets can be parsed.",
+            detail="Only CSV or Excel datasets can be parsed.",
         )
 
     return dataset_path
@@ -58,7 +58,7 @@ def upload_dataset(file: UploadFile = File(...)) -> dict[str, str | int]:
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Upload a .csv file.",
+            detail="Unsupported dataset type. Upload a .csv, .xlsx, or .xls file.",
         )
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

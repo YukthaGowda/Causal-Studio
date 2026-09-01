@@ -13,13 +13,18 @@ class DatasetSchemaError(RuntimeError):
 
 
 def read_csv_dataset(file_path: Path) -> Any:
+    """Read an allowed dataset while preserving the existing caller interface."""
     try:
         import pandas as pd
     except ImportError as error:
         raise DatasetSchemaError("Missing dependency: pandas") from error
 
+    extension = file_path.suffix.lower()
     try:
-        return pd.read_csv(file_path)
+        if extension == ".csv":
+            return pd.read_csv(file_path)
+        if extension in {".xlsx", ".xls"}:
+            return pd.read_excel(file_path)
     except pd.errors.EmptyDataError as error:
         raise DatasetSchemaError("CSV file is empty or has no readable columns.") from error
     except UnicodeDecodeError as error:
@@ -27,7 +32,13 @@ def read_csv_dataset(file_path: Path) -> Any:
             "CSV file could not be decoded. Save it as UTF-8 CSV and try again."
         ) from error
     except Exception as error:
+        if extension in {".xlsx", ".xls"}:
+            raise DatasetSchemaError(
+                "Excel dataset could not be parsed. Please check the file format and sheet contents."
+            ) from error
         raise DatasetSchemaError(f"CSV file could not be read: {error}") from error
+
+    raise DatasetSchemaError("Unsupported dataset type. Upload a .csv, .xlsx, or .xls file.")
 
 
 def get_sample_values(series: Any) -> list[Any]:

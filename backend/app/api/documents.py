@@ -2,7 +2,7 @@ from pathlib import Path
 from shutil import copyfileobj
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.rag.ingestion import (
@@ -42,8 +42,17 @@ def build_saved_filename(original_filename: str) -> str:
 
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
-def upload_document(file: UploadFile = File(...)) -> dict[str, str | int]:
+def upload_document(
+    file: UploadFile = File(...),
+    category: str = Form("unknown"),
+) -> dict[str, str | int]:
     extension = get_file_extension(file.filename)
+
+    if category == "research_paper" and extension != ".pdf":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Research papers must be PDF files.",
+        )
 
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(

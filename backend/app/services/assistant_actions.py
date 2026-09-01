@@ -389,6 +389,12 @@ def _assistant_intent(question: str) -> str:
         "what question can i ask", "what research question can i use",
     )):
         return "research_questions"
+    if any(term in bare for term in (
+        "what variables are in my dataset", "what variables are in the dataset",
+        "what columns are in my dataset", "what columns are in the dataset",
+        "list variables", "list columns", "show variables", "show columns",
+    )):
+        return "dataset_variables"
     if any(term in bare for term in ("is this static", "what is dynamic", "what dynamic", "backend connected", "is the backend connected")):
         return "workflow_dynamic"
     if any(term in lowered for term in ("what should i do next", "what do i do next", "what next", "next step", "can i continue", "how do i", "how can i", "how do we")):
@@ -426,6 +432,22 @@ def _research_question_drafts(page_state: dict[str, Any]) -> str:
             "- Do passive-sensing movement features help identify periods with higher binge-drinking event risk?\n"
             "- Is acc_mean_magnitude during an earlier window associated with a later binge_drinking_event after the proposed timing and adjustment assumptions are reviewed?\n\n"
             "These are prepared drafts — editable, not yet confirmed. They describe associations to evaluate; they do not establish causality or create numerical results."
+        )
+
+    schema = page_state.get("active_dataset_schema") or page_state.get("schema_summary") or {}
+    columns = [str(column) for column in schema.get("column_names") or []]
+    numeric = [str(column) for column in schema.get("possible_numeric_columns") or []]
+    categorical = [str(column) for column in schema.get("possible_categorical_columns") or []]
+    if columns:
+        exposure = numeric[0] if numeric else columns[0]
+        outcome = next((column for column in categorical if column != exposure), None) or next((column for column in columns if column != exposure), exposure)
+        return (
+            "Here are draft research-question examples based on the active dataset:\n"
+            f"- Among participants in this dataset, is {exposure} associated with {outcome}?\n"
+            f"- Is {exposure} during an earlier defined window associated with later {outcome}, after timing and candidate adjustment variables are reviewed?\n"
+            f"- How should {exposure}, {outcome}, and any candidate confounders be defined before evaluating an association?\n"
+            f"- Is the proposed {exposure}–{outcome} association feasible to assess after reviewing support, missingness, and the causal graph?\n\n"
+            "These are draft examples based on the active schema. Review variable meanings, timing, and assumptions before confirming any causal design."
         )
 
     objective = str(page_state.get("research_objective") or "").strip()
@@ -466,6 +488,15 @@ def _deterministic_guidance(*, phase: str, page_state: dict[str, Any], user_ques
         return f"I’m the Causal Studio assistant. I can help you navigate {phase_label}, understand the dashboard state, and identify the next workflow check. {workspace}"
     if intent == "research_questions":
         return _research_question_drafts(page_state)
+    if intent == "dataset_variables":
+        schema = page_state.get("active_dataset_schema") or page_state.get("schema_summary") or {}
+        columns = [str(column) for column in schema.get("column_names") or []]
+        filename = schema.get("filename") or page_state.get("dataset_filename") or "the active dataset"
+        if columns:
+            shown = ", ".join(columns[:30])
+            suffix = "" if len(columns) <= 30 else f", and {len(columns) - 30} more"
+            return f"The active dataset is {filename}. Its parsed columns are: {shown}{suffix}. These are schema fields, not confirmed causal roles."
+        return "No parsed dataset schema is active yet. Upload a dataset, then I can summarize its columns and help draft roles."
     if intent == "workflow_dynamic":
         return (
             "The frontend is a React build, but this workflow calls the FastAPI backend for schema parsing, "
@@ -602,7 +633,7 @@ def run_assistant_action(
     normalized_selected_item = selected_item or {}
     normalized_rag_evidence = rag_evidence or []
     direct_intent = _assistant_intent(user_feedback)
-    if direct_intent in {"greeting", "capabilities", "identity", "research_questions", "workflow_dynamic", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
+    if direct_intent in {"greeting", "capabilities", "identity", "research_questions", "dataset_variables", "workflow_dynamic", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
         return _fallback_response(
             phase=phase,
             action=action,

@@ -2600,14 +2600,23 @@ function QuestionView({ state, actions, onGoNext }) {
   } = actions;
   const [showRefine, setShowRefine] = useState(false);
   const baseInfo = useMemo(() => computeFeasibility(datasets, 0, 0), [datasets]);
-  const [varStatuses, setVarStatuses] = useState(() =>
-    Object.fromEntries(ROLE_TABLE_VARIABLES.map((v) => [v.name, "selected"]))
-  );
+  const [varStatuses, setVarStatuses] = useState({});
   const [customVars, setCustomVars] = useState([]);
   const [newVarDraft, setNewVarDraft] = useState({ name: "", source: "", values: "", role: "Unassigned" });
   const [addingVar, setAddingVar] = useState(false);
   const hasParsedDataset = Boolean(firstRealDataset(datasets)?.schema);
   const hasQuestionDraft = Boolean(questionFields?.question || questionCandidates.length);
+  const schemaRoleRows = useMemo(() => {
+    const dataset = firstRealDataset(datasets);
+    const schema = dataset?.schema;
+    return (schema?.column_names || []).map((name) => ({
+      name,
+      source: describeColumnSource(name),
+      type: schema?.pandas_data_types?.[name] || "Unknown",
+      roleGuess: "Unassigned",
+    }));
+  }, [datasets]);
+  const roleTableRows = [...schemaRoleRows, ...customVars];
 
   function handleContinueToFeasibility() {
     if (!questionFields?.question?.trim()) {
@@ -2843,7 +2852,7 @@ function QuestionView({ state, actions, onGoNext }) {
             </tr>
           </thead>
           <tbody>
-            {[...ROLE_TABLE_VARIABLES, ...customVars].map((v) => {
+            {roleTableRows.map((v) => {
               const status = varStatuses[v.name] || "selected";
               const discarded = status === "discarded";
               return (
@@ -4109,8 +4118,8 @@ function backendRoleToFrontendRole(role) {
 function graphSelectedVariables(datasets) {
   const schema = firstRealDataset(datasets)?.schema;
   const columns = schema?.column_names || [];
-  const preferred = DEMO_GRAPH_VARIABLES.filter((name) => columns.includes(name));
-  const names = preferred.length ? preferred : [...new Set([...DEMO_GRAPH_VARIABLES, ...ROLE_TABLE_VARIABLES.map((v) => v.name)])].slice(0, 12);
+  // Never fall back to demo variable names for a parsed uploaded dataset.
+  const names = columns.slice(0, 12);
   return names.map((name) => ({
     variable_name: name,
     missingness_warning: schema?.warnings?.find((warning) => warning.column === name)?.message || "",
@@ -5613,7 +5622,7 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
 
 function EstimationView({ state, actions, onGoNext }) {
   const { questionFields, feasibility, targetedFeasibilityResult, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed, studyMode } = state;
-  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction, recordStudyEvent } = actions;
+  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction, recordStudyEvent, advanceGuidance } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
@@ -7585,12 +7594,46 @@ export default function CausalStudioApp() {
         pushAssistantNote(`Dataset upload failed: ${friendlyError(error)}`);
       }
     }
-    setDatasets((d) => [...d, ...additions]);
+    if (additions.length) {
+      // A new upload becomes the active analysis dataset. Clear artifacts from
+      // the prior dataset (including the approved BDE workspace) instead of
+      // silently carrying stale variables or numerical outputs forward.
+      setDatasets(additions);
+      setStudyMode(null);
+      setBroadExploration(null);
+      setPromotedPatterns([]);
+      setSavedExploreViews([]);
+      setVariableRoles({});
+      setSelectedQuestionId(null);
+      setQuestionFields(null);
+      setQuestionCandidates([]);
+      setCandidateVariables([]);
+      setDerivedFeatureCandidates([]);
+      setPhase4Status(null);
+      setDerivedFeatures(DERIVED_FEATURE_OPTIONS.map((feature) => ({ ...feature, selected: false })));
+      setGraphNodes((additions[0]?.schema?.column_names || []).slice(0, 8).map((name, index) => ({
+        id: name, label: name, role: "Unassigned", isCore: true,
+        x: 140 + (index % 4) * 210, y: 120 + Math.floor(index / 4) * 145,
+      })));
+      setGraphEdges([]);
+      setGraphValidationResult(null);
+      setGraphAlternatives([]);
+      setConfirmedGraph(null);
+      setEditableAdjustmentSet([]);
+      setAnalysisStrategyResult(null);
+      setAnalysisStrategyValidation(null);
+      setAnalysisStrategyDraft(null);
+      setAnalysisStrategyConfirmed(null);
+      setLatestEstimationRun(null);
+      setPrimaryEstimationRun(null);
+      setStudyReportDraft(null);
+      setRagSummary("");
+    }
     setAction("datasetUpload", {
       kind: additions.some((item) => item.status === "blocking") ? "error" : "success",
       message: additions.some((item) => item.status === "blocking")
         ? "One or more datasets require clarification."
-        : "Dataset uploaded and parsed by FastAPI.",
+        : "Dataset uploaded and parsed by FastAPI. It is now the active dataset; prior dataset-specific drafts and results were cleared.",
     });
     if (additions.length) {
       const blocked = additions.find((a) => a.status === "blocking");
@@ -7617,11 +7660,9 @@ export default function CausalStudioApp() {
   }
   function removeDataset(id) { setDatasets((d) => d.filter((x) => x.id !== id)); }
   function toggleDataset(id) { setDatasets((d) => d.map((x) => (x.id === id ? { ...x, expanded: !x.expanded } : x))); }
-  function replaceDataset(id, file) {
+  async function replaceDataset(_id, file) {
     if (!file) return;
-    const seed = seedFromName(file.name, id.length);
-    const built = genDatasetDetail(file, seed);
-    setDatasets((d) => d.map((x) => (x.id === id ? { ...x, name: file.name, size: file.size, ...built } : x)));
+    await addDatasets([file]);
   }
   async function addDictionary(files) {
     const f = files[0];
@@ -7786,7 +7827,7 @@ export default function CausalStudioApp() {
     const dataset = firstRealDataset(datasets);
     const schema = dataset?.schema || {};
     return {
-      research_objective: objective || "I want to study temporal relationships between passive sensing features and next-window alcohol-related labels.",
+      research_objective: objective.trim() || "Generate editable draft questions from the active dataset schema.",
       confirmed_question: questionFields?.question || "",
       dataset_filename: realDatasetFilename(dataset) || dataset?.name || "",
       schema_summary: {
@@ -7934,7 +7975,7 @@ export default function CausalStudioApp() {
     const selectedVariables = [...new Set([
       ...roleNames,
       ...recommendedNames,
-      ...columns.filter((column) => ["pid", "label", "time_stamp", "time_of_day", "day_of_week", "acc_min_magnitude", "acc_max_magnitude", "acc_mean_magnitude", "avg_latitude"].includes(column)),
+      ...columns.filter((column) => roleNames.includes(column) || recommendedNames.includes(column)),
     ])];
     const exposure = resolveDatasetColumn(dataset, [
       questionFields?.exposure,
@@ -7978,8 +8019,8 @@ export default function CausalStudioApp() {
       effect_modifiers: [],
       proxy_variables: Object.entries(variableRoles).filter(([, role]) => role === "Proxy").map(([name]) => name),
       derived_features: selectedDerived,
-      participant_id: participantId || "pid",
-      timestamp: timestamp || "time_stamp",
+      participant_id: participantId || "",
+      timestamp: timestamp || "",
     };
   }
 
@@ -8188,14 +8229,14 @@ export default function CausalStudioApp() {
     const selectedVariables = graphSelectedVariables(datasets);
     const backendNodes = frontendNodesToBackend(graphNodes, variableRoles);
     const backendEdges = frontendEdgesToBackend(graphEdges);
-    const exposure = backendNodes.find((node) => node.role === "exposure")?.id || "acc_mean_magnitude";
-    const outcome = backendNodes.find((node) => node.role === "outcome")?.id || "label";
+    const exposure = backendNodes.find((node) => node.role === "exposure")?.id || resolveDatasetColumn(dataset, [questionFields?.exposure]);
+    const outcome = backendNodes.find((node) => node.role === "outcome")?.id || resolveDatasetColumn(dataset, [questionFields?.outcome]);
     const adjustmentSet = backendNodes
       .filter((node) => ["confounder", "proxy"].includes(node.role) && node.id !== exposure && node.id !== outcome && node.id !== "pid")
       .map((node) => node.id);
     return {
       graph_type: graphType,
-      confirmed_question: questionFields?.question || DEFAULT_CONFIRMED_QUESTION,
+      confirmed_question: questionFields?.question || "",
       dataset_filename: dataset?.savedFilename || dataset?.name || "",
       selected_variables: selectedVariables,
       provisional_roles: variableRoles,
@@ -8586,6 +8627,13 @@ export default function CausalStudioApp() {
       estimation_status: primaryEstimationRun ? "primary selected" : latestEstimationRun ? "computed/not selected" : "not run",
       report_status: primaryEstimationRun ? "ready for review and claim audit" : "draft/incomplete",
       active_warnings: activeWarnings,
+      dataset_filename: dataset?.savedFilename || dataset?.name || "",
+      active_dataset_schema: schema ? {
+        filename: dataset?.savedFilename || dataset?.name || "",
+        column_names: schema.column_names || [],
+        possible_numeric_columns: schema.possible_numeric_columns || [],
+        possible_categorical_columns: schema.possible_categorical_columns || [],
+      } : {},
     };
 
     if (pageKey === "setup") {
@@ -8599,6 +8647,7 @@ export default function CausalStudioApp() {
           status: item.status,
           possible_id_columns: item.participantField ? [item.participantField] : [],
           possible_timestamp_columns: item.timestampFields || [],
+          column_names: item.schema?.column_names || [],
         })),
         documents: {
           dictionary_uploaded: Boolean(dictionary),
@@ -8932,7 +8981,7 @@ export default function CausalStudioApp() {
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
     handleRunFeasibilityCheck,
-    runAssistantAction,
+    runAssistantAction, advanceGuidance,
     setVariableRole, selectSuggestedQuestion, writeOwnQuestion, updateQuestionField, noteQuestionFieldEdit, toggleDerivedFeature,
     setLagHours, setExposureThreshold, toggleSensitivity, noteFeasibilityChange,
     updateNodePos, selectNode, selectEdge, addGraphNode, removeGraphNode, renameNode, setNodeRole, addGraphEdge, removeGraphEdge, setEdgeType, resetGraph, loadGraphVariant,

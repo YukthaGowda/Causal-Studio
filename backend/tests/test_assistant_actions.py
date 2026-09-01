@@ -19,6 +19,12 @@ def test_research_question_phrasings_use_deterministic_drafts():
     prompts = [
         "give me a research question",
         "give me research questions",
+        "research questions?",
+        "research question?",
+        "question ideas?",
+        "causal questions?",
+        "what questions can I ask?",
+        "questions for BDE",
         "suggest a causal question",
         "formulate a question for this dataset",
     ]
@@ -52,3 +58,14 @@ def test_research_question_drafts_use_bde_context_when_workspace_is_loaded():
     assert "acc_mean_magnitude" in message
     assert "binge_drinking_event" in message
     assert "time of day and day of week" in message
+
+
+def test_dynamic_workflow_question_explains_real_backend_actions():
+    response = _response_for("is this static?")
+
+    message = response["assistant_message"]
+    assert response["used_llm"] is False
+    assert "React build" in message
+    assert "FastAPI backend" in message
+    assert "Python estimation" in message
+    assert "does not compute numerical estimates" in message

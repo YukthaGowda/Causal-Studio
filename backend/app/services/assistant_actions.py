@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from dotenv import load_dotenv
@@ -364,8 +365,10 @@ PHASE_LABELS = {
 
 
 def _assistant_intent(question: str) -> str:
-    lowered = " ".join(str(question or "").lower().split())
-    bare = lowered.strip("!?.,;: ")
+    # Normalize short free-text prompts before intent matching so punctuation, articles,
+    # and singular/plural variants do not fall through to generic setup guidance.
+    lowered = re.sub(r"[^a-z0-9_]+", " ", str(question or "").lower()).strip()
+    bare = " ".join(lowered.split())
     if any(term in lowered for term in (
         "diagnos", "treatment", "medication", "clinical advice", "medical advice",
         "should i drink", "should i stop drinking",
@@ -377,17 +380,17 @@ def _assistant_intent(question: str) -> str:
         return "greeting"
     if bare in {"help", "what can you do", "what do you do", "how can you help"}:
         return "capabilities"
-    if bare in {"what is your name", "who are you", "what's your name"}:
+    if bare in {"what is your name", "who are you", "what s your name"}:
         return "identity"
-    if any(term in lowered for term in (
-        "give me a research question", "give me research question", "give me research questions",
-        "suggest a research question", "suggest research question", "suggest research questions",
-        "generate a research question", "generate research questions", "generate causal question",
-        "generate a causal question", "help me make a research question", "help me formulate a question",
-        "what research question can i use", "what question can i ask", "causal question",
-        "formulate a question", "research question ideas",
+    if any(term in bare for term in (
+        "research question", "causal question", "question ideas", "possible questions",
+        "suggest question", "generate question", "formulate question", "formulate a question",
+        "questions for this dataset", "questions for bde", "what questions can i ask",
+        "what question can i ask", "what research question can i use",
     )):
         return "research_questions"
+    if any(term in bare for term in ("is this static", "what is dynamic", "what dynamic", "backend connected", "is the backend connected")):
+        return "workflow_dynamic"
     if any(term in lowered for term in ("what should i do next", "what do i do next", "what next", "next step", "can i continue", "how do i", "how can i", "how do we")):
         return "next_step"
     if any(term in lowered for term in ("project status", "setup status", "readiness status", "show readiness", "what is the status")):
@@ -463,6 +466,12 @@ def _deterministic_guidance(*, phase: str, page_state: dict[str, Any], user_ques
         return f"I’m the Causal Studio assistant. I can help you navigate {phase_label}, understand the dashboard state, and identify the next workflow check. {workspace}"
     if intent == "research_questions":
         return _research_question_drafts(page_state)
+    if intent == "workflow_dynamic":
+        return (
+            "The frontend is a React build, but this workflow calls the FastAPI backend for schema parsing, "
+            "broad exploration, feasibility checks, graph validation, analysis-strategy validation, Python estimation, "
+            "review/export packages, and assistant responses. LLM guidance explains the supplied state only; it does not compute numerical estimates."
+        )
     if intent == "status":
         return _summarize_page_state(phase, page_state)
     if intent == "next_step":
@@ -593,7 +602,7 @@ def run_assistant_action(
     normalized_selected_item = selected_item or {}
     normalized_rag_evidence = rag_evidence or []
     direct_intent = _assistant_intent(user_feedback)
-    if direct_intent in {"greeting", "capabilities", "identity", "research_questions", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
+    if direct_intent in {"greeting", "capabilities", "identity", "research_questions", "workflow_dynamic", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
         return _fallback_response(
             phase=phase,
             action=action,

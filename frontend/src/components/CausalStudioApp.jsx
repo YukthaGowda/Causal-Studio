@@ -953,6 +953,54 @@ function actionNoteClass(status) {
   return "";
 }
 
+function WorkflowActivityIndicator({ page, state }) {
+  const {
+    backendStatus, actionStatus, studyMode, datasets, broadExploration, phase4Status,
+    targetedFeasibilityResult, graphValidationResult, graphActionStatus,
+    analysisStrategyValidation, analysisStrategyStatus, latestEstimationRun,
+    primaryEstimationRun,
+  } = state;
+  const pageActions = {
+    setup: [actionStatus.studyMode, actionStatus.datasetUpload, actionStatus.dictionaryUpload],
+    "data-foundation": [actionStatus.datasetUpload, actionStatus.dictionaryUpload, actionStatus.documentIngestion],
+    explore: [actionStatus.broadExploration],
+    question: [phase4Status],
+    feasibility: [actionStatus.targetedFeasibility],
+    graph: [graphActionStatus],
+    strategy: [analysisStrategyStatus],
+  };
+  const action = (pageActions[page] || []).find((item) => item?.kind === "loading")
+    || (pageActions[page] || []).find(Boolean);
+  const hasGraphWarnings = (graphValidationResult?.warnings || []).length > 0;
+  const hasStrategyWarnings = (analysisStrategyValidation?.warnings || []).length > 0;
+  const phaseLabel = {
+    setup: studyMode ? "Loaded from approved BDE workspace" : "Requires user confirmation",
+    "data-foundation": datasets?.length ? "Backend-computed schema available" : "Requires user confirmation",
+    explore: broadExploration ? "Backend-computed exploration summary" : "Run backend exploration to compute a summary",
+    question: "Generated draft — editable",
+    feasibility: targetedFeasibilityResult ? "Feasibility computed from active dataset" : "Requires user confirmation",
+    graph: graphValidationResult ? (hasGraphWarnings ? "Validated with warnings" : "Validated by backend") : "Requires user confirmation",
+    strategy: analysisStrategyValidation ? (hasStrategyWarnings ? "Validated with warnings" : "Validated by backend") : "Requires user confirmation",
+    estimation: primaryEstimationRun || latestEstimationRun ? "Computed by backend/Python" : "Requires user confirmation",
+    review: primaryEstimationRun ? "Backend-computed review package requires user confirmation" : "Requires user confirmation",
+  }[page] || "Backend-connected workflow";
+  const isLoading = action?.kind === "loading";
+  const statusClass = isLoading ? "" : actionNoteClass(action);
+
+  return (
+    <div className={`action-note ${statusClass}`} style={{ margin: "10px 16px 0" }} role="status" aria-live="polite">
+      <strong>{isLoading ? "Backend action in progress" : backendStatus.connected ? "Backend-connected" : "Backend unavailable"}</strong>
+      {isLoading && <RefreshCw size={13} className="spin" style={{ marginLeft: 6, verticalAlign: "-2px" }} />}
+      <span> · {isLoading ? action.message : phaseLabel}</span>
+      {!isLoading && action?.message && <span> · {action.message}</span>}
+      <div className="helper" style={{ marginTop: 4 }}>
+        {studyMode ? "Approved study dataset is loaded. " : ""}
+        {page === "estimation" ? "Numerical outputs are computed by backend/Python." : "LLM guidance only — not numerical estimation."}
+      </div>
+    </div>
+  );
+}
+
 function documentValidationMessage(validation, fallback = "Upload successful.") {
   const labels = {
     uploaded_and_validated: "Uploaded and validated",
@@ -5696,6 +5744,7 @@ function EstimationView({ state, actions, onGoNext }) {
     }
 
     setIsRunning(true);
+    setEstimationStatus({ kind: "loading", message: "Running backend estimation…" });
     setRunProgress(0);
     setInterpretVersions([]);
     setInterpretLockedIdx(null);
@@ -5914,7 +5963,7 @@ function EstimationView({ state, actions, onGoNext }) {
             <CheckCircle2 size={13} /> Validate Estimation Config
           </button>
           <button className="btn btn-primary" onClick={() => runEstimation("Primary")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <Play size={13} /> {isRunning ? "Running\u2026" : runs.length === 0 ? "Run Estimation" : "Re-run with Updated Settings"}
+            <Play size={13} /> {isRunning ? "Running backend estimation…" : runs.length === 0 ? "Run Estimation" : "Re-run with Updated Settings"}
           </button>
           {runs.length > 0 && !isRunning && (
             <>
@@ -7031,7 +7080,7 @@ function ReviewView({ state, actions }) {
           <CardInfo text="Generate a structured draft package. JSON and Markdown are saved directly; PDF opens a browser print preview for this proof of concept." />
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Generating..." : "Generate Report"}</button>
+          <button className="btn btn-primary" onClick={handleGenerateReport} disabled={reportLoading}><FileCheck2 size={13} /> {reportLoading ? "Assembling report…" : "Generate Report"}</button>
           <button className="btn" onClick={handlePreviewReport}><FileText size={13} /> {isEditingReport ? "Preview Report" : "Edit Report"}</button>
           <button className="btn" onClick={() => handleExportReviewPackage("json")}><Save size={13} /> Export JSON</button>
           <button className="btn" onClick={() => handleExportReviewPackage("markdown")}><FileText size={13} /> Export Markdown</button>
@@ -7291,7 +7340,7 @@ export default function CausalStudioApp() {
   }
 
   async function startFixedBdeStudyMode() {
-    setAction("studyMode", { kind: "loading", message: "Loading approved BDE study workspace..." });
+    setAction("studyMode", { kind: "loading", message: "Loading approved workspace…" });
     try {
       const result = await startStudyMode();
       const dataset = schemaToDataset({ name: result.dataset.original_filename, size: result.dataset.file_size_bytes }, result.dataset, result.dataset.schema, { rows: 0, cols: 0 });
@@ -7477,7 +7526,7 @@ export default function CausalStudioApp() {
   async function addDatasets(files) {
     if (!files?.length) return;
     pushAssistantNote("Checking this now - confirming it is a valid dataset file, scanning columns and row structure...");
-    setAction("datasetUpload", { kind: "loading", message: "Uploading dataset..." });
+    setAction("datasetUpload", { kind: "loading", message: "Uploading dataset and parsing schema…" });
 
     const additions = [];
     for (const [i, f] of files.entries()) {
@@ -7937,7 +7986,7 @@ export default function CausalStudioApp() {
       pushAssistantNote("I could not run Phase 5 yet because the exposure/outcome could not be matched to dataset columns. Go back to Phase 4 and choose dataset-backed variables.");
       return;
     }
-    setAction("targetedFeasibility", { kind: "loading", message: "Running Python targeted feasibility diagnostics..." });
+    setAction("targetedFeasibility", { kind: "loading", message: "Running feasibility checks…" });
     try {
       const response = await runFeasibilityCheck(payload);
       setTargetedFeasibilityResult(response);
@@ -8198,7 +8247,7 @@ export default function CausalStudioApp() {
       pushAssistantNote("Phase 7 needs the FastAPI backend. This page can still display draft guidance, but backend identification and validation are unavailable.");
       return;
     }
-    setAnalysisStrategyStatus({ kind: "loading", message: mode === "alternative" ? "Generating alternative strategy..." : "Running identification and strategy checks..." });
+    setAnalysisStrategyStatus({ kind: "loading", message: mode === "alternative" ? "Generating alternative strategy…" : "Generating strategy and validating identification…" });
     try {
       const response = await generateAnalysisStrategy(analysisStrategyPayload({ user_feedback: userFeedback }));
       setAnalysisStrategyResult(response);
@@ -8323,14 +8372,14 @@ export default function CausalStudioApp() {
       setGraphActionStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
       return;
     }
-    setGraphActionStatus({ kind: "loading", message: "Validating graph edits..." });
+    setGraphActionStatus({ kind: "loading", message: "Validating graph…" });
     try {
       const payload = graphBackendPayload();
       const response = await validateCausalGraph(payload);
       setGraphValidationResult(response);
       recordStudyEvent("graph_saved_or_validated", { status: response.status || "unknown" });
       const problemCount = (response.errors?.length || 0) + (response.warnings?.length || 0);
-      setGraphActionStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Validation ${response.status}; ${problemCount} issue${problemCount === 1 ? "" : "s"}.` });
+      setGraphActionStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Graph validation completed: ${response.status}; ${problemCount} issue${problemCount === 1 ? "" : "s"}.` });
       pushAssistantNote(response.safe_to_continue
         ? "Graph validation completed. Review warnings carefully; warning-level graphs may continue only after user review."
         : "Graph validation found blocking errors. Fix cycles, self-loops, unknown nodes, or invalid adjustment choices before continuing.");
@@ -8909,6 +8958,7 @@ export default function CausalStudioApp() {
       </div>
 
       <div className={`main-col text-justify ${page === "graph" ? "main-col-canvas" : ""}`}>
+        <WorkflowActivityIndicator page={page} state={state} />
         <PanelErrorBoundary key={page}>
         {page === "setup" && <ProjectSetupView state={state} actions={actions} />}
         {page === "data-foundation" && <DataFoundationView state={state} actions={actions} />}
@@ -8965,7 +9015,7 @@ export default function CausalStudioApp() {
             </button>
           </div>
         )}
-        <div className="assistant-caveat">This assistant explains setup requirements. It does not make clinical decisions, diagnose patients, or judge whether your data is sufficient for causal inference.</div>
+        <div className="assistant-caveat">LLM guidance only — not numerical estimation. The assistant uses the current dashboard state and FastAPI responses to explain the workflow; it does not make clinical decisions, diagnose patients, or judge whether data are sufficient for causal inference.</div>
         <div className="assistant-inputbar">
           <input placeholder="Ask a question\u2026" value={assistantInput} onChange={(e) => setAssistantInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAssistantInput()} />
           <button className="assistant-send" aria-label="Send" onClick={submitAssistantInput}><Send size={15} /></button>

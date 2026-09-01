@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.services.dataset_schema import DatasetSchemaError, read_csv_dataset
+
 
 class EstimationError(RuntimeError):
     pass
@@ -17,6 +19,7 @@ DATASET_DIR = Path(__file__).resolve().parents[2] / "uploads" / "datasets"
 RUNTIME_DIR = Path(__file__).resolve().parents[2] / "runtime"
 RUNS_FILE = RUNTIME_DIR / "estimation_runs.json"
 PRIMARY_RUN_FILE = RUNTIME_DIR / "primary_estimation_run.json"
+DATASET_EXTENSIONS = {".csv", ".xlsx", ".xls"}
 
 
 def resolve_dataset_path(filename: str) -> Path:
@@ -26,9 +29,18 @@ def resolve_dataset_path(filename: str) -> Path:
     dataset_path = DATASET_DIR / filename
     if not dataset_path.exists() or not dataset_path.is_file():
         raise EstimationError("Dataset file was not found.")
-    if dataset_path.suffix.lower() != ".csv":
-        raise EstimationError("Only CSV datasets can be estimated in this proof of concept.")
+    if dataset_path.suffix.lower() not in DATASET_EXTENSIONS:
+        raise EstimationError(
+            "Unsupported dataset type. Upload a .csv, .xlsx, or .xls file."
+        )
     return dataset_path
+
+
+def load_dataset_for_estimation(dataset_path: Path) -> Any:
+    try:
+        return read_csv_dataset(dataset_path)
+    except DatasetSchemaError as error:
+        raise EstimationError(str(error)) from error
 
 
 def load_runs() -> list[dict[str, Any]]:
@@ -201,7 +213,7 @@ def validate_estimation_config(request: dict[str, Any]) -> dict[str, Any]:
     import pandas as pd
 
     dataset_path = resolve_dataset_path(request.get("dataset_filename", ""))
-    dataframe = pd.read_csv(dataset_path)
+    dataframe = load_dataset_for_estimation(dataset_path)
     columns = [str(column) for column in dataframe.columns]
     exposure = request.get("exposure") or ""
     outcome = request.get("outcome") or ""
@@ -460,7 +472,7 @@ def run_estimation(request: dict[str, Any]) -> dict[str, Any]:
     request = normalize_estimation_request(request)
     random_seed = int(request.get("random_seed") or 42)
     dataset_path = resolve_dataset_path(request.get("dataset_filename", ""))
-    dataframe = pd.read_csv(dataset_path)
+    dataframe = load_dataset_for_estimation(dataset_path)
     readiness = check_readiness(request, [str(column) for column in dataframe.columns])
     run_id = f"est_{uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()

@@ -5711,7 +5711,7 @@ function EstimationView({ state, actions, onGoNext }) {
       return;
     }
     if (!payload.dataset_filename) {
-      setEstimationStatus({ kind: "error", message: "Upload and parse a CSV dataset before validation." });
+      setEstimationStatus({ kind: "error", message: "Upload and parse a CSV or Excel dataset before validation." });
       return;
     }
     setEstimationStatus({ kind: "loading", message: "Validating estimation configuration..." });
@@ -5746,7 +5746,7 @@ function EstimationView({ state, actions, onGoNext }) {
       return;
     }
     if (!dataset?.savedFilename) {
-      pushAssistantNote("Upload and parse a CSV dataset before running Phase 8 estimation.");
+      pushAssistantNote("Upload and parse a CSV or Excel dataset before running Phase 8 estimation.");
       showToast("Upload a dataset first.");
       return;
     }

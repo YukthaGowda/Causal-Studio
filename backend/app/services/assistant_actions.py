@@ -380,9 +380,12 @@ def _assistant_intent(question: str) -> str:
     if bare in {"what is your name", "who are you", "what's your name"}:
         return "identity"
     if any(term in lowered for term in (
-        "give me research question", "give me research questions", "suggest research question",
-        "suggest research questions", "help me formulate a question", "what question can i ask",
-        "generate causal question", "generate a causal question", "research question ideas",
+        "give me a research question", "give me research question", "give me research questions",
+        "suggest a research question", "suggest research question", "suggest research questions",
+        "generate a research question", "generate research questions", "generate causal question",
+        "generate a causal question", "help me make a research question", "help me formulate a question",
+        "what research question can i use", "what question can i ask", "causal question",
+        "formulate a question", "research question ideas",
     )):
         return "research_questions"
     if any(term in lowered for term in ("what should i do next", "what do i do next", "what next", "next step", "can i continue", "how do i", "how can i", "how do we")):

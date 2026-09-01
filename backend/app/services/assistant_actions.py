@@ -379,6 +379,12 @@ def _assistant_intent(question: str) -> str:
         return "capabilities"
     if bare in {"what is your name", "who are you", "what's your name"}:
         return "identity"
+    if any(term in lowered for term in (
+        "give me research question", "give me research questions", "suggest research question",
+        "suggest research questions", "help me formulate a question", "what question can i ask",
+        "generate causal question", "generate a causal question", "research question ideas",
+    )):
+        return "research_questions"
     if any(term in lowered for term in ("what should i do next", "what do i do next", "what next", "next step", "can i continue", "how do i", "how can i", "how do we")):
         return "next_step"
     if any(term in lowered for term in ("project status", "setup status", "readiness status", "show readiness", "what is the status")):
@@ -401,6 +407,30 @@ def _workspace_message(page_state: dict[str, Any]) -> str:
     return (
         "You can load the approved BDE study workspace to begin the prepared task, "
         "or manually upload a dataset and data dictionary."
+    )
+
+
+def _research_question_drafts(page_state: dict[str, Any]) -> str:
+    """Return safe, editable research-question drafts without asserting data results."""
+    if page_state.get("study_mode_active") or page_state.get("study_mode"):
+        return (
+            "Here are draft BDE research questions:\n"
+            "- Are smartphone-derived movement patterns during a prior analysis window associated with later binge-drinking event risk?\n"
+            "- Are accelerometer-derived movement summaries associated with binge-drinking event occurrence after adjusting for time of day and day of week?\n"
+            "- Do passive-sensing movement features help identify periods with higher binge-drinking event risk?\n"
+            "- Is acc_mean_magnitude during an earlier window associated with a later binge_drinking_event after the proposed timing and adjustment assumptions are reviewed?\n\n"
+            "These are prepared drafts — editable, not yet confirmed. They describe associations to evaluate; they do not establish causality or create numerical results."
+        )
+
+    objective = str(page_state.get("research_objective") or "").strip()
+    objective_context = f" Current objective: {objective}" if objective else ""
+    return (
+        "Here are draft research-question examples:\n"
+        "- Among participants in this study, is a candidate behavioral or sensor exposure during an earlier window associated with a later outcome?\n"
+        "- Is the selected exposure associated with the selected outcome after timing, missingness, and candidate adjustment variables are reviewed?\n"
+        "- How should the exposure, outcome, comparator, and time window be defined before evaluating an association in this dataset?\n"
+        "- Is the proposed association feasible to assess after reviewing data support and the causal graph?\n\n"
+        f"These are draft examples. Load the approved BDE workspace or upload your dataset/data dictionary to refine them.{objective_context}"
     )
 
 
@@ -428,6 +458,8 @@ def _deterministic_guidance(*, phase: str, page_state: dict[str, Any], user_ques
         )
     if intent == "identity":
         return f"I’m the Causal Studio assistant. I can help you navigate {phase_label}, understand the dashboard state, and identify the next workflow check. {workspace}"
+    if intent == "research_questions":
+        return _research_question_drafts(page_state)
     if intent == "status":
         return _summarize_page_state(phase, page_state)
     if intent == "next_step":
@@ -533,7 +565,8 @@ def _build_system_prompt() -> str:
         "- Always distinguish Python/R computation from GenAI explanation.\n"
         "- Causal Design Agent is not a diagnostic tool or treatment-decision system.\n"
         "- For clinical, diagnosis, treatment, or unsupported-causality requests, state that you can help with the workflow but cannot provide clinical advice or unsupported causal conclusions.\n\n"
-        "For greetings, help requests, and next-step questions, answer in one or two conversational sentences and do not dump a readiness checklist unless the user asks for status. "
+        "For greetings, help requests, next-step questions, and research-question requests, answer conversationally and do not dump a readiness checklist unless the user asks for status. "
+        "For a research-question request, provide editable draft questions and clearly distinguish them from confirmed causal designs. "
         "Return concise, state-specific guidance. If a value or evidence source is missing, say so clearly."
     )
 
@@ -557,7 +590,7 @@ def run_assistant_action(
     normalized_selected_item = selected_item or {}
     normalized_rag_evidence = rag_evidence or []
     direct_intent = _assistant_intent(user_feedback)
-    if direct_intent in {"greeting", "capabilities", "identity", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
+    if direct_intent in {"greeting", "capabilities", "identity", "research_questions", "next_step", "issues", "warning", "variables", "status", "clinical", "causal"}:
         return _fallback_response(
             phase=phase,
             action=action,

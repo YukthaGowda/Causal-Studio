@@ -1,4 +1,6 @@
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const isProductionBuild = Boolean(import.meta.env.PROD);
+const PRODUCTION_BACKEND_URL = "https://causal-studio-production-dcef.up.railway.app";
 const LOCAL_API_CANDIDATES = [
   "http://127.0.0.1:8000",
   "http://localhost:8000",
@@ -8,10 +10,19 @@ const LOCAL_API_CANDIDATES = [
   "http://localhost:8005",
 ];
 
-export let API_BASE_URL = configuredApiBaseUrl || LOCAL_API_CANDIDATES[0];
+// A configured URL is authoritative. Local candidates are for local development
+// only and must never be tried by a deployed browser after a production failure.
+export let API_BASE_URL = configuredApiBaseUrl || (isProductionBuild ? "" : LOCAL_API_CANDIDATES[0]);
 
 function apiBaseCandidates() {
-  return [...new Set([configuredApiBaseUrl, API_BASE_URL, ...LOCAL_API_CANDIDATES].filter(Boolean))];
+  if (configuredApiBaseUrl) return [configuredApiBaseUrl];
+  return isProductionBuild ? [] : LOCAL_API_CANDIDATES;
+}
+
+function productionBackendConnectionError(errors = []) {
+  const backendUrl = configuredApiBaseUrl || PRODUCTION_BACKEND_URL;
+  const detail = errors.at(-1) ? ` ${errors.at(-1)}` : "";
+  return `Could not reach the production FastAPI backend at ${backendUrl}. Check Railway backend deployment, CORS, and VITE_API_BASE_URL.${detail}`;
 }
 
 async function parseJsonResponse(response, fallbackMessage) {
@@ -37,6 +48,10 @@ async function apiFetch(path, options) {
   const candidates = apiBaseCandidates();
   const errors = [];
 
+  if (!candidates.length && isProductionBuild) {
+    throw new Error(productionBackendConnectionError());
+  }
+
   for (const baseUrl of candidates) {
     try {
       const response = await fetch(`${baseUrl}${path}`, options);
@@ -45,6 +60,10 @@ async function apiFetch(path, options) {
     } catch (error) {
       errors.push(`${baseUrl}: ${error?.message || "network error"}`);
     }
+  }
+
+  if (isProductionBuild) {
+    throw new Error(productionBackendConnectionError(errors));
   }
 
   throw new Error(

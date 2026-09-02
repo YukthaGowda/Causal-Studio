@@ -6423,13 +6423,32 @@ function reportValueList(value) {
   return value ? [String(value).trim()] : [];
 }
 
+function sameReportVariableSet(left, right) {
+  const normalize = (value) => [...new Set(reportValueList(value).map((item) => item.toLowerCase()))].sort();
+  return normalize(left).join("|") === normalize(right).join("|");
+}
+
 function activeReportConfiguration(state, selectedRun = state.primaryEstimationRun) {
   const question = state.questionFields || {};
   const config = selectedRun?.config || {};
   const runExposure = selectedRun?.results?.exposure || config.exposure || "";
   const runOutcome = selectedRun?.results?.outcome || config.outcome || "";
   const estimationCovariates = reportValueList(config.adjustmentSet || config.adjustment_set);
-  const reportAdjustmentSet = reportValueList(state.editableAdjustmentSet || computeAdjustment(state.variableRoles || {}).confounders);
+  const confirmedAdjustmentSet = reportValueList(state.analysisStrategyConfirmed?.adjustmentSet);
+  const editableAdjustmentSet = reportValueList(state.editableAdjustmentSet);
+  const roleAdjustmentSet = reportValueList(computeAdjustment(state.variableRoles || {}).confounders);
+  const reportAdjustmentSet = confirmedAdjustmentSet.length
+    ? confirmedAdjustmentSet
+    : editableAdjustmentSet.length
+      ? editableAdjustmentSet
+      : roleAdjustmentSet;
+  const reportAdjustmentSource = confirmedAdjustmentSet.length
+    ? "confirmed Phase 7 adjustment set"
+    : editableAdjustmentSet.length
+      ? "editable report adjustment draft"
+      : roleAdjustmentSet.length
+        ? "selected variable roles"
+        : "missing";
   const adjustmentSet = estimationCovariates.length ? estimationCovariates : reportAdjustmentSet;
   const graphNodes = (state.graphNodes || []).map((node) => node?.id || node?.label).filter(Boolean);
   const names = [...new Set([
@@ -6450,7 +6469,11 @@ function activeReportConfiguration(state, selectedRun = state.primaryEstimationR
     if (question.outcome && runOutcome && question.outcome !== runOutcome) issues.push(`Research-question outcome (${question.outcome}) does not match the selected estimation outcome (${runOutcome}).`);
     const runAdjustment = estimationCovariates;
     const selectedAdjustment = reportAdjustmentSet;
-    if (runAdjustment.length && selectedAdjustment.join("|") !== runAdjustment.join("|")) issues.push("The selected adjustment set does not match the adjustment set recorded for the selected estimation run.");
+    if (runAdjustment.length && !selectedAdjustment.length) {
+      issues.push(`Report adjustment set is missing. The selected estimation run used ${runAdjustment.join(", ")}. Return to Analysis Strategy to confirm this adjustment set, or apply the selected estimation covariates as the report draft.`);
+    } else if (runAdjustment.length && !sameReportVariableSet(selectedAdjustment, runAdjustment)) {
+      issues.push(`Report adjustment set (${selectedAdjustment.join(", ")}) does not match the selected estimation covariates (${runAdjustment.join(", ")}).`);
+    }
     const expectedGraphNodes = [runExposure, runOutcome, ...runAdjustment].filter(Boolean);
     if (graphNodes.length && expectedGraphNodes.some((name) => !graphNodes.includes(name))) issues.push("The confirmed graph does not contain all variables used by the selected estimation run.");
     if (state.studyMode?.active && runExposure && runExposure !== "acc_mean_magnitude") issues.push("The fixed BDE task requires acc_mean_magnitude as the selected exposure.");
@@ -6459,7 +6482,9 @@ function activeReportConfiguration(state, selectedRun = state.primaryEstimationR
   return {
     adjustmentSet,
     reportAdjustmentSet,
+    reportAdjustmentSource,
     estimationCovariates,
+    canApplyEstimationCovariates: Boolean(estimationCovariates.length && !reportAdjustmentSet.length),
     roleTable,
     issues: [...new Set(issues)],
     runExposure,
@@ -6689,7 +6714,7 @@ function reportToMarkdown(report, state) {
 
 function ReviewView({ state, actions }) {
   const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary, studyMode, studyReportDraft } = state;
-  const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables, goToPage } = actions;
+  const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables, applySelectedEstimationCovariatesToReportDraft, goToPage } = actions;
   const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
   const checkedAssumptions = SENSITIVITY_ITEMS.filter((i) => sensitivityChecks[i.id]);
@@ -6724,9 +6749,10 @@ function ReviewView({ state, actions }) {
   const exportReady = reviewExportBlockers.length === 0;
   const approvedBdeWorkspaceActive = Boolean(studyMode?.active || studyMode?.status === "ready");
   const hasAlignmentBlocker = Boolean(reportConfiguration.issues.length || !selectedRun);
-  const blockedPreviewExportMessage = approvedBdeWorkspaceActive
-    ? "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. You can reset to the approved BDE workspace variables, then rerun feasibility, graph validation, strategy confirmation, and estimation."
-    : "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. Return to Question & Variables or Analysis Strategy to align the design with the selected estimation run.";
+  const firstAlignmentIssue = reportConfiguration.issues[0];
+  const blockedPreviewExportMessage = firstAlignmentIssue
+    ? `Export is blocked because ${firstAlignmentIssue.charAt(0).toLowerCase()}${firstAlignmentIssue.slice(1)}`
+    : "Export is blocked because no selected backend estimation run is available. Return to Analysis Strategy and Phase 8 before exporting.";
 
   useEffect(() => {
     if (selectedRun && reportDraft?.status === "frozen_study_draft") {
@@ -6759,6 +6785,21 @@ function ReviewView({ state, actions }) {
     setReportHistory([]);
     setClaimAudit(null);
     setIsEditingReport(false);
+  }
+
+  function handleApplyEstimationCovariatesToReportDraft() {
+    const covariates = reportConfiguration.estimationCovariates;
+    if (!covariates.length) {
+      showToast("The selected estimation run does not include covariates to apply to the report draft.");
+      return;
+    }
+    if (!window.confirm(`Apply ${covariates.join(", ")} as the report adjustment draft? Review it before generating or exporting the report.`)) return;
+    if (!applySelectedEstimationCovariatesToReportDraft?.(covariates)) return;
+    setReportDraft(null);
+    setReportPreview("");
+    setClaimAudit(null);
+    showToast("Adjustment set draft updated from the selected estimation run. Please review before export.");
+    pushAssistantNote("The report adjustment draft now reflects the selected backend estimation covariates. Review the design and generate the report before export.");
   }
 
   function handlePreviewReport() {
@@ -7219,11 +7260,12 @@ function ReviewView({ state, actions }) {
                   <div className="mini-stat"><span className="mini-stat-label">Estimation exposure</span><span className="mini-stat-value mono">{reportConfiguration.runExposure || "No selected run"}</span></div>
                   <div className="mini-stat"><span className="mini-stat-label">Question outcome</span><span className="mini-stat-value mono">{questionFields?.outcome || "Not selected"}</span></div>
                   <div className="mini-stat"><span className="mini-stat-label">Estimation outcome</span><span className="mini-stat-value mono">{reportConfiguration.runOutcome || "No selected run"}</span></div>
-                  <div className="mini-stat"><span className="mini-stat-label">Report adjustment set</span><span className="mini-stat-value mono">{reportConfiguration.reportAdjustmentSet.join(", ") || "None"}</span></div>
+                  <div className="mini-stat"><span className="mini-stat-label">Report adjustment set</span><span className="mini-stat-value mono">{reportConfiguration.reportAdjustmentSet.join(", ") || "None"}</span><span className="helper">{reportConfiguration.reportAdjustmentSource}</span></div>
                   <div className="mini-stat"><span className="mini-stat-label">Estimation covariates</span><span className="mini-stat-value mono">{reportConfiguration.estimationCovariates.join(", ") || "No selected run"}</span></div>
                   <div className="mini-stat"><span className="mini-stat-label">Selected estimation run</span><span className="mini-stat-value mono">{selectedRun?.id || "None"}</span></div>
                 </div>
                 <div className="button-row" style={{ marginTop: 10 }}>
+                  {reportConfiguration.canApplyEstimationCovariates && <button className="btn btn-secondary btn-sm" onClick={handleApplyEstimationCovariatesToReportDraft}>Apply selected estimation covariates to report draft</button>}
                   {approvedBdeWorkspaceActive && <button className="btn btn-secondary btn-sm" onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>}
                   <button className="btn btn-secondary btn-sm" onClick={() => returnToRecoveryPhase("question")}>Return to Question & Variables</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => returnToRecoveryPhase("strategy")}>Return to Analysis Strategy</button>
@@ -7648,6 +7690,24 @@ export default function CausalStudioApp() {
     showToast(message);
     pushAssistantNote(message, "feasibility");
     goToPage("feasibility");
+    return true;
+  }
+
+  function applySelectedEstimationCovariatesToReportDraft(covariates) {
+    const normalizedCovariates = reportValueList(covariates);
+    if (!normalizedCovariates.length) return false;
+    setEditableAdjustmentSet(normalizedCovariates);
+    setAnalysisStrategyDraft((draft) => ({
+      ...(draft || {}),
+      strategy: {
+        ...(draft?.strategy || {}),
+        adjustment_set: normalizedCovariates,
+      },
+    }));
+    recordStudyEvent("report_adjustment_draft_updated", {
+      adjustment_set: normalizedCovariates,
+      source: "selected_estimation_run",
+    });
     return true;
   }
 
@@ -9087,7 +9147,7 @@ export default function CausalStudioApp() {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
-    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, resetApprovedBdeWorkspaceVariables, recordStudyEvent, exportStudySessionLog,
+    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, resetApprovedBdeWorkspaceVariables, applySelectedEstimationCovariatesToReportDraft, recordStudyEvent, exportStudySessionLog,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
     handleRunFeasibilityCheck,

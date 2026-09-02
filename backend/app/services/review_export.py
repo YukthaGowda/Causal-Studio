@@ -174,6 +174,10 @@ def _normalized_names(value: Any) -> list[str]:
     return _unique_strings([item.strip() for item in names if item.strip() and item.strip() != "(none)"])
 
 
+def _same_normalized_name_set(left: Any, right: Any) -> bool:
+    return set(_normalized_names(left)) == set(_normalized_names(right))
+
+
 def _graph_node_names(graph: dict[str, Any]) -> list[str]:
     nodes = graph.get("nodes") if isinstance(graph, dict) else []
     names = []
@@ -208,7 +212,7 @@ def _artifact_consistency_issues(
 
     strategy_adjustments = _normalized_names(adjustment_set)
     run_adjustments = _normalized_names(estimation.get("adjustment_set"))
-    if strategy_adjustments != run_adjustments:
+    if not _same_normalized_name_set(strategy_adjustments, run_adjustments):
         issues.append("The selected adjustment set does not match the adjustment set recorded for the selected estimation run.")
 
     graph_nodes = set(_graph_node_names(graph))

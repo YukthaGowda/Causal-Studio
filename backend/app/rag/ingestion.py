@@ -151,6 +151,7 @@ def get_chroma_collection() -> Any:
         raise IngestionDependencyError("Missing dependency: chromadb") from error
 
     CHROMA_DB_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("Opening ChromaDB vector store at %s.", CHROMA_DB_DIR)
     client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
     # Embeddings are supplied explicitly below, so prevent Chroma from selecting
     # its own embedding function during normal collection access.
@@ -174,6 +175,7 @@ def get_embedding_model() -> Any:
 
         logger.info("Initializing RAG embedding model for an ingestion or search request.")
         _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        logger.info("RAG embedding model initialized successfully: %s.", EMBEDDING_MODEL_NAME)
         return _embedding_model
     except ImportError as error:
         _embedding_model_error = IngestionDependencyError(
@@ -223,14 +225,22 @@ def build_chunk_metadata(
 
 
 def ingest_uploaded_documents() -> dict[str, str | int | list[str]]:
-    collection = get_chroma_collection()
     document_paths = get_uploaded_document_paths()
+    logger.info(
+        "Starting document ingestion. Found %d document(s): %s",
+        len(document_paths),
+        [str(path) for path in document_paths],
+    )
+    logger.info("Document extensions: %s", [path.suffix.lower() for path in document_paths])
+    logger.info("Document ingestion will use ChromaDB path: %s", CHROMA_DB_DIR)
+    collection = get_chroma_collection()
     ingestion_timestamp = datetime.now(UTC).isoformat()
 
     chunks_created = 0
     processed_filenames: list[str] = []
 
     for file_path in document_paths:
+        logger.info("Reading document for ingestion: %s (%s)", file_path, file_path.suffix.lower())
         text_units = read_document_text(file_path)
         chunks = chunk_text_units(text_units)
         processed_filenames.append(file_path.name)
@@ -260,6 +270,12 @@ def ingest_uploaded_documents() -> dict[str, str | int | list[str]]:
         )
         chunks_created += len(chunks)
 
+    logger.info(
+        "Document ingestion completed. Files processed: %d; chunks created: %d; ChromaDB path: %s",
+        len(processed_filenames),
+        chunks_created,
+        CHROMA_DB_DIR,
+    )
     return {
         "status": "completed",
         "files_processed": len(processed_filenames),

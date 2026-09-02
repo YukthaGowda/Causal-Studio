@@ -38,7 +38,14 @@ async function parseJsonResponse(response, fallbackMessage) {
     if (Array.isArray(detail)) {
       throw new Error(detail.map((item) => item.msg || item.message).filter(Boolean).join("; ") || fallbackMessage);
     }
-    throw new Error(detail || data?.message || fallbackMessage);
+    const detailMessage = typeof detail === "string"
+      ? detail
+      : detail?.message || detail?.detail;
+    const message = data?.message || detailMessage || fallbackMessage;
+    const detailSuffix = data?.detail && typeof data.detail === "string" && data.detail !== message
+      ? ` ${data.detail}`
+      : "";
+    throw new Error(`${message}${detailSuffix}`);
   }
 
   return data;

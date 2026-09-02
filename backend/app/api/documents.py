@@ -1,8 +1,10 @@
 from pathlib import Path
 from shutil import copyfileobj
 from uuid import uuid4
+import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.rag.ingestion import (
@@ -14,6 +16,7 @@ from app.services.document_validation import validate_document_category
 
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
@@ -109,13 +112,31 @@ def validate_category(request: DocumentCategoryValidationRequest) -> dict[str, o
 
 @router.post("/ingest")
 def ingest_documents() -> dict[str, str | int | list[str]]:
+    logger.info("Received POST /documents/ingest.")
     try:
-        return ingest_uploaded_documents()
+        result = ingest_uploaded_documents()
+        logger.info("POST /documents/ingest completed: %s", result.get("status"))
+        return result
     except IngestionDependencyError as error:
-        raise HTTPException(
+        logger.exception("POST /documents/ingest failed during RAG dependency or embedding initialization.")
+        return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(error),
-        ) from error
+            content={
+                "status": "failed",
+                "message": "Document ingestion failed during embedding model load or RAG dependency initialization.",
+                "detail": str(error),
+            },
+        )
+    except Exception as error:
+        logger.exception("POST /documents/ingest failed unexpectedly: %s", error)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "failed",
+                "message": "Document ingestion failed while processing uploaded documents.",
+                "detail": str(error),
+            },
+        )
 
 
 @router.get("/ingest/status")

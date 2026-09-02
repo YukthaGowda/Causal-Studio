@@ -1163,7 +1163,7 @@ function ValidationDetails({ detail }) {
   );
 }
 
-function DatasetRow({ ds, onRemove, onReplace, onToggle, simple }) {
+function DatasetRow({ ds, onRemove, onReplace, onToggle, onPreview, simple }) {
   return (
     <div className="file-row">
       <div className="file-row-main">
@@ -1178,7 +1178,7 @@ function DatasetRow({ ds, onRemove, onReplace, onToggle, simple }) {
         <StatusChip status={ds.status} />
         {!simple && (
           <div className="file-actions">
-            <button className="icon-btn" aria-label="Preview dataset" title="Preview"><Eye size={15} /></button>
+            <button className="icon-btn" aria-label="Preview dataset" title="Preview" onClick={onPreview}><Eye size={15} /></button>
             <button className="icon-btn" aria-label="Replace dataset" title="Replace" onClick={onReplace}><RefreshCw size={15} /></button>
             <button className="icon-btn icon-btn-danger" aria-label="Remove dataset" title="Remove" onClick={onRemove}><Trash2 size={15} /></button>
           </div>
@@ -1668,6 +1668,7 @@ function ProjectSetupView({ state, actions }) {
             ds={ds}
             onRemove={() => removeDataset(ds.id)}
             onToggle={() => toggleDataset(ds.id)}
+            onPreview={() => showToast(`Dataset preview: ${ds.name} — ${ds.rows.toLocaleString()} rows, ${ds.cols} columns. Expand validation details to review the parsed schema.`)}
             onReplace={() => {
               const inp = document.createElement("input");
               inp.type = "file";
@@ -1719,7 +1720,7 @@ function ProjectSetupView({ state, actions }) {
               </div>
               <StatusChip status={dictionary.described === dictionary.total ? "ready" : "clarification"} />
               <div className="file-actions">
-                <button className="icon-btn" aria-label="Preview data dictionary" title="Preview"><Eye size={15} /></button>
+                <button className="icon-btn" aria-label="Preview data dictionary" title="Preview" onClick={() => showToast("Data-dictionary preview is not available in this proof of concept. Use Replace to review a revised file.")}><Eye size={15} /></button>
                 <button
                   className="icon-btn" aria-label="Replace data dictionary" title="Replace"
                   onClick={() => {
@@ -2604,6 +2605,7 @@ function QuestionView({ state, actions, onGoNext }) {
   const [customVars, setCustomVars] = useState([]);
   const [newVarDraft, setNewVarDraft] = useState({ name: "", source: "", values: "", role: "Unassigned" });
   const [addingVar, setAddingVar] = useState(false);
+  const questionBuilderRef = useRef(null);
   const hasParsedDataset = Boolean(firstRealDataset(datasets)?.schema);
   const hasQuestionDraft = Boolean(questionFields?.question || questionCandidates.length);
   const schemaRoleRows = useMemo(() => {
@@ -2636,6 +2638,20 @@ function QuestionView({ state, actions, onGoNext }) {
       return;
     }
     onGoNext();
+  }
+
+  function editGeneratedQuestion(candidate) {
+    selectGeneratedQuestion({ ...candidate, status: "user_edited" });
+    showToast("Editable question fields are ready below. Review and revise them before confirming.");
+    requestAnimationFrame(() => questionBuilderRef.current?.focus());
+  }
+
+  function viewCandidateEvidence(candidate) {
+    if (!(candidate.supporting_evidence || []).length) {
+      showToast("No supporting evidence is attached to this candidate yet. Ingest documents or run RAG evidence check first.");
+      return;
+    }
+    runAssistantAction?.("View Supporting Evidence");
   }
 
   return (
@@ -2752,7 +2768,7 @@ function QuestionView({ state, actions, onGoNext }) {
                 )}
                 <div className="button-row">
                   <button className="btn btn-primary btn-sm" onClick={() => selectGeneratedQuestion(q)}>Select This Question</button>
-                  <button className="btn btn-secondary btn-sm" onClick={() => selectGeneratedQuestion({ ...q, status: "user_edited" })}>Edit / Use Parts</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => editGeneratedQuestion(q)}>Edit / Use Parts</button>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => {
@@ -2763,7 +2779,7 @@ function QuestionView({ state, actions, onGoNext }) {
                     Confirm Question
                   </button>
                   <button className="btn btn-secondary btn-sm" onClick={() => handleGenerateQuestionCandidates("alternative")}>Generate Alternative</button>
-                  <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("View Supporting Evidence")}>View Supporting Evidence</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => viewCandidateEvidence(q)}>View Supporting Evidence</button>
                 </div>
               </div>
             ))}
@@ -2861,7 +2877,7 @@ function QuestionView({ state, actions, onGoNext }) {
                     <input
                       type="checkbox"
                       checked={!discarded}
-                      onChange={() => setVarStatuses((s) => ({ ...s, [v.name]: discarded ? "selected" : "discarded" }))}
+                      onChange={() => { const nextStatus = discarded ? "selected" : "discarded"; setVarStatuses((s) => ({ ...s, [v.name]: nextStatus })); if (nextStatus === "discarded") setVariableRole(v.name, "Unassigned"); showToast(v.name + " " + nextStatus + "."); }}
                       style={{ accentColor: "var(--accent)", width: 14, height: 14, cursor: "pointer" }}
                     />
                   </td>
@@ -2881,13 +2897,13 @@ function QuestionView({ state, actions, onGoNext }) {
                     {discarded ? (
                       <button
                         className="btn btn-secondary btn-sm"
-                        onClick={() => setVarStatuses((s) => ({ ...s, [v.name]: "selected" }))}
+                        onClick={() => { setVarStatuses((s) => ({ ...s, [v.name]: "selected" })); showToast(v.name + " selected for review."); }}
                       >Select</button>
                     ) : (
                       <button
                         className="btn btn-sm"
                         style={{ background: "var(--danger-soft)", color: "var(--danger)", border: "none", fontWeight: 500 }}
-                        onClick={() => setVarStatuses((s) => ({ ...s, [v.name]: "discarded" }))}
+                        onClick={() => { setVarStatuses((s) => ({ ...s, [v.name]: "discarded" })); setVariableRole(v.name, "Unassigned"); showToast(v.name + " discarded from the provisional role table."); }}
                       >Discard</button>
                     )}
                   </td>
@@ -2996,6 +3012,7 @@ function QuestionView({ state, actions, onGoNext }) {
           <textarea
             className="objective-input"
             style={{ minHeight: 64 }}
+            ref={questionBuilderRef}
             placeholder="Type your research question in plain language."
             value={questionFields.question}
             onChange={(e) => updateQuestionField("question", e.target.value)}
@@ -5622,7 +5639,7 @@ function backendEstimationToRun(response, tag, fallbackConfig = {}) {
 
 function EstimationView({ state, actions, onGoNext }) {
   const { questionFields, feasibility, targetedFeasibilityResult, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, variableRoles, lagHours, datasets, backendStatus, confirmedGraph, graphValidationResult, analysisStrategyResult, analysisStrategyDraft, editableAdjustmentSet, analysisStrategyValidation, analysisStrategyConfirmed, studyMode } = state;
-  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction, recordStudyEvent, advanceGuidance } = actions;
+  const { pushAssistantNote, showToast, setLatestEstimationRun, setPrimaryEstimationRun, runAssistantAction, recordStudyEvent, advanceGuidance, goToPage } = actions;
 
   const { confounders, mediators } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const adjustmentSet = effectType === "direct" ? [...confounders, ...mediators] : confounders;
@@ -5671,6 +5688,12 @@ function EstimationView({ state, actions, onGoNext }) {
     canValidateEstimation
     && (!estimationValidation || estimationValidation.safe_to_run_estimation !== false)
   );
+  const plannedCalculationMessage = "This feature is planned for a later implementation. The current proof of concept only supports the primary backend calculation.";
+
+  function explainPlannedCalculation() {
+    showToast(plannedCalculationMessage);
+    pushAssistantNote(plannedCalculationMessage);
+  }
 
   function buildEstimationPayload(tag = "Primary") {
     const dataset = firstRealDataset(datasets);
@@ -5989,8 +6012,8 @@ function EstimationView({ state, actions, onGoNext }) {
           </button>
           {runs.length > 0 && !isRunning && (
             <>
-              <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
-              <button className="btn" onClick={() => runEstimation("Robustness")} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+              <button className="btn" onClick={explainPlannedCalculation} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+              <button className="btn" onClick={explainPlannedCalculation} disabled={!canRunEstimation} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
             </>
           )}
         </div>
@@ -6136,9 +6159,9 @@ function EstimationView({ state, actions, onGoNext }) {
           )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, borderTop: "1px solid #EDEFF3", paddingTop: 10 }}>
             <button className="btn" onClick={() => runEstimation("Primary")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Re-run with Updated Settings</button>
-            <button className="btn" onClick={() => runEstimation("Exploratory")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
-            <button className="btn" onClick={() => runEstimation("Robustness")} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
-            <button className="btn" onClick={() => pushAssistantNote("To adjust your identification or estimation strategy, use the sidebar to navigate back to Analysis Strategy, then return here to re-run.")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button className="btn" onClick={explainPlannedCalculation} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><RefreshCw size={12} /> Try Alternative Estimator</button>
+            <button className="btn" onClick={explainPlannedCalculation} disabled={!canRunEstimation || isRunning} style={{ display: "flex", alignItems: "center", gap: 6 }}><ShieldAlert size={12} /> Run Sensitivity Analysis</button>
+            <button className="btn" onClick={() => { goToPage("strategy"); showToast("Returned to Analysis Strategy. Update and confirm the plan before re-running estimation."); }} style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <ArrowRight size={12} /> Return to Strategy
             </button>
           </div>
@@ -7952,8 +7975,12 @@ export default function CausalStudioApp() {
       setSelectedQuestionId(candidate.id);
       setQuestionFields(fields);
     }
-    if (!fields?.question) {
-      showToast("Choose or write a question first.");
+    const requiredFields = [["research question", fields?.question], ["population", fields?.population], ["exposure", fields?.exposure], ["comparator", fields?.comparator], ["outcome", fields?.outcome], ["time window", fields?.timeWindow], ["unit of analysis", fields?.unitOfAnalysis], ["estimand direction", fields?.estimand]];
+    const missingFields = requiredFields.filter(([, value]) => !String(value || "").trim()).map(([label]) => label);
+    if (missingFields.length) {
+      const message = "Complete the following before confirming: " + missingFields.join(", ") + ".";
+      setPhase4Status({ kind: "warning", message });
+      showToast(message);
       return;
     }
     setPhase4Status({ kind: "success", message: "Question confirmed for targeted feasibility review." });

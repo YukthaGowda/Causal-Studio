@@ -5110,6 +5110,49 @@ function StrategyView({ state, actions, onGoNext }) {
   );
 }
 
+function phase7WarningText(warning) {
+  if (typeof warning === "string") return warning.trim();
+  if (!warning || typeof warning !== "object") return "A Phase 7 warning requires review.";
+  if (warning.message) return String(warning.message);
+  if (warning.warning) {
+    const variable = warning.variable_name || warning.column;
+    const missingness = Number.isFinite(Number(warning.missing_percentage))
+      ? " (" + Number(warning.missing_percentage).toFixed(1) + "% missing)"
+      : "";
+    return (variable ? variable + ": " : "") + warning.warning + missingness;
+  }
+  return "A Phase 7 data-quality note requires review.";
+}
+
+function phase7WarningGroups({ errors = [], warnings = [], activeVariables = [] }) {
+  const seen = new Set();
+  const grouped = { critical: [], design: [], dataQuality: [] };
+  const active = activeVariables.filter(Boolean).map((name) => String(name).toLowerCase());
+
+  [...errors.map((item) => ({ item, forceCritical: true })), ...warnings.map((item) => ({ item, forceCritical: false }))]
+    .forEach(({ item, forceCritical }) => {
+      const text = phase7WarningText(item);
+      const key = text.toLowerCase();
+      if (!text || seen.has(key)) return;
+      seen.add(key);
+      const raw = typeof item === "object" && item ? item : {};
+      const lower = text.toLowerCase();
+      const critical = forceCritical || ["blocking", "missing exposure", "missing outcome", "cycle", "collider", "post-treatment", "not identifiable", "cannot run"].some((term) => lower.includes(term));
+      const designRelevant = active.some((name) => lower.includes(name)) || ["proxy", "sensor", "adjustment", "overlap", "positivity", "missingness", "no variation"].some((term) => lower.includes(term));
+      const entry = { text, suggestedFix: raw.suggested_fix || "" };
+      if (critical) grouped.critical.push(entry);
+      else if (designRelevant) grouped.design.push(entry);
+      else grouped.dataQuality.push(entry);
+    });
+
+  const noVariation = grouped.dataQuality.filter((entry) => /constant|no[- ]variation/i.test(entry.text));
+  if (noVariation.length > 1) {
+    grouped.dataQuality = grouped.dataQuality.filter((entry) => !/constant|no[- ]variation/i.test(entry.text));
+    grouped.dataQuality.unshift({ text: noVariation.length + " unused variables have constant/no-variation values. View details for the individual fields." });
+  }
+  return grouped;
+}
+
 function StrategyViewPhase7({ state, actions, onGoNext }) {
   const {
     questionFields,
@@ -5144,6 +5187,15 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
   const validationStatus = analysisStrategyValidation?.status || "not validated";
   const canRunStrategy = Boolean(confirmedGraph);
   const canConfirm = Boolean(analysisStrategyResult && analysisStrategyValidation && analysisStrategyValidation.status !== "invalid" && graphValidationResult?.status !== "invalid");
+  const [showAllDataQuality, setShowAllDataQuality] = useState(false);
+  const warningGroups = useMemo(() => phase7WarningGroups({
+    errors: analysisStrategyValidation?.errors || [],
+    warnings: [
+      ...(analysisStrategyResult?.warnings || []),
+      ...(analysisStrategyValidation?.warnings || []),
+    ],
+    activeVariables: [questionFields?.exposure, questionFields?.outcome, ...editableAdjustmentSet],
+  }), [analysisStrategyResult, analysisStrategyValidation, questionFields, editableAdjustmentSet]);
 
   function addAdjustmentVar() {
     if (!newAdjustmentVar || editableAdjustmentSet.includes(newAdjustmentVar)) return;
@@ -5299,9 +5351,14 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
 
       <div className="card">
         <div className="card-head"><div className="card-title">Warnings and next actions</div><CardInfo text="Warnings carry forward to Phase 8 and Review. They are not hidden by confirmation." /></div>
-        {(analysisStrategyResult?.warnings || []).map((warning, idx) => <div key={idx} className="helper"><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
-        {(analysisStrategyValidation?.errors || []).map((error, idx) => <div key={`e-${idx}`} className="status-box status-error">{error}</div>)}
-        {(analysisStrategyValidation?.warnings || []).map((warning, idx) => <div key={`v-${idx}`} className="helper"><AlertTriangle size={13} color="var(--warning)" /> {warning}</div>)}
+        {warningGroups.critical.length > 0 && <><strong>Critical / blocking warnings</strong>{warningGroups.critical.map((warning, idx) => <div key={`critical-${idx}`} className="status-box status-error">{warning.text}{warning.suggestedFix && <div className="helper">Suggested action: {warning.suggestedFix}</div>}</div>)}</>}
+        {warningGroups.design.length > 0 && <><strong>Design-relevant warnings</strong>{warningGroups.design.map((warning, idx) => <div key={`design-${idx}`} className="helper"><AlertTriangle size={13} color="var(--warning)" /> {warning.text}{warning.suggestedFix && ` Suggested action: ${warning.suggestedFix}`}</div>)}</>}
+        {warningGroups.dataQuality.length > 0 && <>
+          <strong>General data-quality notes</strong>
+          {warningGroups.dataQuality.slice(0, showAllDataQuality ? undefined : 3).map((warning, idx) => <div key={`quality-${idx}`} className="helper"><Info size={13} /> {warning.text}</div>)}
+          {warningGroups.dataQuality.length > 3 && <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={() => setShowAllDataQuality((value) => !value)}>{showAllDataQuality ? "Hide data-quality details" : `View all data-quality details (${warningGroups.dataQuality.length})`}</button>}
+        </>}
+        {warningGroups.critical.length + warningGroups.design.length + warningGroups.dataQuality.length === 0 && <div className="helper"><CheckCircle2 size={13} color="var(--success)" /> No Phase 7 warnings were returned.</div>}
         <ul className="compact-list">{(analysisStrategyResult?.recommended_next_actions || []).map((item, idx) => <li key={idx}>{item}</li>)}</ul>
       </div>
 
@@ -6632,7 +6689,7 @@ function reportToMarkdown(report, state) {
 
 function ReviewView({ state, actions }) {
   const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary, studyMode, studyReportDraft } = state;
-  const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables } = actions;
+  const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables, goToPage } = actions;
   const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
   const estimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
   const checkedAssumptions = SENSITIVITY_ITEMS.filter((i) => sensitivityChecks[i.id]);
@@ -6665,16 +6722,37 @@ function ReviewView({ state, actions }) {
     signoffBlockers,
   }), [selectedRun, claimAudit, reportDraft, backendStatus.connected, signoffBlockers]);
   const exportReady = reviewExportBlockers.length === 0;
-  const hasAlignmentBlocker = Boolean(studyMode && (reportConfiguration.issues.length || !selectedRun));
+  const approvedBdeWorkspaceActive = Boolean(studyMode?.active || studyMode?.status === "ready");
+  const hasAlignmentBlocker = Boolean(reportConfiguration.issues.length || !selectedRun);
+  const blockedPreviewExportMessage = approvedBdeWorkspaceActive
+    ? "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. You can reset to the approved BDE workspace variables, then rerun feasibility, graph validation, strategy confirmation, and estimation."
+    : "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. Return to Question & Variables or Analysis Strategy to align the design with the selected estimation run.";
 
-  const blockedPreviewExportMessage = "Preview/export is blocked because the selected question, graph, adjustment set, and estimation run are not aligned. Reset to the approved BDE workspace variables, then rerun feasibility, graph validation, strategy confirmation, and estimation.";
+  useEffect(() => {
+    if (selectedRun && reportDraft?.status === "frozen_study_draft") {
+      setReportDraft((draft) => ({
+        ...draft,
+        warnings: (draft?.warnings || []).filter((warning) => !/No Phase 8 estimate has been selected yet/i.test(String(warning))),
+      }));
+    }
+  }, [selectedRun?.id]);
 
   function notifyPreviewExportBlocked() {
     showToast(blockedPreviewExportMessage);
     pushAssistantNote(blockedPreviewExportMessage, "review");
   }
 
+  function returnToRecoveryPhase(phase) {
+    goToPage(phase);
+    showToast(phase === "question" ? "Returned to Question & Variables to align the report design." : "Returned to Analysis Strategy to align the adjustment set and estimation plan.");
+  }
+
   function handleResetApprovedBdeVariables() {
+    if (!approvedBdeWorkspaceActive) {
+      showToast("The approved BDE reset is available only when the approved BDE workspace is active.");
+      return;
+    }
+    if (!window.confirm("Reset to approved BDE variables? This will clear stale graph, feasibility, strategy, estimation, and report state.")) return;
     if (!resetApprovedBdeWorkspaceVariables?.()) return;
     setReportDraft(null);
     setReportPreview("");
@@ -7145,7 +7223,12 @@ function ReviewView({ state, actions }) {
                   <div className="mini-stat"><span className="mini-stat-label">Estimation covariates</span><span className="mini-stat-value mono">{reportConfiguration.estimationCovariates.join(", ") || "No selected run"}</span></div>
                   <div className="mini-stat"><span className="mini-stat-label">Selected estimation run</span><span className="mini-stat-value mono">{selectedRun?.id || "None"}</span></div>
                 </div>
-                <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>
+                <div className="button-row" style={{ marginTop: 10 }}>
+                  {approvedBdeWorkspaceActive && <button className="btn btn-secondary btn-sm" onClick={handleResetApprovedBdeVariables}>Reset to approved BDE workspace variables</button>}
+                  <button className="btn btn-secondary btn-sm" onClick={() => returnToRecoveryPhase("question")}>Return to Question & Variables</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => returnToRecoveryPhase("strategy")}>Return to Analysis Strategy</button>
+                </div>
+                {approvedBdeWorkspaceActive && <div className="helper" style={{ marginTop: 8 }}><Info size={13} /> Resetting restores the approved BDE variables and sends you back to Feasibility because feasibility, graph validation, strategy confirmation, and estimation must be rerun.</div>}
               </>
             )}
           </div>
@@ -7430,7 +7513,7 @@ export default function CausalStudioApp() {
 
   function resetApprovedBdeWorkspaceVariables() {
     const drafts = studyMode?.frozen_drafts;
-    if (!drafts) {
+    if (!(studyMode?.active || studyMode?.status === "ready") || !drafts) {
       showToast("Load the approved BDE workspace before resetting its variables.");
       return false;
     }
@@ -7555,7 +7638,7 @@ export default function CausalStudioApp() {
       };
     });
 
-    const message = "The approved BDE workspace variables were restored. Please rerun Feasibility, validate/confirm the graph, confirm the analysis strategy, and rerun estimation before exporting.";
+    const message = "Approved BDE variables were restored. You are being returned to Feasibility because downstream steps must be rerun before export.";
     recordStudyEvent("approved_bde_variables_reset", {
       exposure: "acc_mean_magnitude",
       outcome: "binge_drinking_event",

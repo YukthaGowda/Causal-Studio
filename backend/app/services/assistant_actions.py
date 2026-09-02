@@ -516,6 +516,9 @@ def _deterministic_guidance(*, phase: str, page_state: dict[str, Any], user_ques
             return f"The current item to review is: {str(warnings[0])}. Resolve blocking issues before continuing; non-blocking warnings should remain documented."
         return f"I do not see an active warning in the supplied dashboard state. In {phase_label}, review the required fields and any visible validation messages before continuing."
     if intent == "warning":
+        normalized_question = re.sub(r"[^a-z0-9\s]", " ", user_question.lower())
+        if "many warning" in normalized_question or "so many" in normalized_question:
+            return "Most are data-quality notes from unused variables. Critical warnings are separated from general notes. Focus first on blocking and design-relevant warnings."
         if warnings:
             return f"Current warning: {str(warnings[0])}. It should be reviewed and documented; it does not by itself establish a causal conclusion."
         return "There is no active warning in the supplied dashboard state. If you see a warning in the interface, share its text and I can explain its workflow consequence."

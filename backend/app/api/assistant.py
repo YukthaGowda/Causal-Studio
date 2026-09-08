@@ -1,4 +1,5 @@
-from typing import Any
+import json
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -15,10 +16,24 @@ from app.services.assistant_chat import AssistantChatError, generate_assistant_r
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 
+class ChatTurn(BaseModel):
+    role: Literal['user', 'assistant']
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
 class AssistantChatRequest(BaseModel):
-    message: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1, max_length=4000)
     workflow_step: str | None = None
     top_k_evidence: int = Field(default=4, ge=1, le=10)
+    context: dict[str, Any] | None = None
+    history: list[ChatTurn] = Field(default_factory=list, max_length=12)
+
+    @field_validator('context')
+    @classmethod
+    def validate_context(cls, value: dict[str, Any] | None):
+        if value is not None and len(json.dumps(value)) > 200_000:
+            raise ValueError('Dashboard context is too large. Reduce graph or evidence detail.')
+        return value
 
     @field_validator("message")
     @classmethod
@@ -61,6 +76,8 @@ def chat_with_assistant(request: AssistantChatRequest) -> dict[str, Any]:
             message=request.message,
             workflow_step=request.workflow_step,
             top_k_evidence=request.top_k_evidence,
+            context=request.context,
+            history=[turn.model_dump() for turn in request.history],
         )
     except AssistantChatError as error:
         raise HTTPException(

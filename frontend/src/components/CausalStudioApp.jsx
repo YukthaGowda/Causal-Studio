@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { buildChatContext, recentChatHistory } from "../lib/assistantContext.js";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -33,6 +34,7 @@ import {
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   assistantAction,
+  assistantChat,
   startStudyMode,
   assembleReviewPackage,
   checkBackendHealth,
@@ -823,6 +825,7 @@ function assistantMessageFromResponse(response) {
   if (!response || typeof response !== "object") return ASSISTANT_RESPONSE_UNAVAILABLE;
 
   const directMessage = [
+    response.answer,
     response.assistant_message,
     response.assistantMessage,
     response.message,
@@ -6747,6 +6750,18 @@ function ReviewView({ state, actions }) {
     signoffBlockers,
   }), [selectedRun, claimAudit, reportDraft, backendStatus.connected, signoffBlockers]);
   const exportReady = reviewExportBlockers.length === 0;
+  // Expose the same review facts used by this screen, without changing its gates.
+  useEffect(() => {
+    actions.reviewContextRef.current = {
+      status: reportDraft?.status || 'not generated',
+      export_ready: exportReady,
+      export_blockers: reviewExportBlockers,
+      claim_audit: claimAudit,
+      unresolved_warnings: reportDraft?.unresolved_warnings || estimationWarnings,
+      evidence_summary: reportDraft?.evidence_summary || null,
+    };
+  });
+  useEffect(() => () => { actions.reviewContextRef.current = null; }, [actions.reviewContextRef]);
   const approvedBdeWorkspaceActive = Boolean(studyMode?.active || studyMode?.status === "ready");
   const hasAlignmentBlocker = Boolean(reportConfiguration.issues.length || !selectedRun);
   const firstAlignmentIssue = reportConfiguration.issues[0];
@@ -7455,6 +7470,10 @@ export default function CausalStudioApp() {
   const [assistantThinkingMessage, setAssistantThinkingMessage] = useState("Thinking...");
   const [assistantInput, setAssistantInput] = useState("");
   const assistantScrollRef = useRef(null);
+  const reviewContextRef = useRef(null);
+  const typedChatHistory = useRef([]);
+  const typedChatPending = useRef(false);
+  const typedChatDataset = useRef(null);
   const guidanceProgress = useRef({});
   const assistantThread = assistantThreads[page] || [];
 
@@ -9094,11 +9113,35 @@ export default function CausalStudioApp() {
       setAssistantThinking(false);
     }
   }
-  function submitAssistantInput() {
+  async function submitAssistantInput() {
     const q = assistantInput.trim();
-    if (!q) return;
+    if (!q || typedChatPending.current || assistantThinking) return;
+    const originPage = page;
+    const context = buildChatContext(state, page, {
+      checks,
+      alignment: activeReportConfiguration(state, primaryEstimationRun),
+      review: reviewContextRef.current,
+    });
+    const datasetKey = `${context.dataset.filename}:${context.bde_workspace_active}`;
+    if (typedChatDataset.current !== datasetKey) typedChatHistory.current = [];
+    typedChatDataset.current = datasetKey;
+    const history = recentChatHistory(typedChatHistory.current);
+    typedChatPending.current = true;
     setAssistantInput("");
-    runAssistantAction(q);
+    setAssistantThinking(true);
+    setAssistantThinkingMessage("Thinking...");
+    setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { role: 'user', text: q }] }));
+    try {
+      const response = await assistantChat({ message: q, workflow_step: originPage, context, history });
+      const answer = assistantMessageFromResponse(response);
+      typedChatHistory.current = recentChatHistory([...history, { role: 'user', content: q }, { role: 'assistant', content: answer }]);
+      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { role: 'assistant', text: answer, warning: response.warning }] }));
+    } catch (error) {
+      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { role: 'assistant', text: `I couldn't reach the chat service. ${friendlyError(error)} Please try again.` }] }));
+    } finally {
+      typedChatPending.current = false;
+      setAssistantThinking(false);
+    }
   }
 
   const feasibility = useMemo(() => computeFeasibility(datasets, lagHours, exposureThreshold), [datasets, lagHours, exposureThreshold]);
@@ -9144,6 +9187,7 @@ export default function CausalStudioApp() {
   }
 
   const actions = {
+    reviewContextRef,
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
@@ -9221,7 +9265,10 @@ export default function CausalStudioApp() {
         <div className="assistant-head"><Sparkles size={15} color="var(--accent)" /><span>AI research assistant</span></div>
         <div className="assistant-body" ref={assistantScrollRef}>
           {assistantThread.map((m, i) => (
-            <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant text-justify"}`}>{m.text}</div>
+            <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant text-justify"}`}>
+              {m.text}
+              {m.warning && <div style={{ fontSize: 11, marginTop: 8, color: "var(--text-3)" }}>{m.warning}</div>}
+            </div>
           ))}
           {assistantThinking && <div className="msg msg-assistant">{assistantThinkingMessage}</div>}
         </div>

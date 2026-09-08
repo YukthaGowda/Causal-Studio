@@ -80,10 +80,18 @@ def generate_assistant_response(
     message: str,
     workflow_step: str | None = None,
     top_k_evidence: int = 4,
+    context: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     normalized_message = message.strip()
     if not normalized_message:
         raise AssistantChatError("Assistant message cannot be empty.")
+
+    # Preserve the older document-chat contract for clients without a dashboard.
+    if context is not None:
+        from app.services.dashboard_chat import answer_dashboard_question
+
+        return answer_dashboard_question(normalized_message, context, history or [], top_k_evidence)
 
     try:
         rag_response = search_rag_chunks(normalized_message, top_k=top_k_evidence)

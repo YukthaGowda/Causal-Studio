@@ -178,6 +178,15 @@ export async function assistantAction(payload) {
   return parseJsonResponse(response, "Assistant action failed.");
 }
 
+export async function assistantChat(payload) {
+  const response = await apiFetch("/assistant/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, "Chat request failed.");
+}
+
 export async function generateQuestionCandidates(payload) {
   const response = await apiFetch("/questions/generate-candidates", {
     method: "POST",

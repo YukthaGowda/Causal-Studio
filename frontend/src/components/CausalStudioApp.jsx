@@ -7953,15 +7953,25 @@ export default function CausalStudioApp() {
   }
   async function handleDocumentIngestion() {
     setAction("documentIngestion", { kind: "loading", message: "Ingesting uploaded documents into ChromaDB..." });
+    setIngestionInfo(previous => ({ ...previous, status: "running", message: "Document ingestion requested." }));
     try {
       const result = await ingestDocuments();
-      const status = await getIngestionStatus();
+      let status;
+      try {
+        status = await getIngestionStatus();
+      } catch (statusError) {
+        setIngestionInfo({ ...result, status_check_error: friendlyError(statusError) });
+        setAction("documentIngestion", { kind: "warning", message: `Ingestion completed, but the status check failed: ${friendlyError(statusError)}` });
+        pushAssistantNote(`Ingestion completed with ${result.chunks_created ?? 0} chunks; the follow-up status check failed. ${friendlyError(statusError)}`);
+        return;
+      }
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setIngestionInfo({ ...status, lastResult: result });
       const chunkCount = result.number_of_chunks_created ?? result.chunks_created ?? result.number_of_chunks ?? status.number_of_stored_chunks ?? status.stored_chunks ?? 0;
       setAction("documentIngestion", { kind: "success", message: `Documents ingested. ${chunkCount} chunks available for RAG search.` });
       pushAssistantNote(`Document knowledge base updated: ${chunkCount} chunks are now searchable. This supports evidence retrieval only; it does not prove causal claims.`);
     } catch (error) {
+      setIngestionInfo(error.payload || { status: "unknown", message: friendlyError(error), details: "Request failed; backend completion is unknown. Check status before retrying." });
       setAction("documentIngestion", { kind: "error", message: friendlyError(error, "Document ingestion failed.") });
       pushAssistantNote(`Document ingestion failed: ${friendlyError(error)}`);
     }
@@ -7969,7 +7979,7 @@ export default function CausalStudioApp() {
   async function handleDictionaryRagCheck() {
     setAction("ragCheck", { kind: "loading", message: "Checking the document knowledge base..." });
     try {
-      const response = await searchRag("What evidence or guidance helps interpret the uploaded study variables and measurement timing?", 3);
+      const response = await searchRag("What evidence or guidance helps interpret the uploaded study variables and measurement timing?", 3, ingestionInfo);
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       const count = response.number_of_results ?? response.results?.length ?? 0;
       const sources = [...new Set((response.results || []).map((item) => item.source_filename || item.metadata?.source_filename).filter(Boolean))];

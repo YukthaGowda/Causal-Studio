@@ -89,6 +89,17 @@ def _selected_result(context: dict) -> tuple[dict, str | None]:
     return run['primary_result'], None
 
 
+def evidence_readiness_message(context: dict) -> str | None:
+    state = ((context.get('evidence') or {}).get('ingestion') or {}).get('status')
+    if state in {'completed', 'ready'}:
+        return None
+    if state == 'running':
+        return 'Documents are still being ingested. Please wait until ingestion completes before running evidence search.'
+    if state in {'error', 'failed'}:
+        return 'Document ingestion failed. Please fix ingestion before running evidence search.'
+    return 'Documents have not been ingested yet. Please ingest documents before running evidence search.'
+
+
 def grounded_answer(intent: str, message: str, context: dict, sources: list[dict]) -> str:
     phase = context.get('current_phase', '')
     label, description, next_action = PHASES.get(phase, ('the current screen', 'The current phase was not supplied.', 'Select a workflow phase to review its next step.'))
@@ -134,6 +145,17 @@ def grounded_answer(intent: str, message: str, context: dict, sources: list[dict
         return (f"For {dataset.get('filename') or 'this dataset'}, a useful draft structure is: “How is a selected exposure associated with a selected outcome in the target population?” "
                 + (f'Your objective is: {objective}. ' if objective else '')
                 + f"Available fields include {', '.join(columns[:8])}. Which measure is the outcome, and which was measured before it? Column names alone do not establish suitable roles.")
+    if intent == 'roles' and not exposure and not outcome:
+        loaded = (context.get('workspace_name') or ('Approved BDE workspace' if context.get('bde_workspace_active') else 'Your workspace'))
+        filename = dataset.get('filename')
+        documents = (context.get('evidence') or {}).get('documents') or []
+        prefix = f"{loaded} is open" + (f" with dataset {filename}" if filename else '') + '.'
+        if documents:
+            prefix += f" The dashboard lists {len(documents)} document(s)."
+        selected_adjustment = _names(adjustment.get('confirmed')) or _names(adjustment.get('proposed'))
+        return prefix + ' Exposure and outcome have not been selected yet. ' + (
+            'Current adjustment candidates: ' + ', '.join(selected_adjustment) + '. ' if selected_adjustment else 'Adjustment variables have not been selected yet. '
+        ) + 'Define and review these roles in Question & Variables before planning estimation.'
     if intent == 'roles':
         roles = f"Current question exposure: {exposure or 'not selected'}. Outcome: {outcome or 'not selected'}."
         if re.search(r'\b(should|confounder|mediator|collider)\b', message.lower()):
@@ -167,6 +189,9 @@ def grounded_answer(intent: str, message: str, context: dict, sources: list[dict
         evidence = context.get('evidence') or {}
         if sources:
             return 'Relevant supplied passages:\n' + '\n'.join(f"[{i}] {s['source_filename']}: {s['chunk_text'][:600]}" for i, s in enumerate(sources, 1)) + '\nThese passages support interpretation, not causal proof.'
+        blocked = evidence_readiness_message(context)
+        if blocked:
+            return blocked
         if evidence.get('summary'):
             return 'A dashboard evidence summary is available: ' + str(evidence['summary']) + '\nNo matching source passage was supplied or retrieved, so I cannot verify what a particular paper says from this summary.'
         if evidence.get('ingestion'):
@@ -224,6 +249,8 @@ def grounded_answer(intent: str, message: str, context: dict, sources: list[dict
 
 
 def _evidence_for(message: str, context: dict, top_k: int) -> list[dict]:
+    if evidence_readiness_message(context):
+        return []
     evidence = context.get('evidence') or {}
     # The shared collection is not project-partitioned. Never use an unscoped hit.
     allowed = {d.get('filename') for d in evidence.get('documents', []) if isinstance(d, dict) and d.get('filename')}

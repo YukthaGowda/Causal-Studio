@@ -2,13 +2,15 @@ from pathlib import Path
 from shutil import copyfileobj
 from uuid import uuid4
 import logging
+from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.rag.ingestion import (
-    IngestionDependencyError,
+    IngestionError,
+    safe_ingestion_trace,
     get_ingestion_status,
     ingest_uploaded_documents,
 )
@@ -16,7 +18,7 @@ from app.services.document_validation import validate_document_category
 
 
 router = APIRouter(prefix="/documents", tags=["documents"])
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error.documents")
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "documents"
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
@@ -117,34 +119,23 @@ def ingest_documents() -> dict[str, str | int | list[str]]:
         result = ingest_uploaded_documents()
         logger.info("POST /documents/ingest completed: %s", result.get("status"))
         return result
-    except IngestionDependencyError as error:
-        logger.exception("POST /documents/ingest failed during RAG dependency or embedding initialization.")
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "status": "failed",
-                "message": "Document ingestion failed during embedding model load or RAG dependency initialization.",
-                "detail": str(error),
-            },
-        )
+    except IngestionError as error:
+        return JSONResponse(status_code=error.http_status, content=error.payload)
     except Exception as error:
-        logger.exception("POST /documents/ingest failed unexpectedly: %s", error)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "status": "failed",
-                "message": "Document ingestion failed while processing uploaded documents.",
-                "detail": str(error),
-            },
-        )
+        logger.error("POST /documents/ingest failed unexpectedly:\n%s", safe_ingestion_trace())
+        return JSONResponse(status_code=500, content={
+            "status": "error", "message": "Document ingestion failed unexpectedly.",
+            "details": type(error).__name__ + ": check backend logs.", "failed_step": "unknown",
+        })
 
 
 @router.get("/ingest/status")
-def read_ingestion_status() -> dict[str, str | int | bool | None]:
+def read_ingestion_status() -> dict[str, Any]:
     try:
         return get_ingestion_status()
-    except IngestionDependencyError as error:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(error),
-        ) from error
+    except Exception as error:
+        logger.error("Could not read ingestion status:\n%s", safe_ingestion_trace())
+        return JSONResponse(status_code=503, content={
+            "status": "error", "message": "Could not read the ingestion/vector-store status.",
+            "details": type(error).__name__ + ": check backend logs.", "failed_step": "vector_store",
+        })

@@ -1,3 +1,5 @@
+import { requireIngestionReady } from "./ragReadiness.js";
+import { parseApiResponse as parseJsonResponse } from "./apiErrors.js";
 const configuredApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 const isProductionBuild = Boolean(import.meta.env.PROD);
 const PRODUCTION_BACKEND_URL = "https://causal-studio-production-dcef.up.railway.app";
@@ -25,47 +27,27 @@ function productionBackendConnectionError(errors = []) {
   return `Could not reach the production FastAPI backend at ${backendUrl}. Check Railway backend deployment, CORS, and VITE_API_BASE_URL.${detail}`;
 }
 
-async function parseJsonResponse(response, fallbackMessage) {
-  let data = null;
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
-  }
-
-  if (!response.ok) {
-    const detail = data?.detail;
-    if (Array.isArray(detail)) {
-      throw new Error(detail.map((item) => item.msg || item.message).filter(Boolean).join("; ") || fallbackMessage);
-    }
-    const detailMessage = typeof detail === "string"
-      ? detail
-      : detail?.message || detail?.detail;
-    const message = data?.message || detailMessage || fallbackMessage;
-    const detailSuffix = data?.detail && typeof data.detail === "string" && data.detail !== message
-      ? ` ${data.detail}`
-      : "";
-    throw new Error(`${message}${detailSuffix}`);
-  }
-
-  return data;
-}
-
 async function apiFetch(path, options) {
   const candidates = apiBaseCandidates();
   const errors = [];
 
   if (!candidates.length && isProductionBuild) {
-    throw new Error(productionBackendConnectionError());
+    throw new Error("Frontend configuration is missing VITE_API_BASE_URL. Set the backend URL and rebuild the frontend; no request was sent.");
   }
 
+  const { timeoutMs = 0, ...fetchOptions } = options || {};
   for (const baseUrl of candidates) {
+    const controller = timeoutMs ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
-      const response = await fetch(`${baseUrl}${path}`, options);
+      const response = await fetch(`${baseUrl}${path}`, { ...fetchOptions, ...(controller ? { signal: controller.signal } : {}) });
       API_BASE_URL = baseUrl;
       return response;
     } catch (error) {
+      if (error?.name === "AbortError") throw new Error(`Request to ${path} timed out. The backend may still be processing; check ingestion status before retrying.`);
       errors.push(`${baseUrl}: ${error?.message || "network error"}`);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -132,16 +114,18 @@ export async function listDocuments() {
 export async function ingestDocuments() {
   const response = await apiFetch("/documents/ingest", {
     method: "POST",
+    timeoutMs: 180000,
   });
-  return parseJsonResponse(response, "Document ingestion failed.");
+  return parseJsonResponse(response, "Document ingestion failed.", { rejectFailureStatus: true });
 }
 
 export async function getIngestionStatus() {
-  const response = await apiFetch("/documents/ingest/status");
+  const response = await apiFetch("/documents/ingest/status", { timeoutMs: 20000 });
   return parseJsonResponse(response, "Could not check document ingestion status.");
 }
 
-export async function searchRag(query, topK = 5) {
+export async function searchRag(query, topK = 5, ingestionStatus = null) {
+  requireIngestionReady(ingestionStatus);
   const response = await apiFetch("/rag/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

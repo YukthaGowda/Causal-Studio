@@ -135,11 +135,21 @@ class DashboardChatTests(unittest.TestCase):
         with patch('app.services.dashboard_chat.search_rag_chunks') as search:
             text = self.answer('what does the paper say?')['answer']
         search.assert_not_called()
-        self.assertIn('No ingested evidence', text)
+        self.assertIn('Documents have not been ingested yet', text)
+
+    def test_ingestion_readiness_blocks_search_even_with_stored_chunks(self):
+        for state, wording in [('running', 'still being ingested'), ('error', 'ingestion failed'), ('failed', 'ingestion failed'), ('unknown', 'not been ingested yet'), ('idle', 'not been ingested yet'), (None, 'not been ingested yet')]:
+            with self.subTest(state=state):
+                context = snapshot()
+                context['evidence'] = {'documents': [{'filename': 'ours.pdf'}], 'ingestion': {'status': state, 'stored_chunks': 10}}
+                with patch('app.services.dashboard_chat.search_rag_chunks') as search:
+                    result = self.answer('what does the paper say?', context)
+                search.assert_not_called()
+                self.assertIn(wording, result['answer'])
 
     def test_evidence_is_filtered_to_supplied_documents(self):
         context = snapshot()
-        context['evidence'] = {'documents': [{'filename': 'ours.pdf'}], 'ingestion': {'stored_chunks': 2}}
+        context['evidence'] = {'documents': [{'filename': 'ours.pdf'}], 'ingestion': {'status': 'completed', 'stored_chunks': 2}}
         with patch('app.services.dashboard_chat.search_rag_chunks', return_value={'results': [
             {'source_filename': 'other.pdf', 'chunk_text': 'Unrelated content'},
             {'source_filename': 'ours.pdf', 'chunk_text': 'Measurements were collected before follow-up.'},

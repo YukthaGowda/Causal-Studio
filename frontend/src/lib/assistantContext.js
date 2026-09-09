@@ -56,6 +56,7 @@ export function buildChatContext(state, phase, { checks = {}, alignment = {}, re
   return {
     context_version: 1,
     current_phase: phase,
+    workspace_name: dataset?.studyMode ? (state.studyMode?.label || "Approved BDE workspace") : "Custom dataset workspace",
     backend_connected: Boolean(state.backendStatus?.connected),
     research_objective: state.objective || '',
     dataset: {

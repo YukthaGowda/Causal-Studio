@@ -1,3 +1,4 @@
+import { followIngestion } from "../lib/ingestionLifecycle.js";
 import React, { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { buildChatContext, recentChatHistory } from "../lib/assistantContext.js";
 import {
@@ -1867,7 +1868,7 @@ function ProjectSetupView({ state, actions }) {
           <button className="btn btn-primary" onClick={handleDocumentIngestion} disabled={actionStatus.documentIngestion?.kind === "loading"}>
             <RefreshCw size={14} className={actionStatus.documentIngestion?.kind === "loading" ? "spin" : ""} /> Ingest documents
           </button>
-          <button className="btn btn-secondary" onClick={handleDictionaryRagCheck} disabled={actionStatus.ragCheck?.kind === "loading"}>
+          <button className="btn btn-secondary" onClick={handleDictionaryRagCheck} disabled={actionStatus.ragCheck?.kind === "loading" || actionStatus.documentIngestion?.kind === "loading" || !["completed", "ready"].includes(ingestionInfo?.status)}>
             <Search size={14} /> Check RAG evidence
           </button>
           {ingestedChunks > 0 && <span className="chip chip-success">{ingestedChunks} chunks indexed</span>}
@@ -7455,6 +7456,8 @@ export default function CausalStudioApp() {
   const [backendStatus, setBackendStatus] = useState({ checked: false, connected: false, message: "Checking backend..." });
   const [actionStatus, setActionStatus] = useState({});
   const [ingestionInfo, setIngestionInfo] = useState(null);
+  const ingestionMonitor = useRef(null);
+  useEffect(() => () => ingestionMonitor.current?.abort(), []);
   const [ragSummary, setRagSummary] = useState("");
   const [broadExploration, setBroadExploration] = useState(null);
   const [studyMode, setStudyMode] = useState(null);
@@ -7952,28 +7955,36 @@ export default function CausalStudioApp() {
     pushAssistantNote(`Guideline(s) uploaded ✓ — I'll use these as domain standards when framing measurement concepts and study limitations.`);
   }
   async function handleDocumentIngestion() {
-    setAction("documentIngestion", { kind: "loading", message: "Ingesting uploaded documents into ChromaDB..." });
-    setIngestionInfo(previous => ({ ...previous, status: "running", message: "Document ingestion requested." }));
+    if (ingestionMonitor.current) return;
+    const controller = new AbortController();
+    ingestionMonitor.current = controller;
+    setAction("documentIngestion", { kind: "loading", message: "Checking ingestion status…" });
     try {
-      const result = await ingestDocuments();
-      let status;
-      try {
-        status = await getIngestionStatus();
-      } catch (statusError) {
-        setIngestionInfo({ ...result, status_check_error: friendlyError(statusError) });
-        setAction("documentIngestion", { kind: "warning", message: `Ingestion completed, but the status check failed: ${friendlyError(statusError)}` });
-        pushAssistantNote(`Ingestion completed with ${result.chunks_created ?? 0} chunks; the follow-up status check failed. ${friendlyError(statusError)}`);
-        return;
-      }
+      const result = await followIngestion({
+        start: ingestDocuments,
+        readStatus: getIngestionStatus,
+        initialStatus: ingestionInfo,
+        signal: controller.signal,
+        onUpdate: status => {
+          setIngestionInfo(status);
+          if (!["completed", "ready"].includes(status.status)) {
+            setAction("documentIngestion", { kind: "loading", message: status.status === "running"
+              ? `Ingestion still running${status.step ? ` — ${status.step}` : ""}. ${status.message || ""}`
+              : status.message });
+          }
+        },
+      });
+      const chunkCount = result.stored_chunks ?? result.chunks_created ?? 0;
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
-      setIngestionInfo({ ...status, lastResult: result });
-      const chunkCount = result.number_of_chunks_created ?? result.chunks_created ?? result.number_of_chunks ?? status.number_of_stored_chunks ?? status.stored_chunks ?? 0;
       setAction("documentIngestion", { kind: "success", message: `Documents ingested. ${chunkCount} chunks available for RAG search.` });
-      pushAssistantNote(`Document knowledge base updated: ${chunkCount} chunks are now searchable. This supports evidence retrieval only; it does not prove causal claims.`);
+      pushAssistantNote(`Document knowledge base updated: ${chunkCount} chunks are available. Retrieved evidence does not prove causal claims.`);
     } catch (error) {
-      setIngestionInfo(error.payload || { status: "unknown", message: friendlyError(error), details: "Request failed; backend completion is unknown. Check status before retrying." });
-      setAction("documentIngestion", { kind: "error", message: friendlyError(error, "Document ingestion failed.") });
-      pushAssistantNote(`Document ingestion failed: ${friendlyError(error)}`);
+      if (controller.signal.aborted) return;
+      setIngestionInfo(error.payload || { status: "unknown", message: friendlyError(error) });
+      setAction("documentIngestion", { kind: "error", message: friendlyError(error, "Could not confirm ingestion completion.") });
+      pushAssistantNote(friendlyError(error, "Could not confirm ingestion completion."));
+    } finally {
+      if (ingestionMonitor.current === controller) ingestionMonitor.current = null;
     }
   }
   async function handleDictionaryRagCheck() {

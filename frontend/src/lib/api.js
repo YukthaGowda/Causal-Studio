@@ -114,7 +114,7 @@ export async function listDocuments() {
 export async function ingestDocuments() {
   const response = await apiFetch("/documents/ingest", {
     method: "POST",
-    timeoutMs: 180000,
+    timeoutMs: 15000,
   });
   return parseJsonResponse(response, "Document ingestion failed.", { rejectFailureStatus: true });
 }

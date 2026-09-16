@@ -63,7 +63,7 @@ import {
   validateAnalysisStrategy,
   validateCausalGraph,
 } from "../lib/api.js";
-import { getReviewExportBlockers, normalizeClaimAuditResult } from "../lib/reviewExport";
+import { getReviewExportBlockers, normalizeClaimAuditResult, renderReportContent } from "../lib/reviewExport";
 
 const CHART_TYPE_OPTIONS = [
   { key: "bar", label: "Bar" },
@@ -5625,7 +5625,7 @@ ${papers.length === 0 && guidelines.length === 0
 function buildPackageReportHTML(report) {
   const escape = (value) => String(value ?? "Not available.").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
   const sections = Array.isArray(report?.sections) ? report.sections : [];
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</title><style>body{font-family:Georgia,serif;color:#16233D;margin:42px;line-height:1.5}h1{border-bottom:2px solid #2F5D8A;padding-bottom:10px}h2{color:#2F5D8A;margin-top:28px;white-space:pre-wrap}pre{white-space:pre-wrap;font-family:inherit} .warning{background:#fff8e8;border-left:4px solid #b8760e;padding:10px 14px;margin:10px 0}</style></head><body><h1>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</h1><p>${escape(report?.executive_summary || "This package supports review and reporting. It does not prove causality.")}</p>${sections.map((section) => `<h2>${escape(section?.title || "Report section")}</h2><pre>${escape(section?.content ?? "Not available.")}</pre>${Array.isArray(section?.warnings) && section.warnings.length ? `<div class="warning"><strong>Warnings</strong><ul>${section.warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></div>` : ""}`).join("")}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</title><style>body{font-family:Georgia,serif;color:#16233D;margin:42px;line-height:1.5}h1{border-bottom:2px solid #2F5D8A;padding-bottom:10px}h2{color:#2F5D8A;margin-top:28px;white-space:pre-wrap}table{border-collapse:collapse;width:100%;font-size:10pt;overflow-wrap:anywhere}th,td{border:1px solid #ccd3dc;padding:7px;text-align:left;vertical-align:top}th{background:#edf2f7}thead{display:table-header-group}tr{break-inside:avoid} .warning{background:#fff8e8;border-left:4px solid #b8760e;padding:10px 14px;margin:10px 0}</style></head><body><h1>${escape(report?.package_title || "Causal Design, Estimation, and Evidence Report")}</h1><p>${escape(report?.executive_summary || "This package supports review and reporting. It does not prove causality.")}</p>${sections.map((section) => `<h2>${escape(section?.title || "Report section")}</h2>${renderReportContent(section?.content ?? "Not yet specified")}${Array.isArray(section?.warnings) && section.warnings.length ? `<div class="warning"><strong>Warnings</strong><ul>${section.warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></div>` : ""}`).join("")}</body></html>`;
 }
 
 function downloadPDFReport(state, report) {
@@ -7310,9 +7310,9 @@ function ReviewView({ state, actions }) {
                 style={{ marginTop: 12, width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", lineHeight: 1.55 }}
               />
             ) : (
-              <pre className="report-preview" style={{ marginTop: 12, whiteSpace: "pre-wrap", maxHeight: 360, overflow: "auto" }}>
-                {reportPreview || reportToMarkdown(reportDraft, { ...state, reportClaimAudit: claimAudit })}
-              </pre>
+              <div className="report-preview" style={{ marginTop: 12, maxHeight: 360, overflow: "auto" }}
+                dangerouslySetInnerHTML={{ __html: renderReportContent(reportPreview || reportToMarkdown(reportDraft, { ...state, reportClaimAudit: claimAudit })) }}
+              />
             )}
           </>
         ) : (

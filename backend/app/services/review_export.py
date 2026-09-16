@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any
 
+from app.services.report_formatting import format_sections, warning_texts
+
 
 SAFE_LANGUAGE_SUGGESTIONS = [
     "under the specified model and assumptions",
@@ -256,7 +258,7 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
     final_question_text = _text(confirmed_question, fallback="")
     estimation_summary = _selected_estimation_summary(p8.get("selected_primary_run"))
     evidence_summary = _evidence_summary(rag_evidence)
-    unresolved_warnings = _collect_unresolved_warnings(payload, estimation_summary)
+    unresolved_warnings = warning_texts(payload) + warning_texts(estimation_summary)
 
     graph = p6.get("confirmed_graph") or {}
     graph_validation = p6.get("graph_validation_result") or {}
@@ -314,46 +316,22 @@ def assemble_review_package(payload: dict[str, Any]) -> dict[str, Any]:
         "adjustment_set": adjustment_set,
     }
 
-    sections = [
-        _section("project_context", "Project context", f"Objective: {_text(project.get('research_objective'))}\nDataset: {_text(project.get('dataset_filename'))}", _status_for(project.get("research_objective"))),
-        _section("uploaded_materials", "Uploaded materials and evidence readiness", f"Document status: {json.dumps(project.get('document_status') or {}, default=str)}\nRAG status: {json.dumps(project.get('rag_status') or {}, default=str)}", "complete"),
-        _section("dataset_foundation", "Dataset foundation summary", f"Rows: {schema.get('number_of_rows', 'not available')}; columns: {schema.get('number_of_columns', 'not available')}; ID columns: {schema.get('possible_id_columns', [])}; timestamp columns: {schema.get('possible_timestamp_date_columns', [])}.", _status_for(schema)),
-        _section("broad_exploration", "Broad exploration summary", _text(p3.get("promoted_patterns") or p3.get("saved_views"), "No broad exploration summary was provided."), _status_for(p3)),
-        _section("final_research_question", "Final research question", final_question_text or "No confirmed question is available.", _status_for(final_question_text)),
-        _section("pecot", "Population, exposure, comparator, outcome, and time window", json.dumps(final_design_summary, indent=2, default=str), _status_for(final_question_text)),
-        _section("feasibility", "Data-feasibility summary", json.dumps(feasibility or {"status": "not provided"}, indent=2, default=str), _status_for(feasibility, bool(feasibility.get("warnings")) if isinstance(feasibility, dict) else False)),
-        _section("role_table", "Final variable-role table", json.dumps(p4.get("confirmed_roles") or p4.get("candidate_variables") or [], indent=2, default=str), _status_for(p4.get("confirmed_roles") or p4.get("candidate_variables"))),
-        _section("causal_graph", "Confirmed causal graph and alternative graphs", json.dumps({"confirmed_graph": graph, "alternative_graphs": p6.get("alternative_graphs") or []}, indent=2, default=str), _status_for(graph)),
-        _section("graph_validation", "Graph validation summary", json.dumps(graph_validation or {"status": "not provided"}, indent=2, default=str), _status_for(graph_validation)),
-        _section("identification", "Identification result", json.dumps(identification or {"status": "not provided"}, indent=2, default=str), _status_for(identification)),
-        _section("adjustment_estimand", "Adjustment set and estimand", json.dumps({"adjustment_set": adjustment_set, "estimand": estimand}, indent=2, default=str), _status_for(adjustment_set or estimand)),
-        _section("strategy_assumptions", "Recommended strategy and assumptions", json.dumps({"recommended_strategy": strategy, "assumptions": assumptions, "actual_estimation_run": {"estimator": estimation_summary.get("model_type"), "formula": estimation_summary.get("formula"), "adjustment_set": estimation_summary.get("adjustment_set"), "proof_of_concept_note": "The actual run is a backend-computed proof-of-concept unless the recorded estimator explicitly implements repeated-measures handling."}}, indent=2, default=str), _status_for(strategy)),
-        _section("selected_estimation", "Selected primary estimation run", json.dumps(estimation_summary, indent=2, default=str), _status_for(estimation_summary.get("available")), [estimation_summary.get("warning")] if not estimation_summary.get("available") else []),
-        _section("estimate_diagnostics", "Estimate, uncertainty, diagnostics, and sensitivity results", json.dumps({"estimate": estimation_summary, "diagnostics": estimation_summary.get("diagnostics"), "sensitivity_results": (p8.get("selected_primary_run") or {}).get("sensitivity_results")}, indent=2, default=str), _status_for(estimation_summary.get("available"), bool(estimation_summary.get("warnings")))),
-        _section("rag_evidence", "RAG evidence summary", evidence_summary["summary"], _status_for(rag_evidence), evidence=evidence_summary.get("source_filenames")),
-        _section("evidence_limitations", "Evidence limitations", evidence_summary["evidence_boundary"], "warning" if not rag_evidence else "complete"),
-        _section("unresolved_warnings", "Unresolved warnings", "\n".join(unresolved_warnings) if unresolved_warnings else "No unresolved warnings were supplied.", "warning" if unresolved_warnings else "complete", unresolved_warnings),
-        _section("claim_boundaries", "What can and cannot be claimed", "Report requires revision before any interpretation because the selected question, graph, adjustment set, and estimation run are not aligned." if consistency_issues else "Can claim: a cautious association under the selected backend-computed model and reviewed assumptions.\nCannot claim: causal proof, true graph structure, clinical prediction, diagnosis, or treatment recommendations.", "warning" if consistency_issues else "complete", consistency_issues),
-        _section("reproducibility", "Reproducibility and provenance", json.dumps(estimation_summary.get("provenance") or {}, indent=2, default=str), _status_for(estimation_summary.get("provenance"))),
-        _section("user_notes", "User notes and review history", _text(payload.get("user_notes"), "No user notes provided."), "complete"),
-    ]
-
-    if not preferences.get("include_appendix", True):
-        sections = [section for section in sections if section["section_id"] not in {"reproducibility"}]
-    if not preferences.get("include_evidence_table", True):
-        sections = [section for section in sections if section["section_id"] != "rag_evidence"]
+    sections, _, _ = format_sections(
+        payload, final_design_summary, estimation_summary, evidence_summary, consistency_issues, limitations,
+    )
 
     ready_for_export = not missing_required
     status = "success" if ready_for_export else "requires_revision"
 
     return {
         "status": status,
-        "package_title": f"{final_design_summary['project_title']} - Review and Export Package",
+        "package_title": "Causal Studio Review and Export Report",
         "executive_summary": (
             "This package assembles the final causal design, evidence review, selected estimation run, diagnostics, "
             "limitations, and claim boundaries. It is conditional on the selected data, model, graph, assumptions, and evidence."
         ),
         "sections": sections,
+        "raw_artifacts": payload if preferences.get("include_raw_artifacts", False) else None,
         "final_design_summary": final_design_summary,
         "selected_estimation_summary": estimation_summary,
         "evidence_summary": evidence_summary,
@@ -479,6 +457,11 @@ def _markdown_for_package(package: dict[str, Any], include_appendix: bool = True
             for warning in section["warnings"]:
                 lines.append(f"- {warning}")
             lines.append("")
+    if include_appendix and package.get("raw_artifacts"):
+        lines.extend([
+            "## Technical Appendix: Raw backend artifacts", "", "```json",
+            json.dumps(package["raw_artifacts"], indent=2, default=str), "```", "",
+        ])
     if include_appendix:
         lines.extend([
             "## Appendix: Safety Boundary",

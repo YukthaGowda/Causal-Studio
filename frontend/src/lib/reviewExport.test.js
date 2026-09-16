@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getReviewExportBlockers, normalizeClaimAuditResult } from './reviewExport.js';
+import { getReviewExportBlockers, normalizeClaimAuditResult, renderReportContent } from './reviewExport.js';
+
+test('report tables and warnings render as printable HTML', () => {
+  const html = renderReportContent('| Field | Value |\n| --- | --- |\n| Estimate | 0 |\n\n### Data quality\n\n- Missing values\n- Review lag');
+  assert.match(html, /<table><thead>/);
+  assert.match(html, /<td>Estimate<\/td><td>0<\/td>/);
+  assert.match(html, /<h3>Data quality<\/h3><ul><li>Missing values/);
+});
+
+test('report content cannot inject executable HTML and preserves table pipes', () => {
+  const html = renderReportContent('| Field | Value |\n| --- | --- |\n| Formula | x &#124; y |\n<script>alert(1)</script>');
+  assert.ok(!html.includes('<script>'));
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /<td>x \| y<\/td>/);
+});
 
 test('reports blockers when export prerequisites are missing', () => {
   const blockers = getReviewExportBlockers({

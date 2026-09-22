@@ -334,3 +334,17 @@ export async function startStudyMode() {
   const response = await apiFetch("/study-mode/start", { method: "POST" });
   return parseJsonResponse(response, "Approved BDE workspace could not be loaded.");
 }
+
+export async function checkStudyHealth() {
+  return parseJsonResponse(await apiFetch('/study/health', { timeoutMs: 15000 }), 'Study service unavailable.');
+}
+export async function registerStudySession(payload) {
+  return parseJsonResponse(await apiFetch('/study/sessions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeoutMs: 15000,
+  }), 'Study session could not be registered.');
+}
+export async function submitPreSurvey(payload) {
+  return parseJsonResponse(await apiFetch('/study/surveys/pre', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeoutMs: 15000,
+  }), 'Pre-survey could not be saved.');
+}

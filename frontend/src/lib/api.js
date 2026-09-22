@@ -348,3 +348,9 @@ export async function submitPreSurvey(payload) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeoutMs: 15000,
   }), 'Pre-survey could not be saved.');
 }
+
+export async function submitPostSurvey(payload) {
+  return parseJsonResponse(await apiFetch('/study/surveys/post', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeoutMs: 15000,
+  }), 'Post-survey could not be saved.');
+}

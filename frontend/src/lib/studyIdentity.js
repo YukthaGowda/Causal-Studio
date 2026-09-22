@@ -39,6 +39,9 @@ export function createStudyIdentityManager(environment = globalThis) {
   }
   return {
     getIdentity,
+    isPostComplete: () => read('sessionStorage', key('post-complete')) === 'true',
+    markPostComplete: () => write('sessionStorage', key('post-complete'), 'true'),
+
     storageUnavailable: () => storageUnavailable,
     isComplete: () => read('sessionStorage', key('pre-complete')) === 'true',
     markComplete: () => write('sessionStorage', key('pre-complete'), 'true'),

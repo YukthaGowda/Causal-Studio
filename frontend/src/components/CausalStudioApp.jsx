@@ -1,3 +1,4 @@
+import { PostSurvey } from "./study/PostSurvey.jsx";
 import { followIngestion } from "../lib/ingestionLifecycle.js";
 import React, { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { buildChatContext, recentChatHistory } from "../lib/assistantContext.js";
@@ -7028,6 +7029,8 @@ function ReviewView({ state, actions }) {
         </div>
         <p>Everything confirmed across the workflow, assembled into one document you can export and share.</p>
       </div>
+
+      <PostSurvey />
 
       {studyMode && <div className="card"><div className="card-head"><div className="card-title">Prepared study report draft</div><span className="chip chip-warning">Prepared draft — editable, not yet confirmed.</span></div><p className="card-desc">This draft preserves warnings, incomplete states, limitations, and claim boundaries. Generate the backend package and complete claim audit before external export.</p><textarea className="text-area" value={reportPreview} onChange={(event) => setReportPreview(event.target.value)} rows={12} aria-label="Editable prepared study report draft" /></div>}
 

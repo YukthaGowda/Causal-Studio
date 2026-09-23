@@ -37,3 +37,16 @@ test('study API helpers call only the three requested endpoints', async () => {
     assert.equal(calls[2].options.method, 'POST');
   } finally { globalThis.fetch = original; }
 });
+
+test('event batch helper uses existing study API with events envelope', async () => {
+  const { submitStudyEventsBatch } = await import('../../lib/api.js');
+  const original = globalThis.fetch;
+  let sent;
+  globalThis.fetch = async (url, options) => { sent = { url, options }; return { ok: true, json: async () => ({ status: 'ok', inserted: 1, duplicates: 0 }) }; };
+  try {
+    const events = [{event_id:'test-event'}];
+    await submitStudyEventsBatch(events);
+    assert.equal(new URL(sent.url).pathname, '/study/events/batch');
+    assert.deepEqual(JSON.parse(sent.options.body), {events});
+  } finally { globalThis.fetch = original; }
+});

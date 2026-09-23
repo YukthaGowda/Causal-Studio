@@ -9,7 +9,7 @@ export const PRE_SURVEY_FIELDS = [
   ['passive_sensing_experience', 'Experience with passive sensing / wearable / smartphone data', experience],
 ];
 
-export function createStudySession(identityManager, api) {
+export function createStudySession(identityManager, api, onConfirmed = () => {}) {
   let state = { status: 'initializing', error: '', identity: null, storageUnavailable: false, pending: null };
   const listeners = new Set();
   let registering;
@@ -62,6 +62,7 @@ export function createStudySession(identityManager, api) {
       try {
         const result = await api.submitPreSurvey(payload);
         if (result.status !== 'ok') throw new Error('Not saved');
+        try { onConfirmed(identityManager.getIdentity()); } catch { /* Logging is non-blocking. */ }
         identityManager.markComplete();
         identityManager.savePending(null);
         update({ status: 'complete', pending: null, storageUnavailable: identityManager.storageUnavailable() });

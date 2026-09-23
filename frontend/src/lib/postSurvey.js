@@ -6,7 +6,7 @@ export const POST_RATINGS = [
   ['ai_assistant_helpfulness', 'Helpfulness of artificial intelligence assistant'],
   ['final_report_confidence', 'Confidence in reviewing the final report'],
 ];
-export function createPostSurvey(identityManager, send) {
+export function createPostSurvey(identityManager, send, onConfirmed = () => {}) {
   let state = { status: 'idle', error: '', pending: null };
   let inFlight;
   const listeners = new Set();
@@ -38,6 +38,7 @@ export function createPostSurvey(identityManager, send) {
       try {
         const result = await send(payload);
         if (result.status !== 'ok') throw Error();
+        try { onConfirmed(identityManager.getIdentity()); } catch { /* Logging is non-blocking. */ }
         identityManager.markPostComplete();
         update({ status: 'complete', pending: null });
       } catch {

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import sqlite3
 
+BUSY_TIMEOUT_MS = 5000
+
 
 class StudyConflict(Exception):
     pass
@@ -16,17 +18,32 @@ def now():
 
 
 def database_path():
-    return Path(os.environ.get('STUDY_DB_PATH') or Path(__file__).resolve().parents[2] / 'study_data' / 'study.sqlite')
+    configured = os.environ.get('STUDY_DB_PATH')
+    if configured is not None:
+        if not configured.strip():
+            raise sqlite3.OperationalError('Invalid study storage configuration.')
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / 'study_data' / 'study.sqlite'
 
 
 @contextmanager
 def connection():
     path = database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=5)
+    # No fallback when an explicitly configured volume path is unusable.
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_MS / 1000)
     db.row_factory = sqlite3.Row
     try:
+        db.execute(f'PRAGMA busy_timeout={BUSY_TIMEOUT_MS}')
         db.execute('PRAGMA foreign_keys=ON')
+        mode = db.execute('PRAGMA journal_mode').fetchone()[0]
+        if mode.lower() != 'wal':
+            mode = db.execute('PRAGMA journal_mode=WAL').fetchone()[0]
+        if mode.lower() != 'wal':
+            raise sqlite3.OperationalError('Study storage requires WAL support.')
+        # FULL syncs committed WAL writes; do not trade durability for throughput.
+        # SQLite creates -wal/-shm companions alongside this same database path.
+        db.execute('PRAGMA synchronous=FULL')
         db.executescript('''
         CREATE TABLE IF NOT EXISTS study_sessions (
           participant_id TEXT NOT NULL, session_id TEXT PRIMARY KEY, study_version TEXT NOT NULL,
@@ -100,5 +117,15 @@ def save_events(events):
 
 def health():
     with connection() as db:
-        db.execute('SELECT 1').fetchone()
-    return True
+        journal_mode = db.execute('PRAGMA journal_mode').fetchone()[0].lower()
+        # Verify write access without inserting or changing participant data.
+        # This does not establish that Railway has mounted persistent storage.
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('UPDATE study_sessions SET session_id=session_id WHERE 0')
+        db.rollback()
+    return {
+        'storage_available': True,
+        'configured_with_explicit_path': 'STUDY_DB_PATH' in os.environ,
+        'journal_mode': journal_mode,
+        'database_writable': True,
+    }

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -39,7 +40,93 @@ class StudyTests(unittest.TestCase):
         return self.client.post('/study/events/batch', json={'events': list(events)})
 
     def test_health(self):
-        self.assertEqual(self.client.get('/study/health').json(), {'status': 'ok', 'storage_available': True})
+        response = self.client.get('/study/health')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'status': 'ok', 'storage_available': True,
+            'configured_with_explicit_path': True, 'journal_mode': 'wal',
+            'database_writable': True,
+        })
+        for table in ('study_sessions', 'pre_surveys', 'post_surveys', 'study_events'):
+            self.assertEqual(self.rows(table), [])
+
+    def test_explicit_path_and_nested_directory_creation(self):
+        self.path = Path(self.temp.name) / 'volume' / 'study' / 'study.sqlite'
+        with patch.dict(os.environ, {'STUDY_DB_PATH': str(self.path)}):
+            self.assertEqual(study_storage.database_path(), self.path)
+            self.assertFalse(self.path.parent.exists())
+            self.assertEqual(self.client.get('/study/health').status_code, 200)
+            self.assertTrue(self.path.is_file())
+            self.assertEqual(list(Path(self.temp.name).rglob('*.sqlite')), [self.path])
+
+    def test_sqlite_settings_and_wal_companions(self):
+        with study_storage.connection() as db:
+            self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            self.assertEqual(db.execute('PRAGMA synchronous').fetchone()[0], 2)  # FULL
+            self.assertEqual(db.execute('PRAGMA foreign_keys').fetchone()[0], 1)
+            self.assertEqual(db.execute('PRAGMA busy_timeout').fetchone()[0], 5000)
+            for suffix in ('-wal', '-shm'):
+                self.assertTrue(self.path.with_name(self.path.name + suffix).is_file())
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute("INSERT INTO pre_surveys VALUES (?,?,?,?,?,?,?,?,?,?)", ('missing',) * 10)
+        with study_storage.connection() as reopened:
+            self.assertEqual(reopened.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            self.assertEqual(reopened.execute('PRAGMA synchronous').fetchone()[0], 2)
+
+    def test_invalid_configured_paths_never_fall_back(self):
+        blocker = Path(self.temp.name) / 'not-a-directory'
+        blocker.write_text('existing file')
+        for configured in (str(blocker / 'study.sqlite'), str(Path(self.temp.name)), '', '  '):
+            with self.subTest(configured=repr(configured)), patch.dict(os.environ, {'STUDY_DB_PATH': configured}):
+                response = self.client.get('/study/health')
+                self.assertEqual(response.status_code, 503)
+                self.assertIn('storage configuration', response.json()['detail'])
+                self.assertNotIn(str(self.temp.name), response.text)
+                self.assertEqual(self.register().status_code, 503)
+        self.assertEqual(list(Path(self.temp.name).rglob('*.sqlite')), [])
+
+    def test_permission_denied_is_safe(self):
+        with patch.object(Path, 'mkdir', side_effect=PermissionError('sensitive volume path')):
+            response = self.client.get('/study/health')
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('sensitive', response.text)
+        self.assertFalse(self.path.exists())
+
+    def test_read_only_database_is_not_reported_writable(self):
+        study_storage.health()
+        real_connect = sqlite3.connect
+
+        def read_only_connect(path, **kwargs):
+            self.assertEqual(path, self.path)
+            return real_connect(f'{self.path.as_uri()}?mode=ro', uri=True, **kwargs)
+
+        with patch.object(study_storage.sqlite3, 'connect', side_effect=read_only_connect):
+            response = self.client.get('/study/health')
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('database_writable', response.json())
+        self.assertNotIn(str(self.path), response.text)
+
+    def test_busy_timeout_and_recovery(self):
+        with study_storage.connection() as holder:
+            holder.execute('BEGIN IMMEDIATE')
+            # Exercise the real locking path without waiting the production five seconds.
+            with patch.object(study_storage, 'BUSY_TIMEOUT_MS', 50):
+                started = time.monotonic()
+                response = self.client.get('/study/health')
+                self.assertGreaterEqual(time.monotonic() - started, 0.025)
+                self.assertEqual(response.status_code, 503)
+            holder.rollback()
+        self.assertEqual(self.client.get('/study/health').status_code, 200)
+
+    def test_health_does_not_expose_records_or_paths(self):
+        self.register()
+        self.batch(self.event(user_input_text='Private study conversation'))
+        response = self.client.get('/study/health')
+        self.assertEqual(response.status_code, 200)
+        for value in (*self.identity.values(), str(self.path), 'Private study conversation', 'persistent'):
+            self.assertNotIn(value, response.text)
+        self.assertEqual(len(self.rows('study_sessions')), 1)
+        self.assertEqual(len(self.rows('study_events')), 1)
 
     def test_registration_and_retry(self):
         self.assertTrue(self.register().json()['created'])
@@ -168,7 +255,8 @@ class StudyTests(unittest.TestCase):
         self.assertIsNotNone(importlib.import_module('app.main').app)
         self.assertEqual(study_storage.database_path(), self.path)
         self.assertFalse(self.path.exists())
-        with patch.dict(os.environ, {'STUDY_DB_PATH': ''}):
+        with patch.dict(os.environ):
+            os.environ.pop('STUDY_DB_PATH', None)
             self.assertEqual(study_storage.database_path().name, 'study.sqlite')
             self.assertEqual(study_storage.database_path().parent.name, 'study_data')
 

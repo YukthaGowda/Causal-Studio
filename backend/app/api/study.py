@@ -113,7 +113,7 @@ def store(call, *args):
     except storage.StudyConflict as error:
         raise HTTPException(409, str(error)) from None
     except (sqlite3.Error, OSError):
-        raise HTTPException(503, 'Study storage unavailable. Please retry.') from None
+        raise HTTPException(503, 'Study storage unavailable. Check storage configuration and write permissions, then retry.') from None
 
 
 @router.post('/sessions')
@@ -143,5 +143,4 @@ async def events(request: Request):
 
 @router.get('/health')
 def health():
-    store(storage.health)
-    return {'status': 'ok', 'storage_available': True}
+    return {'status': 'ok', **store(storage.health)}

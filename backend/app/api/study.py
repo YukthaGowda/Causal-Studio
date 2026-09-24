@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 import sqlite3
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict, Field, AwareDatetime, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, AwareDatetime, ValidationError, field_validator, model_validator
 from app.services import study_storage as storage
 from app.services.study_privacy import safe_text, sanitize_metadata
 
@@ -66,6 +66,17 @@ class Event(Identity):
     assistant_output_text: Text = ''
     analysis_result_summary: Annotated[str, Field(max_length=2000)] = ''
     metadata_json: dict = Field(default_factory=dict)
+
+    @model_validator(mode='before')
+    @classmethod
+    def mark_text_sanitization(cls, value):
+        # Preserve evidence of server-side redaction without retaining the original.
+        # Leave text validation/length limits to the existing field validators.
+        if isinstance(value, dict) and isinstance(value.get('metadata_json', {}), dict):
+            fields = ('user_input_text', 'assistant_output_text', 'analysis_result_summary')
+            if any(isinstance(value.get(key), str) and safe_text(value[key]) != value[key] for key in fields):
+                value = {**value, 'metadata_json': {**value.get('metadata_json', {}), 'text_sanitized': True}}
+        return value
 
     @field_validator('user_input_text', 'assistant_output_text', 'analysis_result_summary')
     @classmethod

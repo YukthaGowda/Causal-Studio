@@ -1,3 +1,5 @@
+import { useStudy } from "./study/StudyProvider.jsx";
+import { createDashboardEvents, safeUploadMetadata } from "../lib/dashboardEvents.js";
 import { PostSurvey } from "./study/PostSurvey.jsx";
 import { followIngestion } from "../lib/ingestionLifecycle.js";
 import React, { useState, useRef, useMemo, useEffect, useCallback } from "react";
@@ -2315,6 +2317,7 @@ function ExploreView({ state, actions, onGoNext }) {
                 value={windowDays}
                 onChange={(e) => { setWindowDays(Number(e.target.value)); setWindowInput(String(e.target.value)); }}
                 onMouseUp={() => {
+                  actions.beginStudyAction("button_click", "exploration_window_commit").success();
                   if (!windowGuidanceFired.current) {
                     windowGuidanceFired.current = true;
                     pushAssistantNote("Time window set ✓ — next step: pick which data layers to include using the checkboxes below the filter ↓. Each checkbox controls which data source feeds the pattern charts on this page.");
@@ -2349,6 +2352,7 @@ function ExploreView({ state, actions, onGoNext }) {
                     type="checkbox"
                     checked={layers[l]}
                     onChange={() => {
+                      actions.beginStudyAction("button_click", "exploration_layer_change").success();
                       setLayers((s) => ({ ...s, [l]: !s[l] }));
                       if (!layerGuidanceFired.current) {
                         layerGuidanceFired.current = true;
@@ -2377,8 +2381,8 @@ function ExploreView({ state, actions, onGoNext }) {
         <div className="card-head">
           <div className="card-title">Variable distributions</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <ChartTypeSwitcher value={distChartType} onChange={setDistChartType} />
-            <select className="select-input" value={distMetric} onChange={(e) => setDistMetric(e.target.value)}>
+            <ChartTypeSwitcher value={distChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setDistChartType(value); }} />
+            <select className="select-input" value={distMetric} onChange={(e) => { actions.beginStudyAction("button_click", "exploration_metric_change").success(); setDistMetric(e.target.value); }}>
               {DIST_VARIABLE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
             </select>
           </div>
@@ -2400,8 +2404,8 @@ function ExploreView({ state, actions, onGoNext }) {
           <div className="card-head">
             <div className="card-title">Sensor adherence & coverage</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <ChartTypeSwitcher value={coverageChartType} onChange={setCoverageChartType} />
-              <select className="select-input" value={coverageMetric} onChange={(e) => setCoverageMetric(e.target.value)}>
+              <ChartTypeSwitcher value={coverageChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setCoverageChartType(value); }} />
+              <select className="select-input" value={coverageMetric} onChange={(e) => { actions.beginStudyAction("button_click", "exploration_metric_change").success(); setCoverageMetric(e.target.value); }}>
                 <option value="coverage">Coverage %</option>
                 <option value="missing">Missing %</option>
               </select>
@@ -2425,8 +2429,8 @@ function ExploreView({ state, actions, onGoNext }) {
           <div className="card-head">
             <div className="card-title">Temporal pattern</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <ChartTypeSwitcher value={tempChartType} onChange={setTempChartType} allow={["line", "area", "bar"]} />
-              <select className="select-input" value={tempMetric} onChange={(e) => setTempMetric(e.target.value)}>
+              <ChartTypeSwitcher value={tempChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setTempChartType(value); }} allow={["line", "area", "bar"]} />
+              <select className="select-input" value={tempMetric} onChange={(e) => { actions.beginStudyAction("button_click", "exploration_metric_change").success(); setTempMetric(e.target.value); }}>
                 {TEMPORAL_METRIC_OPTIONS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
               </select>
             </div>
@@ -2475,8 +2479,8 @@ function ExploreView({ state, actions, onGoNext }) {
         <div className="card-head">
           <div className="card-title">Within-person variability</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <ChartTypeSwitcher value={varChartType} onChange={setVarChartType} />
-            <select className="select-input" value={variabilityMetric} onChange={(e) => setVariabilityMetric(e.target.value)}>
+            <ChartTypeSwitcher value={varChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setVarChartType(value); }} />
+            <select className="select-input" value={variabilityMetric} onChange={(e) => { actions.beginStudyAction("button_click", "exploration_metric_change").success(); setVariabilityMetric(e.target.value); }}>
               <option value="variability">Variability index</option>
               <option value="phone">Phone missingness %</option>
               <option value="ema">EMA missingness %</option>
@@ -2902,7 +2906,7 @@ function QuestionView({ state, actions, onGoNext }) {
                     {discarded ? (
                       <button
                         className="btn btn-secondary btn-sm"
-                        onClick={() => { setVarStatuses((s) => ({ ...s, [v.name]: "selected" })); showToast(v.name + " selected for review."); }}
+                        onClick={() => { actions.beginStudyAction("variable_selection", "variable_selected", {variable_count:1}).success(); setVarStatuses((s) => ({ ...s, [v.name]: "selected" })); showToast(v.name + " selected for review."); }}
                       >Select</button>
                     ) : (
                       <button
@@ -3039,7 +3043,7 @@ function QuestionView({ state, actions, onGoNext }) {
                   style={{ width: "100%" }}
                   value={questionFields[key]}
                   onChange={(e) => updateQuestionField(key, e.target.value)}
-                  onBlur={() => (key === "timeWindow" || key === "estimand") && questionFields[key] && actions.noteQuestionFieldEdit(key)}
+                  onBlur={() => { if (["exposure", "outcome"].includes(key)) actions.beginStudyAction("variable_selection", "question_variable_reviewed", {role:key}).success(); if ((key === "timeWindow" || key === "estimand") && questionFields[key]) actions.noteQuestionFieldEdit(key); }}
                 />
               </div>
             ))}
@@ -3598,7 +3602,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
         <div className="card">
           <div className="card-head">
             <div className="card-title">Distribution — {focusVar}</div>
-            <ChartTypeSwitcher value={distChartType} onChange={setDistChartType} />
+            <ChartTypeSwitcher value={distChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setDistChartType(value); }} />
           </div>
           <p className="card-desc">{distInfo.label} · role: <strong>{focusRole}</strong>. Try switching chart types.</p>
           <FlexibleChart
@@ -3618,7 +3622,7 @@ function FeasibilityView({ state, actions, onGoNext }) {
         <div className="card">
           <div className="card-head">
             <div className="card-title">Temporal pattern — {focusVar}</div>
-            <ChartTypeSwitcher value={tempChartType} onChange={setTempChartType} allow={["line", "area", "bar"]} />
+            <ChartTypeSwitcher value={tempChartType} onChange={value => { actions.beginStudyAction("button_click", "exploration_chart_change").success(); setTempChartType(value); }} allow={["line", "area", "bar"]} />
           </div>
           <p className="card-desc">14-day trajectory (mean per day). Use this to sanity-check timestamps and drift.</p>
           <FlexibleChart
@@ -4450,7 +4454,7 @@ function GraphView({ state, actions, onGoNext }) {
           <span><span className="legend-dot legend-dash" />Uncertain edge</span>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select className="select-input" value={graphType} onChange={(e) => setGraphType(e.target.value)} title="Graph type">
+          <select className="select-input" value={graphType} onChange={(e) => { actions.beginStudyAction("graph_action", "graph_type_change").success(); setGraphType(e.target.value); }} title="Graph type">
             {GRAPH_TYPE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
           <button className="btn btn-primary btn-sm" onClick={() => generateFirstPassGraph()} disabled={!canUseGraphBackend || graphActionStatus?.kind === "loading"}>
@@ -4624,7 +4628,7 @@ function GraphView({ state, actions, onGoNext }) {
         {selectedNode && (
           <div className="graph-side-panel">
             <h4>Node</h4>
-            <input className="select-input" style={{ width: "100%", marginBottom: 8 }} value={selectedNode.label} onChange={(e) => renameNode(selectedNode.id, e.target.value)} />
+            <input className="select-input" style={{ width: "100%", marginBottom: 8 }} value={selectedNode.label} onBlur={() => actions.beginStudyAction("graph_action", "graph_node_label_reviewed").success()} onChange={(e) => renameNode(selectedNode.id, e.target.value)} />
             <span className="filter-label">Role</span>
             <select className="select-input" style={{ width: "100%", marginTop: 4 }} value={variableRoles[selectedNode.id] || "Unassigned"} onChange={(e) => setNodeRole(selectedNode.id, e.target.value)}>
               {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -5204,11 +5208,13 @@ function StrategyViewPhase7({ state, actions, onGoNext }) {
 
   function addAdjustmentVar() {
     if (!newAdjustmentVar || editableAdjustmentSet.includes(newAdjustmentVar)) return;
+    actions.beginStudyAction("variable_selection", "adjustment_variable_add", {role:"confounder",variable_count:editableAdjustmentSet.length+1}).success();
     setEditableAdjustmentSet([...editableAdjustmentSet, newAdjustmentVar]);
     setNewAdjustmentVar("");
   }
 
   function removeAdjustmentVar(variable) {
+    actions.beginStudyAction("variable_selection", "adjustment_variable_remove", {role:"confounder",variable_count:Math.max(0,editableAdjustmentSet.length-1)}).success();
     setEditableAdjustmentSet(editableAdjustmentSet.filter((item) => item !== variable));
   }
 
@@ -5632,11 +5638,12 @@ function buildPackageReportHTML(report) {
 function downloadPDFReport(state, report) {
   const html = Array.isArray(report?.sections) ? buildPackageReportHTML(report) : buildReportHTML(state);
   const w = window.open("", "_blank", "width=960,height=800,scrollbars=yes");
-  if (!w) { alert("Pop-up blocked — please allow pop-ups for this page and try again."); return; }
+  if (!w) { alert("Pop-up blocked — please allow pop-ups for this page and try again."); return false; }
   w.document.write(html);
   w.document.close();
   w.focus();
   setTimeout(() => w.print(), 700);
+  return true;
 }
 
 function backendEstimationToRun(response, tag, fallbackConfig = {}) {
@@ -5799,6 +5806,8 @@ function EstimationView({ state, actions, onGoNext }) {
   }
 
   async function validateConfig() {
+    const studyTrace = actions.beginStudyAction("estimation_action", "estimation_validation", {});
+    try {
     const payload = buildEstimationPayload();
     if (!backendStatus.connected) {
       setEstimationStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
@@ -5819,6 +5828,7 @@ function EstimationView({ state, actions, onGoNext }) {
         participant_id: payload.participant_id,
         timestamp: payload.timestamp,
       });
+      studyTrace.capture(response);
       setEstimationValidation(response);
       recordStudyEvent?.("estimation_validated", { status: response.status || "unknown" });
       setEstimationStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Configuration ${response.status}.` });
@@ -5826,12 +5836,19 @@ function EstimationView({ state, actions, onGoNext }) {
         ? "Phase 8 configuration validation completed. Python will compute all numerical results; I will only interpret returned values."
         : "Phase 8 configuration is not runnable yet. Review the blocking issues before running estimation.");
     } catch (error) {
+      studyTrace.fail();
       setEstimationStatus({ kind: "error", message: friendlyError(error, "Config validation failed.") });
       pushAssistantNote(`Estimation config validation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function runEstimation(tag = "Primary") {
+    const studyTrace = actions.beginStudyAction("estimation_action", "estimation_run", {});
+    try {
     if (isRunning) return;
     const dataset = firstRealDataset(datasets);
     if (!backendStatus.connected) {
@@ -5872,6 +5889,7 @@ function EstimationView({ state, actions, onGoNext }) {
     };
     try {
       const response = await runBackendEstimation(payload);
+      studyTrace.capture(response);
       recordStudyEvent?.("estimation_run", { status: response.status || "unknown" });
       clearInterval(backendRunInterval);
       setRunProgress(100);
@@ -5911,12 +5929,17 @@ function EstimationView({ state, actions, onGoNext }) {
         advanceGuidance("estimation", "run_complete", "Clean run - no warnings. Use Interpret Current Estimate for a plain-language explanation of the computed output.");
       }
     } catch (error) {
+      studyTrace.fail();
       clearInterval(backendRunInterval);
       pushAssistantNote(`Estimation failed: ${friendlyError(error)} Try checking the selected exposure, outcome, adjustment variables, and whether Logit needs a linear fallback.`);
       showToast("Estimation failed.");
     } finally {
       setIsRunning(false);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function interpretEstimate() {
@@ -5938,6 +5961,8 @@ function EstimationView({ state, actions, onGoNext }) {
     await runAssistantAction("Explain Diagnostics");
   }
   function exportRunLog() {
+    const studyTrace = actions.beginStudyAction("report_export", "run_log_export", {});
+    try {
     const lines = runs.map((r, i) =>
       [
         `--- Run ${i + 1} ---`,
@@ -5964,23 +5989,35 @@ function EstimationView({ state, actions, onGoNext }) {
     a.href = url; a.download = "estimation_run_log.txt"; a.click();
     URL.revokeObjectURL(url);
     showToast("Run log exported.");
+
+    studyTrace.downloadInitiated();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function selectPrimaryRun(run) {
+    const studyTrace = actions.beginStudyAction("estimation_action", "primary_run_selection", {});
+    try {
     setPrimaryRunId(run.id);
     setPrimaryEstimationRun(run);
     recordStudyEvent?.("primary_estimation_selected", { run_id: run.id });
     if (backendStatus.connected) {
       try {
         const response = await selectPrimaryEstimationRun({ run_id: run.id });
+      studyTrace.capture(response);
         if (response.status !== "success") {
           pushAssistantNote(response.message || "Primary run was selected locally, but backend selection did not complete.");
         }
       } catch (error) {
+      studyTrace.fail();
         pushAssistantNote(`Primary run selected locally, but backend selection failed: ${friendlyError(error)}`);
       }
     }
     pushAssistantNote(`Run selected as the primary result. Confirm and Continue is now enabled. This selection does not prove causality; it marks the computed run for review/export.`);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   return (
@@ -6786,7 +6823,7 @@ function ReviewView({ state, actions }) {
   }
 
   function returnToRecoveryPhase(phase) {
-    goToPage(phase);
+    goToPage(phase, "recovery");
     showToast(phase === "question" ? "Returned to Question & Variables to align the report design." : "Returned to Analysis Strategy to align the adjustment set and estimation plan.");
   }
 
@@ -6820,6 +6857,8 @@ function ReviewView({ state, actions }) {
   }
 
   function handlePreviewReport() {
+    const studyTrace = actions.beginStudyAction("button_click", "report_preview", {});
+    try {
     if (hasAlignmentBlocker) {
       notifyPreviewExportBlocked();
       return;
@@ -6829,6 +6868,10 @@ function ReviewView({ state, actions }) {
       return;
     }
     setIsEditingReport((value) => !value);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function saveReportVersion(label, text, packageSnapshot = reportDraft, auditSnapshot = claimAudit) {
@@ -6849,6 +6892,8 @@ function ReviewView({ state, actions }) {
       await runAssistantAction(prompt);
       return;
     }
+    actions.beginStudyAction("button_click", "review_assistant_action").success();
+    const chatTrace = actions.beginStudyChat(prompt);
     try {
       const response = await assistantAction({
         phase: "phase_9_review_export",
@@ -6867,13 +6912,17 @@ function ReviewView({ state, actions }) {
         user_feedback: prompt,
         rag_evidence: reportDraft?.rag_evidence || [],
       });
-      pushAssistantNote(assistantMessageFromResponse(response));
+      const answer = assistantMessageFromResponse(response);
+      pushAssistantNote(answer, "review", chatTrace.message(answer, response));
     } catch (error) {
-      pushAssistantNote(`Review assistant action failed: ${friendlyError(error)} Use deterministic report sections and claim audit as the source of truth.`);
+      const answer = `Review assistant action failed: ${friendlyError(error)} Use deterministic report sections and claim audit as the source of truth.`;
+      pushAssistantNote(answer, "review", chatTrace.message(answer, {}, "error_response"));
     }
   }
 
   async function handleGenerateReport() {
+    const studyTrace = actions.beginStudyAction("report_export", "report_generation", {});
+    try {
     if (hasAlignmentBlocker) {
       notifyPreviewExportBlocked();
       return;
@@ -6888,6 +6937,7 @@ function ReviewView({ state, actions }) {
     try {
       if (!backendStatus.connected) throw new Error("Backend unavailable - generated local incomplete draft.");
       const report = await assembleReviewPackage(payload);
+      studyTrace.capture(report);
       const preview = reportToMarkdown(report, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(report);
       setReportPreview(preview);
@@ -6896,6 +6946,7 @@ function ReviewView({ state, actions }) {
       pushAssistantNote("The Phase 9 review package is assembled. Review missing items, estimation diagnostics, evidence limits, and claim boundaries before exporting.");
       showToast("Review package assembled.");
     } catch (error) {
+      studyTrace.fail();
       const localDraft = {
         package_title: "Causal Design Agent Review Package",
         status: selectedRun ? "fallback" : "fallback",
@@ -6922,9 +6973,15 @@ function ReviewView({ state, actions }) {
     } finally {
       setReportLoading(false);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function handleClaimAudit() {
+    const studyTrace = actions.beginStudyAction("report_export", "report_claim_audit", {});
+    try {
     setAuditLoading(true);
     try {
       const assembled = reportDraft || (backendStatus.connected
@@ -6953,28 +7010,37 @@ function ReviewView({ state, actions }) {
         safe_language_suggestions: ["under the specified model and assumptions", "requires expert review"],
         ready_for_export: false,
       };
+      studyTrace.capture(audit);
       setClaimAudit(normalizeClaimAuditResult(audit));
       saveReportVersion("Claim-audited draft", reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }), assembled, audit);
       const blockingCount = (audit.flagged_claims || []).filter((item) => item.severity === "blocking").length;
       pushAssistantNote(`Claim audit returned ${audit.status}. ${blockingCount} blocking issue(s) must be revised before external export.`);
       showToast("Claim audit complete.");
     } catch (error) {
+      studyTrace.fail();
       setClaimAudit(normalizeClaimAuditResult({ status: "fail", flagged_claims: [{ text: "Claim audit request", issue_type: "diagnostic_conflict", severity: "blocking", explanation: friendlyError(error), suggested_revision: "Fix the audit request and rerun before export." }], blocked_phrases: [], safe_language_suggestions: [], ready_for_export: false }));
       pushAssistantNote(`Claim audit failed: ${friendlyError(error)} Keep report language conservative until this is resolved.`);
       showToast("Claim audit failed.");
     } finally {
       setAuditLoading(false);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function handleExportReviewPackage(format) {
+    const studyTrace = actions.beginStudyAction("report_export", format === "pdf" ? "report_pdf_preview" : "report_export", { export_format: format });
+    try {
     actions.recordStudyEvent?.("export_attempted", { format });
     if (format === "pdf") {
       if (!exportReady) {
         notifyPreviewExportBlocked();
         return;
       }
-      downloadPDFReport(state, reportDraft);
+      const previewOpened = downloadPDFReport(state, reportDraft);
+      if (previewOpened) studyTrace.opened(); else { studyTrace.blocked(); return; }
       showToast("Print-ready report opened - use your browser's Print dialog to save as PDF.");
       pushAssistantNote("I opened a print-ready report preview. This proof of concept uses browser Save as PDF; a server-generated PDF can be added later.");
       return;
@@ -7003,13 +7069,21 @@ function ReviewView({ state, actions }) {
           content: format === "markdown" ? (reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit })) : JSON.stringify({ assembled_package: assembled, claim_audit_result: audit, report_preview: reportPreview }, null, 2),
           warnings: ["Backend unavailable - local export generated."],
         };
+      studyTrace.capture(result);
     const filename = exportReport(format === "markdown" ? { markdown: result.content } : JSON.parse(result.content), format);
+    studyTrace.downloadInitiated();
     saveReportVersion(`Exported ${format.toUpperCase()}`, result.content, assembled, audit);
     (result.warnings || []).forEach((warning) => pushAssistantNote(warning));
     showToast(`Exported ${result.filename || filename}`);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function applySafeRevision(flaggedClaim) {
+    const studyTrace = actions.beginStudyAction("button_click", "report_safe_revision", {});
+    try {
     if (!flaggedClaim?.suggested_revision) return;
     const original = flaggedClaim.text || "";
     const replacement = flaggedClaim.suggested_revision;
@@ -7019,6 +7093,10 @@ function ReviewView({ state, actions }) {
     setReportPreview(nextPreview);
     saveReportVersion("Revised draft", nextPreview, reportDraft, claimAudit);
     showToast("Suggested safer wording applied to the report preview.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   return (
@@ -7400,6 +7478,12 @@ function ReviewView({ state, actions }) {
 }
 
 export default function CausalStudioApp() {
+  const study = useStudy();
+  const dashboardEventsRef = useRef(null);
+  if (!dashboardEventsRef.current) dashboardEventsRef.current = createDashboardEvents(event => study?.logStudyEvent?.(event));
+  const dashboardEvents = dashboardEventsRef.current;
+  useEffect(() => { dashboardEvents.enter("setup"); }, [dashboardEvents]);
+  function beginStudyAction(type, label, metadata) { return dashboardEvents.begin(page, type, label, metadata); }
   const [page, setPage] = useState("setup");
   const [visited, setVisited] = useState({ setup: true });
 
@@ -7482,6 +7566,9 @@ export default function CausalStudioApp() {
   const typedChatDataset = useRef(null);
   const guidanceProgress = useRef({});
   const assistantThread = assistantThreads[page] || [];
+  useEffect(() => {
+    dashboardEvents.displayMessages(page, assistantThreads[page]);
+  }, [dashboardEvents, page, assistantThreads]);
 
   useEffect(() => {
     if (assistantScrollRef.current) assistantScrollRef.current.scrollTop = assistantScrollRef.current.scrollHeight;
@@ -7489,9 +7576,9 @@ export default function CausalStudioApp() {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
   const setAction = (key, status) => setActionStatus((current) => ({ ...current, [key]: status }));
-  function pushAssistantNote(text, targetPage) {
+  function pushAssistantNote(text, targetPage, studyMessage) {
     const key = targetPage || page;
-    setAssistantThreads((t) => ({ ...t, [key]: [...(t[key] || []), { role: "assistant", text }] }));
+    setAssistantThreads((t) => ({ ...t, [key]: [...(t[key] || []), studyMessage || { role: "assistant", text }] }));
   }
   // Fires a guidance message exactly once per (pageKey, task) pair for the lifetime of the session.
   // Use this for turn-based guidance: when a user completes one task, call advanceGuidance to
@@ -7535,9 +7622,12 @@ export default function CausalStudioApp() {
   }
 
   async function startFixedBdeStudyMode() {
+    const studyTrace = beginStudyAction("button_click", "study_workspace_open", {});
+    try {
     setAction("studyMode", { kind: "loading", message: "Loading approved workspace…" });
     try {
       const result = await startStudyMode();
+      studyTrace.capture(result);
       const dataset = schemaToDataset({ name: result.dataset.original_filename, size: result.dataset.file_size_bytes }, result.dataset, result.dataset.schema, { rows: 0, cols: 0 });
       const drafts = result.frozen_drafts || {};
       setStudyMode({ ...result, active: true });
@@ -7574,8 +7664,13 @@ export default function CausalStudioApp() {
       setAction("studyMode", { kind: "success", message: "Approved BDE workspace loaded. Prepared drafts are editable and not yet confirmed." });
       pushAssistantNote("Approved BDE workspace loaded: approved files are registered. Prepared drafts are editable and not yet confirmed. Python computes all numerical outputs.", "setup");
     } catch (error) {
+      studyTrace.fail();
       setAction("studyMode", { kind: "error", message: friendlyError(error, "Approved BDE workspace could not be loaded.") });
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function resetApprovedBdeWorkspaceVariables() {
@@ -7737,6 +7832,8 @@ export default function CausalStudioApp() {
   }
 
   async function addDatasets(files) {
+    const studyTrace = beginStudyAction("dataset_upload", "dataset_upload", safeUploadMetadata(files));
+    try {
     if (!files?.length) return;
     pushAssistantNote("Checking this now - confirming it is a valid dataset file, scanning columns and row structure...");
     setAction("datasetUpload", { kind: "loading", message: "Uploading dataset and parsing schema…" });
@@ -7764,6 +7861,7 @@ export default function CausalStudioApp() {
         setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
         pushAssistantNote(buildRealSchemaAssistantMessage(schema));
       } catch (error) {
+      studyTrace.fail();
         additions.push({
           id: `${f.name}-${Date.now()}-${i}`,
           name: f.name,
@@ -7828,6 +7926,7 @@ export default function CausalStudioApp() {
     });
     if (additions.length) {
       const blocked = additions.find((a) => a.status === "blocking");
+      if (blocked) studyTrace.fail();
       const flagged = additions.find((a) => a.status !== "ready" && a.status !== "blocking");
       if (blocked) {
         pushAssistantNote(`${blocked.name} could not be parsed - re-export as CSV and upload again.`);
@@ -7848,23 +7947,31 @@ export default function CausalStudioApp() {
         }
       }
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
-  function removeDataset(id) { setDatasets((d) => d.filter((x) => x.id !== id)); }
-  function toggleDataset(id) { setDatasets((d) => d.map((x) => (x.id === id ? { ...x, expanded: !x.expanded } : x))); }
+  function removeDataset(id) { beginStudyAction("button_click", "dataset_remove").success(); setDatasets((d) => d.filter((x) => x.id !== id)); }
+  function toggleDataset(id) { beginStudyAction("button_click", "dataset_schema_toggle").success(); setDatasets((d) => d.map((x) => (x.id === id ? { ...x, expanded: !x.expanded } : x))); }
   async function replaceDataset(_id, file) {
     if (!file) return;
     await addDatasets([file]);
   }
   async function addDictionary(files) {
+    const studyTrace = beginStudyAction("document_upload", "dictionary_upload", safeUploadMetadata(files));
+    try {
     const f = files[0];
     if (!f) return;
     setAction("dictionaryUpload", { kind: "loading", message: "Uploading data dictionary..." });
     try {
       const uploaded = await uploadDocument(f, "data_dictionary");
       const validation = await validateDocumentCategory(uploaded.saved_filename, "data_dictionary");
+      studyTrace.capture(validation);
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setAction("dictionaryUpload", { kind: documentValidationKind(validation), message: documentValidationMessage(validation, "Data dictionary stored in the backend document library.") });
     } catch (error) {
+      studyTrace.fail();
       setAction("dictionaryUpload", { kind: "error", message: friendlyError(error, "Data dictionary upload failed.") });
       pushAssistantNote(`Data dictionary upload failed: ${friendlyError(error)} Backend document upload currently accepts PDF, DOCX, and TXT.`);
       return;
@@ -7886,24 +7993,38 @@ export default function CausalStudioApp() {
     } else {
       pushAssistantNote(`Dictionary uploaded — ${missing} variable(s) are incomplete. Add their data type, range, and an example value, then re-upload.`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function addProtocol(files) {
+    const studyTrace = beginStudyAction("document_upload", "protocol_upload", safeUploadMetadata(files));
+    try {
     if (!files?.[0]) return;
     setAction("protocolUpload", { kind: "loading", message: "Uploading protocol..." });
     try {
       const uploaded = await uploadDocument(files[0], "protocol");
       const validation = await validateDocumentCategory(uploaded.saved_filename, "protocol");
+      studyTrace.capture(validation);
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setAction("protocolUpload", { kind: documentValidationKind(validation), message: documentValidationMessage(validation, "Protocol stored in the backend document library.") });
     } catch (error) {
+      studyTrace.fail();
       setAction("protocolUpload", { kind: "error", message: friendlyError(error, "Protocol upload failed.") });
       pushAssistantNote(`Protocol upload failed: ${friendlyError(error)}`);
       return;
     }
     setProtocol({ name: files[0].name, size: files[0].size });
     pushAssistantNote(`Protocol uploaded ✓ — I'll use it to flag any design-vs-data inconsistencies in Data Foundation.`);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function addPapers(files) {
+    const studyTrace = beginStudyAction("document_upload", "papers_upload", safeUploadMetadata(files));
+    try {
     if (!files?.length) return;
     setAction("paperUpload", { kind: "loading", message: "Uploading research papers..." });
     try {
@@ -7913,9 +8034,11 @@ export default function CausalStudioApp() {
         validations.push(await validateDocumentCategory(uploaded.saved_filename, "research_paper"));
       }
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      validations.forEach(validation => studyTrace.capture(validation));
       const needsReview = validations.find((item) => documentValidationKind(item) !== "success");
       setAction("paperUpload", { kind: needsReview ? documentValidationKind(needsReview) : "success", message: needsReview ? documentValidationMessage(needsReview) : "Research papers uploaded and validated." });
     } catch (error) {
+      studyTrace.fail();
       setAction("paperUpload", { kind: "error", message: friendlyError(error, "Research paper upload failed.") });
       pushAssistantNote(`Research paper upload failed: ${friendlyError(error)}`);
       return;
@@ -7932,8 +8055,14 @@ export default function CausalStudioApp() {
     } else {
       pushAssistantNote(`Paper(s) uploaded ✓ — I'll use these as evidence when suggesting variable roles and causal relationships.`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function addGuidelines(files) {
+    const studyTrace = beginStudyAction("document_upload", "guidance_upload", safeUploadMetadata(files));
+    try {
     if (!files?.length) return;
     setAction("guidelineUpload", { kind: "loading", message: "Uploading guidance documents..." });
     try {
@@ -7943,9 +8072,11 @@ export default function CausalStudioApp() {
         validations.push(await validateDocumentCategory(uploaded.saved_filename, "domain_guidance"));
       }
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      validations.forEach(validation => studyTrace.capture(validation));
       const needsReview = validations.find((item) => documentValidationKind(item) !== "success");
       setAction("guidelineUpload", { kind: needsReview ? documentValidationKind(needsReview) : "success", message: needsReview ? documentValidationMessage(needsReview) : "Guidance documents uploaded and validated." });
     } catch (error) {
+      studyTrace.fail();
       setAction("guidelineUpload", { kind: "error", message: friendlyError(error, "Guidance upload failed.") });
       pushAssistantNote(`Guidance upload failed: ${friendlyError(error)}`);
       return;
@@ -7956,8 +8087,14 @@ export default function CausalStudioApp() {
     });
     setGuidelines((g) => [...g, ...additions]);
     pushAssistantNote(`Guideline(s) uploaded ✓ — I'll use these as domain standards when framing measurement concepts and study limitations.`);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function handleDocumentIngestion() {
+    const studyTrace = beginStudyAction("document_ingestion", "document_ingestion", {});
+    try {
     if (ingestionMonitor.current) return;
     const controller = new AbortController();
     ingestionMonitor.current = controller;
@@ -7969,6 +8106,7 @@ export default function CausalStudioApp() {
         initialStatus: ingestionInfo,
         signal: controller.signal,
         onUpdate: status => {
+          if (status.status === "running") studyTrace.running();
           setIngestionInfo(status);
           if (!["completed", "ready"].includes(status.status)) {
             setAction("documentIngestion", { kind: "loading", message: status.status === "running"
@@ -7977,11 +8115,13 @@ export default function CausalStudioApp() {
           }
         },
       });
+      studyTrace.capture(result);
       const chunkCount = result.stored_chunks ?? result.chunks_created ?? 0;
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setAction("documentIngestion", { kind: "success", message: `Documents ingested. ${chunkCount} chunks available for RAG search.` });
       pushAssistantNote(`Document knowledge base updated: ${chunkCount} chunks are available. Retrieved evidence does not prove causal claims.`);
     } catch (error) {
+      studyTrace.fail(error?.payload?.failed_step);
       if (controller.signal.aborted) return;
       setIngestionInfo(error.payload || { status: "unknown", message: friendlyError(error) });
       setAction("documentIngestion", { kind: "error", message: friendlyError(error, "Could not confirm ingestion completion.") });
@@ -7989,11 +8129,18 @@ export default function CausalStudioApp() {
     } finally {
       if (ingestionMonitor.current === controller) ingestionMonitor.current = null;
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function handleDictionaryRagCheck() {
+    const studyTrace = beginStudyAction("rag_search", "rag_search", {});
+    try {
     setAction("ragCheck", { kind: "loading", message: "Checking the document knowledge base..." });
     try {
       const response = await searchRag("What evidence or guidance helps interpret the uploaded study variables and measurement timing?", 3, ingestionInfo);
+      studyTrace.capture(response);
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       const count = response.number_of_results ?? response.results?.length ?? 0;
       const sources = [...new Set((response.results || []).map((item) => item.source_filename || item.metadata?.source_filename).filter(Boolean))];
@@ -8004,11 +8151,18 @@ export default function CausalStudioApp() {
       setAction("ragCheck", { kind: "success", message: summary });
       pushAssistantNote(`${summary} Retrieved passages are supporting evidence for design review, not causal conclusions.`);
     } catch (error) {
+      studyTrace.fail();
       setAction("ragCheck", { kind: "error", message: friendlyError(error, "RAG evidence check failed.") });
       pushAssistantNote(`RAG evidence check failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function handleBroadExploration() {
+    const studyTrace = beginStudyAction("button_click", "broad_exploration", {});
+    try {
     const dataset = firstRealDataset(datasets);
     if (!dataset) {
       setAction("broadExploration", { kind: "error", message: "Upload a CSV dataset before running broad exploration." });
@@ -8021,15 +8175,21 @@ export default function CausalStudioApp() {
     setAction("broadExploration", { kind: "loading", message: "Running Python broad exploration..." });
     try {
       const result = await runBroadExploration(realDatasetFilename(dataset));
+      studyTrace.capture(result);
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
       setBroadExploration(result);
       const warningCount = result.data_quality_warnings?.length || 0;
       setAction("broadExploration", { kind: "success", message: `Broad exploration complete with ${warningCount} data-quality note${warningCount === 1 ? "" : "s"}.` });
       pushAssistantNote("Python computed the broad exploration summaries. Review missingness, participant structure, timestamps, and correlations as hypothesis-generating evidence only. These patterns do not establish causality.");
     } catch (error) {
+      studyTrace.fail();
       setAction("broadExploration", { kind: "error", message: friendlyError(error, "Broad exploration failed.") });
       pushAssistantNote(`Broad exploration failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function buildPhase4Payload(extra = {}) {
@@ -8074,6 +8234,8 @@ export default function CausalStudioApp() {
   }
 
   async function handleGenerateQuestionCandidates(mode = "generate") {
+    const studyTrace = beginStudyAction("button_click", "question_generation", {});
+    try {
     if (!backendStatus.connected) {
       setPhase4Status({ kind: "error", message: "Backend unavailable - showing existing draft question examples." });
       pushAssistantNote("I could not call the Phase 4 backend, so keep using the local draft examples for now.");
@@ -8086,6 +8248,7 @@ export default function CausalStudioApp() {
           ? `${phase4Feedback}\nGenerate an alternative set while preserving locked user decisions.`
           : phase4Feedback,
       }));
+      studyTrace.capture(response);
       setQuestionCandidates(response.questions || []);
       setPhase4Status({
         kind: response.status === "fallback" ? "warning" : "success",
@@ -8097,12 +8260,19 @@ export default function CausalStudioApp() {
           : "I generated candidate questions using the current schema, uploaded evidence, and exploration context. These are drafts and need your review before continuing."
       );
     } catch (error) {
+      studyTrace.fail();
       setPhase4Status({ kind: "error", message: friendlyError(error, "Question candidate generation failed.") });
       pushAssistantNote(`Question candidate generation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   async function handleRecommendCandidateVariables() {
+    const studyTrace = beginStudyAction("variable_selection", "variables_recommendation", {});
+    try {
     const confirmed = questionFields?.question || questionCandidates[0]?.question_text || "";
     if (!confirmed) {
       showToast("Select or write a question before recommending variables.");
@@ -8119,6 +8289,7 @@ export default function CausalStudioApp() {
         confirmed_question: confirmed,
         user_feedback: phase4Feedback,
       }));
+      studyTrace.capture(response);
       setCandidateVariables(response.candidate_variables || []);
       setDerivedFeatureCandidates(response.derived_feature_candidates || []);
       setPhase4Status({
@@ -8137,16 +8308,27 @@ export default function CausalStudioApp() {
           : "I generated candidate variables and derived features using the current schema, uploaded evidence, and exploration context. These are provisional and need your review before continuing."
       );
     } catch (error) {
+      studyTrace.fail();
       setPhase4Status({ kind: "error", message: friendlyError(error, "Candidate variable recommendation failed.") });
       pushAssistantNote(`Candidate variable recommendation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function selectGeneratedQuestion(candidate) {
+    const studyTrace = beginStudyAction("button_click", "question_selection", {});
+    try {
     setSelectedQuestionId(candidate.id);
     setQuestionFields(questionCandidateToFields(candidate));
     setPhase4Status({ kind: "warning", message: "Question selected as needs user review. Confirm or edit it before Phase 5." });
     pushAssistantNote("Question selected as a draft. Review the comparator, time window, and estimand direction before confirming.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function updateQuestionCandidate(id, patch) {
@@ -8156,6 +8338,8 @@ export default function CausalStudioApp() {
   }
 
   function confirmCurrentQuestion(candidate = null) {
+    const studyTrace = beginStudyAction("button_click", "question_confirmation", {});
+    try {
     const fields = candidate ? questionCandidateToFields(candidate) : questionFields;
     if (candidate) {
       setSelectedQuestionId(candidate.id);
@@ -8172,6 +8356,10 @@ export default function CausalStudioApp() {
     setPhase4Status({ kind: "success", message: "Question confirmed for targeted feasibility review." });
     recordStudyEvent("question_confirmed");
     pushAssistantNote("Question confirmed for Phase 5 feasibility review. This confirms wording, not causal validity.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function buildFeasibilityPayload() {
@@ -8238,6 +8426,8 @@ export default function CausalStudioApp() {
   }
 
   async function handleRunFeasibilityCheck() {
+    const studyTrace = beginStudyAction("feasibility_check", "feasibility_check", {});
+    try {
     const dataset = firstRealDataset(datasets);
     if (!dataset) {
       setAction("targetedFeasibility", { kind: "error", message: "Upload a CSV dataset before running targeted feasibility." });
@@ -8256,6 +8446,7 @@ export default function CausalStudioApp() {
     setAction("targetedFeasibility", { kind: "loading", message: "Running feasibility checks…" });
     try {
       const response = await runFeasibilityCheck(payload);
+      studyTrace.capture(response);
       setTargetedFeasibilityResult(response);
       recordStudyEvent("feasibility_run", { status: response.status || "unknown" });
       const issueCount = (response.blocking_issues || []).length + (response.warnings || []).length;
@@ -8265,25 +8456,44 @@ export default function CausalStudioApp() {
       });
       pushAssistantNote("Python calculated the feasibility diagnostics from the uploaded dataset. I can explain the implications, but these checks do not establish causality.");
     } catch (error) {
+      studyTrace.fail();
       setAction("targetedFeasibility", { kind: "error", message: friendlyError(error, "Targeted feasibility check failed.") });
       pushAssistantNote(`Targeted feasibility check failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function applyVariableDecision(variableName, decision) {
+    const studyTrace = beginStudyAction("variable_selection", "variable_decision", {});
+    try {
     setCandidateVariables((items) => items.map((item) => (
       item.variable_name === variableName ? { ...item, user_decision: decision, status: decision === "Modify" ? "user_edited" : "needs_user_review" } : item
     )));
     if (decision === "Exclude") {
       setVariableRole(variableName, "Unassigned");
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function promotePattern(id) {
+    const studyTrace = beginStudyAction("button_click", "exploration_pattern_promote", {});
+    try {
     setPromotedPatterns((p) => (p.includes(id) ? p : [...p, id]));
     pushAssistantNote("Pattern promoted ✓ — it will seed a suggested question in Step 4. Promote 1–2 more if relevant, then continue.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function saveExploreView(view) {
+    const studyTrace = beginStudyAction("button_click", "exploration_view_save", {});
+    try {
     const savedView = {
       id: `explore-view-${Date.now()}`,
       created_at: new Date().toISOString(),
@@ -8292,6 +8502,10 @@ export default function CausalStudioApp() {
     setSavedExploreViews((views) => [...views, savedView]);
     pushAssistantNote(`Saved exploration view: ${savedView.label}. Treat it as hypothesis-generating context only, not causal evidence.`);
     showToast("Exploration view saved.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function toggleSensitivity(id) {
@@ -8374,6 +8588,8 @@ export default function CausalStudioApp() {
     setSelectedNodeId(null);
   }
   function addGraphNode() {
+    const studyTrace = beginStudyAction("graph_action", "graph_node_add", {});
+    try {
     const id = `custom_${Date.now()}`;
     setGraphNodes((nodes) => [...nodes, { id, label: "New variable", role: "Unassigned", temporalRole: "unknown", measurementRole: "unknown", isCore: false, x: 450, y: 460 }]);
     setSelectedNodeId(id);
@@ -8381,21 +8597,39 @@ export default function CausalStudioApp() {
     setGraphValidationResult(null);
     pushAssistantNote("Node added — name it and assign a role in the right panel (Confounder, Mediator, or Proxy). Without a role it won't appear in the adjustment set.");
     advanceGuidance("causal-graph", "first_node_added", "Node added! Now let's connect it — select it as the source and click another node to draw a causal arrow between them.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function removeGraphNode(id) {
+    const studyTrace = beginStudyAction("graph_action", "graph_node_remove", {});
+    try {
     setGraphNodes((nodes) => nodes.filter((n) => n.id !== id));
     setGraphEdges((edges) => edges.filter((e) => e.from !== id && e.to !== id));
     setSelectedNodeId(null);
     setGraphValidationResult(null);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function renameNode(id, label) {
     setGraphNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, label } : n)));
     setGraphValidationResult(null);
   }
   function setNodeRole(id, role) {
+    const studyTrace = beginStudyAction("graph_action", "graph_node_role_change", { role: String(role).toLowerCase() });
+    try {
     setVariableRole(id, role);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function addGraphEdge(from, to) {
+    const studyTrace = beginStudyAction("graph_action", "graph_edge_add", {});
+    try {
     setGraphEdges((edges) => {
       if (edges.some((e) => e.from === from && e.to === to)) return edges;
       return [...edges, { id: `e_${Date.now()}`, from, to, type: "uncertain", edgeType: "uncertain", confidence: "uncertain", userModified: true }];
@@ -8403,13 +8637,25 @@ export default function CausalStudioApp() {
     setGraphValidationResult(null);
     pushAssistantNote(`Arrow added: ${from} → ${to} (Uncertain). Click it to mark Supported if you have evidence, or remove it if the relationship is unclear.`);
     advanceGuidance("causal-graph", "first_edge_added", "First arrow drawn — nice! Keep adding the rest of your confounders and mediators, then classify each arrow as Supported or Uncertain. When the graph looks right, check the adjustment set at the bottom — that's your signal to move on.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function removeGraphEdge(id) {
+    const studyTrace = beginStudyAction("graph_action", "graph_edge_remove", {});
+    try {
     setGraphEdges((edges) => edges.filter((e) => e.id !== id));
     setSelectedEdgeId(null);
     setGraphValidationResult(null);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function setEdgeType(id, type) {
+    const studyTrace = beginStudyAction("graph_action", "graph_edge_change", {});
+    try {
     setGraphEdges((edges) => edges.map((e) => (e.id === id ? { ...e, type, edgeType: type === "uncertain" ? "uncertain" : "directed", userModified: true } : e)));
     setGraphValidationResult(null);
     const edge = graphEdges.find((e) => e.id === id);
@@ -8420,21 +8666,37 @@ export default function CausalStudioApp() {
           : `${edge.from} → ${edge.to} marked Supported ✓ — strengthens the identification argument in the study report.`
       );
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function resetGraph() {
+    const studyTrace = beginStudyAction("graph_action", "graph_reset", {});
+    try {
     setGraphNodes(DEFAULT_GRAPH_NODES.map((n) => ({ ...n })));
     setGraphEdges(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setGraphValidationResult(null);
     setGraphVersionLabel("Version 0");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function loadGraphVariant(nodes, edges) {
+    const studyTrace = beginStudyAction("graph_action", "graph_variant_load", {});
+    try {
     setGraphNodes(nodes.map((n) => ({ ...n })));
     setGraphEdges(edges.map((e) => ({ ...e })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setGraphValidationResult(null);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function graphBackendPayload(extra = {}) {
     const dataset = firstRealDataset(datasets);
@@ -8509,6 +8771,8 @@ export default function CausalStudioApp() {
     };
   }
   async function handleGenerateAnalysisStrategy(mode = "generate", userFeedback = "") {
+    const studyTrace = beginStudyAction("identification_check", "identification_check", {});
+    try {
     if (!backendStatus.connected) {
       setAnalysisStrategyStatus({ kind: "error", message: "Backend unavailable - start FastAPI to run Phase 7 identification." });
       pushAssistantNote("Phase 7 needs the FastAPI backend. This page can still display draft guidance, but backend identification and validation are unavailable.");
@@ -8517,6 +8781,7 @@ export default function CausalStudioApp() {
     setAnalysisStrategyStatus({ kind: "loading", message: mode === "alternative" ? "Generating alternative strategy…" : "Generating strategy and validating identification…" });
     try {
       const response = await generateAnalysisStrategy(analysisStrategyPayload({ user_feedback: userFeedback }));
+      studyTrace.capture(response);
       setAnalysisStrategyResult(response);
       const recommended = response.identification?.recommended_adjustment_set || [];
       setEditableAdjustmentSet(recommended);
@@ -8527,11 +8792,18 @@ export default function CausalStudioApp() {
       setAnalysisStrategyStatus({ kind: response.identification?.status === "not_identified" ? "error" : "success", message: `Identification ${response.identification?.status || "reviewed"} with ${warningCount} warning${warningCount === 1 ? "" : "s"}.` });
       pushAssistantNote("Phase 7 identification checks are complete. This defines an analysis plan only; it does not estimate effects or prove causal validity.");
     } catch (error) {
+      studyTrace.fail();
       setAnalysisStrategyStatus({ kind: "error", message: friendlyError(error, "Analysis strategy generation failed.") });
       pushAssistantNote(`Phase 7 strategy generation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function handleValidateAnalysisStrategy() {
+    const studyTrace = beginStudyAction("identification_check", "adjustment_validation", {});
+    try {
     if (!backendStatus.connected) {
       setAnalysisStrategyStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
       return;
@@ -8549,15 +8821,21 @@ export default function CausalStudioApp() {
         feasibility_result: base.feasibility_result,
         schema_summary: base.schema_summary,
       });
+      studyTrace.capture(response);
       setAnalysisStrategyValidation(response);
       setAnalysisStrategyStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Adjustment validation ${response.status}.` });
       pushAssistantNote(response.status === "invalid"
         ? "Adjustment-set validation found blocking issues. Fix them before Phase 8."
         : "Adjustment-set validation completed. If it requires review, document the warning before continuing to estimation.");
     } catch (error) {
+      studyTrace.fail();
       setAnalysisStrategyStatus({ kind: "error", message: friendlyError(error, "Analysis strategy validation failed.") });
       pushAssistantNote(`Phase 7 validation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function updateAnalysisDraft(section, key, value) {
     setAnalysisStrategyDraft((draft) => ({
@@ -8574,6 +8852,8 @@ export default function CausalStudioApp() {
     setAnalysisStrategyConfirmed(null);
   }
   function confirmAnalysisStrategy() {
+    const studyTrace = beginStudyAction("identification_check", "strategy_confirmation", {});
+    try {
     const validation = analysisStrategyValidation;
     const checks = validation?.checks || {};
     if (!analysisStrategyResult) {
@@ -8604,8 +8884,14 @@ export default function CausalStudioApp() {
     });
     recordStudyEvent("strategy_confirmed");
     pushAssistantNote("Analysis strategy confirmed for Phase 8. This confirms a reviewed plan, not a causal conclusion.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function generateFirstPassGraph(versionLabel = "Version 1", userFeedback = "") {
+    const studyTrace = beginStudyAction("graph_action", "graph_generation", {});
+    try {
     if (!backendStatus.connected) {
       setGraphActionStatus({ kind: "error", message: "Backend unavailable - graph generation needs FastAPI." });
       pushAssistantNote("Start the FastAPI backend, then generate the first-pass graph. I will keep this as a draft until deterministic validation passes.");
@@ -8615,6 +8901,7 @@ export default function CausalStudioApp() {
     try {
       const payload = graphBackendPayload({ user_feedback: userFeedback });
       const response = await generateCausalGraph(payload);
+      studyTrace.capture(response);
       const converted = backendGraphToFrontend(response);
       if (converted.nodes.length) {
         setGraphNodes(converted.nodes);
@@ -8630,11 +8917,18 @@ export default function CausalStudioApp() {
       setGraphActionStatus({ kind: "success", message: `Draft generated with ${warningCount} warning${warningCount === 1 ? "" : "s"}.` });
       pushAssistantNote("First-pass causal graph generated. This is a draft for review; deterministic Python validation checks structure, timing, roles, and adjustment risks before continuation.");
     } catch (error) {
+      studyTrace.fail();
       setGraphActionStatus({ kind: "error", message: friendlyError(error, "Graph generation failed.") });
       pushAssistantNote(`Graph generation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   async function validateCurrentGraph() {
+    const studyTrace = beginStudyAction("graph_action", "graph_validation", {});
+    try {
     if (!backendStatus.connected) {
       setGraphActionStatus({ kind: "error", message: "Backend unavailable - validation needs FastAPI." });
       return;
@@ -8643,6 +8937,7 @@ export default function CausalStudioApp() {
     try {
       const payload = graphBackendPayload();
       const response = await validateCausalGraph(payload);
+      studyTrace.capture(response);
       setGraphValidationResult(response);
       recordStudyEvent("graph_saved_or_validated", { status: response.status || "unknown" });
       const problemCount = (response.errors?.length || 0) + (response.warnings?.length || 0);
@@ -8651,9 +8946,14 @@ export default function CausalStudioApp() {
         ? "Graph validation completed. Review warnings carefully; warning-level graphs may continue only after user review."
         : "Graph validation found blocking errors. Fix cycles, self-loops, unknown nodes, or invalid adjustment choices before continuing.");
     } catch (error) {
+      studyTrace.fail();
       setGraphActionStatus({ kind: "error", message: friendlyError(error, "Graph validation failed.") });
       pushAssistantNote(`Graph validation failed: ${friendlyError(error)}`);
     }
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function generateAlternativeGraph() {
     const next = graphAlternatives.length + 1;
@@ -8661,10 +8961,18 @@ export default function CausalStudioApp() {
     generateFirstPassGraph(`Alternative ${next}`, "Generate a defensible alternative structure while preserving locked user edits.");
   }
   function saveGraphAlternative() {
+    const studyTrace = beginStudyAction("graph_action", "graph_alternative_save", {});
+    try {
     setGraphAlternatives((items) => [...items, { label: graphVersionLabel || `Alternative ${items.length + 1}`, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult }]);
     showToast("Alternative graph saved.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function confirmGraph() {
+    const studyTrace = beginStudyAction("graph_action", "graph_confirmation", {});
+    try {
     if (graphValidationResult?.status === "invalid") {
       showToast("Graph validation is invalid. Fix errors before confirming the graph.");
       return;
@@ -8680,19 +8988,37 @@ export default function CausalStudioApp() {
     recordStudyEvent("graph_saved_or_validated", { status: "confirmed" });
     pushAssistantNote("Graph confirmed for downstream planning. This confirms a reviewed design draft, not a proven causal structure.");
     showToast("Graph confirmed.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function reverseGraphEdge(id) {
+    const studyTrace = beginStudyAction("graph_action", "graph_edge_reverse", {});
+    try {
     setGraphEdges((edges) => edges.map((edge) => edge.id === id ? { ...edge, from: edge.to, to: edge.from, userModified: true, type: "uncertain", edgeType: "uncertain" } : edge));
     setGraphValidationResult(null);
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function toggleEdgeLock(id) {
+    const studyTrace = beginStudyAction("graph_action", "graph_edge_lock", {});
+    try {
     setGraphEdges((edges) => edges.map((edge) => edge.id === id ? { ...edge, locked: !edge.locked, userModified: true } : edge));
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function toggleRepeatedMeasures(id) {
     setRepeatedMeasuresChecks((s) => ({ ...s, [id]: !s[id] }));
   }
 
   function setVariableRole(name, role) {
+    const studyTrace = beginStudyAction("variable_selection", "variable_role_change", { role: String(role).toLowerCase() });
+    try {
     setVariableRoles((r) => {
       const next = { ...r };
       if (role === "Exposure" || role === "Outcome") {
@@ -8717,8 +9043,13 @@ export default function CausalStudioApp() {
       pushAssistantNote(`${name} → ${role}. Add an arrow for it in Causal Graph to include it in the adjustment set.`);
     }
     advanceGuidance("question", "first_role_assigned", "First role assigned — keep going! Once every variable has a role, you're all set. Click Continue to Feasibility and we'll check if the data can actually support the analysis.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
   function selectSuggestedQuestion(pid, altQuestion) {
+    beginStudyAction("button_click", "suggested_question_selection").success();
     const q = QUESTION_TEMPLATES[pid];
     if (!q) return;
     setSelectedQuestionId(pid);
@@ -8727,6 +9058,7 @@ export default function CausalStudioApp() {
     advanceGuidance("question", "question_selected", "Great choice! Now review the seven fields below and tweak anything that doesn't quite match your design — especially the time window and estimand. Then assign a role to each variable in the table.");
   }
   function writeOwnQuestion() {
+    beginStudyAction("button_click", "question_draft_start").success();
     setSelectedQuestionId("custom");
     setQuestionFields({ ...BLANK_QUESTION_FIELDS });
     pushAssistantNote("Fill in all seven fields: population, exposure, comparator, outcome, time window, unit of analysis, and estimand. Every field stays editable through Step 5.");
@@ -8743,7 +9075,13 @@ export default function CausalStudioApp() {
     }
   }
   function toggleDerivedFeature(id) {
+    const studyTrace = beginStudyAction("variable_selection", "derived_feature_toggle", {});
+    try {
     setDerivedFeatures((list) => list.map((f) => (f.id === id ? { ...f, selected: !f.selected } : f)));
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   function applyFeedback() {
@@ -8754,9 +9092,15 @@ export default function CausalStudioApp() {
     setShowFeedback(false);
   }
   function reviewObjective() {
+    const studyTrace = beginStudyAction("button_click", "objective_review", {});
+    try {
     setShowFeedback(true);
     pushAssistantNote("Objective reviewed — see feedback below. Address any flagged gaps, then upload your dataset in the section below.");
     advanceGuidance("setup", "objective_reviewed", "Nice — objective saved! Now upload your primary dataset below ↓. You can add one file per data source (EMA, wearable, clinical, etc.). The readiness checklist at the top will tick off as you go.");
+
+    studyTrace.success();
+    } catch (studyError) { studyTrace.fail(); throw studyError; }
+    finally { studyTrace.finish(); }
   }
 
   const blockingDatasets = datasets.some((d) => d.status === "blocking");
@@ -8785,12 +9129,13 @@ export default function CausalStudioApp() {
     return parsedOk && linkingOk && !multiTimestamp;
   }, [datasets, blockingDatasets]);
 
-  function goToPage(key) {
+  function goToPage(key, navigationSource = "workflow") {
     if (key === page) return;
     if (!BUILT_PAGES.includes(key)) {
       showToast("This page hasn't been built in the prototype yet.");
       return;
     }
+    dashboardEvents.enter(key, navigationSource);
     setPage(key);
     recordStudyEvent("phase_changed", { phase: key });
     if (!visited[key]) {
@@ -9098,6 +9443,8 @@ export default function CausalStudioApp() {
   }
 
   async function runAssistantAction(prompt) {
+    const studyTrace = beginStudyAction("button_click", "assistant_action");
+    const chatTrace = dashboardEvents.chat(page, prompt);
     const phase = ASSISTANT_PHASE_MAP[page];
     const useBackendAction = Boolean(ASSISTANT_PHASE_MAP[page]);
     setAssistantThreads((t) => ({ ...t, [page]: [...(t[page] || []), { role: "user", text: prompt }] }));
@@ -9116,9 +9463,10 @@ export default function CausalStudioApp() {
       });
       setAssistantThreads((t) => ({
         ...t,
-        [page]: [...(t[page] || []), { role: "assistant", text: assistantMessageFromResponse(response) }],
+        [page]: [...(t[page] || []), chatTrace.message(assistantMessageFromResponse(response), response)],
       }));
       setBackendStatus({ checked: true, connected: true, message: "Connected to FastAPI" });
+      studyTrace.success();
       return assistantMessageFromResponse(response);
     } catch (error) {
       const fallbackText = `LLM response is unavailable, but I can still explain the current workflow state using deterministic dashboard information.\n\n${friendlyError(error)}`;
@@ -9126,12 +9474,10 @@ export default function CausalStudioApp() {
         ...t,
         [page]: [
           ...(t[page] || []),
-          {
-            role: "assistant",
-            text: fallbackText,
-          },
+          chatTrace.message(fallbackText, {}, "fallback_response"),
         ],
       }));
+      studyTrace.fail();
       return fallbackText;
     } finally {
       setAssistantThinking(false);
@@ -9140,6 +9486,7 @@ export default function CausalStudioApp() {
   async function submitAssistantInput() {
     const q = assistantInput.trim();
     if (!q || typedChatPending.current || assistantThinking) return;
+    const chatTrace = dashboardEvents.chat(page, q);
     const originPage = page;
     const context = buildChatContext(state, page, {
       checks,
@@ -9159,9 +9506,10 @@ export default function CausalStudioApp() {
       const response = await assistantChat({ message: q, workflow_step: originPage, context, history });
       const answer = assistantMessageFromResponse(response);
       typedChatHistory.current = recentChatHistory([...history, { role: 'user', content: q }, { role: 'assistant', content: answer }]);
-      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { role: 'assistant', text: answer, warning: response.warning }] }));
+      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { ...chatTrace.message(answer, response), warning: response.warning }] }));
     } catch (error) {
-      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), { role: 'assistant', text: `I couldn't reach the chat service. ${friendlyError(error)} Please try again.` }] }));
+      const answer = `I couldn't reach the chat service. ${friendlyError(error)} Please try again.`;
+      setAssistantThreads(t => ({ ...t, [originPage]: [...(t[originPage] || []), chatTrace.message(answer, {}, "error_response")] }));
     } finally {
       typedChatPending.current = false;
       setAssistantThinking(false);
@@ -9207,7 +9555,7 @@ export default function CausalStudioApp() {
       showToast("Run backend estimation and select a primary result before continuing to Review and Export.");
       return;
     }
-    goToPage(nextPage);
+    goToPage(nextPage, "assistant");
   }
 
   const actions = {
@@ -9215,7 +9563,7 @@ export default function CausalStudioApp() {
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
-    handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, resetApprovedBdeWorkspaceVariables, applySelectedEstimationCovariatesToReportDraft, recordStudyEvent, exportStudySessionLog,
+    beginStudyAction, beginStudyChat: (prompt) => dashboardEvents.chat(page, prompt), handleDocumentIngestion, handleDictionaryRagCheck, handleBroadExploration, startFixedBdeStudyMode, resetApprovedBdeWorkspaceVariables, applySelectedEstimationCovariatesToReportDraft, recordStudyEvent, exportStudySessionLog,
     handleGenerateQuestionCandidates, handleRecommendCandidateVariables, selectGeneratedQuestion, updateQuestionCandidate, confirmCurrentQuestion,
     phase4Feedback, setPhase4Feedback, applyVariableDecision,
     handleRunFeasibilityCheck,
@@ -9248,7 +9596,7 @@ export default function CausalStudioApp() {
       <div className="leftnav">
         <div className="leftnav-brand"><span className="dot" /> Causal Studio</div>
         {STEPS.map((s, i) => (
-          <button key={s.key} className={`nav-item ${page === s.key ? "active" : ""}`} title={s.full} onClick={() => goToPage(s.key)}>
+          <button key={s.key} className={`nav-item ${page === s.key ? "active" : ""}`} title={s.full} onClick={() => goToPage(s.key, "sidebar")}>
             <span className="num">{i + 1}</span>
             {s.short}
             {!BUILT_PAGES.includes(s.key) && <Lock size={11} className="lock" />}

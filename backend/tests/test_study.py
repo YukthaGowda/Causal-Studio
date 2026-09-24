@@ -106,6 +106,45 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(self.client.post('/study/events/batch', content='x'*256001).status_code, 413)
         self.assertEqual(self.rows('study_events'), [])
 
+    def test_dashboard_event_metadata(self):
+        self.register()
+        request_id = str(uuid4())
+        safe = {
+            'request_id': request_id, 'from_phase': 'setup', 'to_phase': 'graph',
+            'role': 'confounder', 'text_sanitized': True, 'text_truncated': True,
+            'chunk_count': 233, 'failed_step': 'embedding',
+            'error_category': 'action_failed',
+        }
+        self.assertEqual(self.batch(self.event(metadata_json={
+            **safe, 'variable_name': 'private_column', 'filename': 'private.pdf',
+            'request_payload': {'email': 'private@example.com'},
+            'navigation_source': 'sidebar', 'file_count': 2, 'adjustment_variable_count': 3,
+        })).status_code, 200)
+        stored = json.loads(self.rows('study_events')[0]['metadata_json'])
+        self.assertEqual(stored, {**safe, 'metadata_sanitized': True})
+        self.assertEqual(self.batch(self.event(metadata_json={
+            'request_id': 'private@example.com', 'file_type': 'private.pdf',
+            'from_phase': 'private_value', 'role': 'private_column', 'file_count': -1,
+            'text_sanitized': 'private', 'text_truncated': 1,
+        })).status_code, 200)
+        self.assertEqual(json.loads(self.rows('study_events')[1]['metadata_json']), {'metadata_sanitized': True})
+
+    def test_visible_chat_storage_and_sanitization_marker(self):
+        self.register()
+        request_id = str(uuid4())
+        user = self.event(event_type='chat_user_message', phase='question', user_input_text='What did the evidence show?', metadata_json={'request_id': request_id})
+        answer = self.event(event_type='chat_assistant_response', phase='question', assistant_output_text='The cited study supports review, not causal proof.', metadata_json={'request_id': request_id, 'source': 'llm_response', 'retrieved_chunks': ['HIDDEN_CHUNK'], 'system_prompt': 'HIDDEN_PROMPT'})
+        self.assertEqual(self.batch(user, answer).json()['inserted'], 2)
+        rows = self.rows('study_events')
+        self.assertEqual(rows[0]['user_input_text'], user['user_input_text'])
+        self.assertEqual(rows[1]['assistant_output_text'], answer['assistant_output_text'])
+        self.assertEqual(json.loads(rows[1]['metadata_json'])['request_id'], json.loads(rows[0]['metadata_json'])['request_id'])
+        self.assertNotIn('HIDDEN_', json.dumps(rows))
+        self.batch(self.event(event_type='chat_assistant_response', assistant_output_text='Contact person@example.com', metadata_json={'source': 'error_response'}))
+        row = self.rows('study_events')[-1]
+        self.assertEqual(row['assistant_output_text'], 'Contact [email removed]')
+        self.assertTrue(json.loads(row['metadata_json'])['text_sanitized'])
+
     def test_unknown_session_and_atomic_conflict(self):
         self.assertEqual(self.batch(self.event()).status_code, 409)
         self.register()

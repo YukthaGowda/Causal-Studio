@@ -8,6 +8,13 @@ ENUMS = {
     "status": {"started", "running", "completed", "success", "error", "failed", "blocked", "unknown", "ready", "requires_revision"},
     "format": {"json", "markdown", "pdf"},
 }
+PHASES = {"setup", "data-foundation", "explore", "question", "feasibility", "graph", "strategy", "estimation", "review"}
+ENUMS.update({
+    "from_phase": PHASES, "to_phase": PHASES,
+    "role": {"exposure", "outcome", "confounder", "mediator", "collider", "context", "proxy", "unassigned"},
+    "failed_step": {"document_loading", "chunking", "embedding", "vector_store", "unknown"},
+    "error_category": {"action_failed", "unavailable", "validation", "blocked"},
+})
 COUNTS = {"row_count", "column_count", "document_count", "chunk_count", "warning_count", "sample_size", "node_count", "edge_count", "duration_ms"}
 
 
@@ -29,7 +36,11 @@ def sanitize_metadata(value):
         raise ValueError("Metadata exceeds size limit")
     clean = {}
     for key, item in value.items():
-        if key in ENUMS and isinstance(item, str) and item in ENUMS[key]:
+        if key == "request_id" and isinstance(item, str) and re.fullmatch(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", item):
+            clean[key] = item
+        elif key in {"text_sanitized", "text_truncated", "metadata_sanitized"} and item is True:
+            clean[key] = True
+        elif key in ENUMS and isinstance(item, str) and item in ENUMS[key]:
             clean[key] = item
         elif key in COUNTS and type(item) is int and 0 <= item <= 10**12:
             clean[key] = item

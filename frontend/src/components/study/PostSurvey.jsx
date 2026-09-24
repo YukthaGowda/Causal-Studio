@@ -33,7 +33,14 @@ function ConnectedPostSurvey({ controller }) {
 }
 export function PostSurvey() {
   const study = useStudy();
-  return <details className="card">
+  function logOpen(event) {
+    if (!event.currentTarget.open) return;
+    try {
+      study?.logStudyEvent?.({ event_type: 'button_click', event_label: 'post_survey_opened',
+        phase: 'review', metadata: { action_status: 'attempted' } });
+    } catch { /* Telemetry must not block the survey. */ }
+  }
+  return <details className="card" onToggle={logOpen}>
     <summary style={{ cursor: 'pointer' }}>Complete post-survey</summary>
     <p>This survey is optional. You can complete it even if analysis or export is incomplete, and continue reviewing your report.</p>
     {study?.postSurvey ? <ConnectedPostSurvey controller={study.postSurvey} /> : <p role="status">Study session unavailable. You can continue reviewing your report.</p>}

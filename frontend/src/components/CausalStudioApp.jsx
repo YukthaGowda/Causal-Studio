@@ -1,3 +1,5 @@
+import { useWorkflowDesign } from '../lib/useWorkflowDesign.js';
+import { currentDesign, designKeys, runAlignment, reviewDesignState, variableSet, DESIGN_CHANGED_MESSAGE, PREVIOUS_RUN_LABEL } from '../lib/workflowDesign.js';
 import { useStudy } from "./study/StudyProvider.jsx";
 import { createDashboardEvents, safeUploadMetadata } from "../lib/dashboardEvents.js";
 import { PostSurvey } from "./study/PostSurvey.jsx";
@@ -2646,6 +2648,7 @@ function QuestionView({ state, actions, onGoNext }) {
       showToast("Please confirm or use a research question before continuing.");
       return;
     }
+    if (!confirmCurrentQuestion()) return;
     onGoNext();
   }
 
@@ -5715,11 +5718,9 @@ function EstimationView({ state, actions, onGoNext }) {
   const chosenEstimator = ESTIMATOR_OPTIONS.find((o) => o.key === estimatorFamily) || ESTIMATOR_OPTIONS[0];
   const estimationDataset = firstRealDataset(datasets);
   const estimationColumns = estimationDataset?.schema?.column_names || [];
-  const estimationExposure = estimationColumns.includes("acc_mean_magnitude") ? "acc_mean_magnitude" : questionFields?.exposure || "";
-  const estimationOutcome = studyMode?.dataset?.derived_outcome?.column && estimationColumns.includes(studyMode.dataset.derived_outcome.column)
-    ? studyMode.dataset.derived_outcome.column
-    : estimationColumns.includes("label") ? "label" : questionFields?.outcome || "";
-  const estimationAdjustment = ["time_of_day", "day_of_week"].filter((name) => estimationColumns.includes(name));
+  const design = currentDesign(state);
+  const estimationExposure = design.question.exposure || "";
+  const estimationOutcome = design.question.outcome || "";
   const readinessItems = [
     { label: "Backend connected", ok: backendStatus.connected },
     { label: "Dataset uploaded", ok: Boolean(estimationDataset?.savedFilename) },
@@ -5733,8 +5734,9 @@ function EstimationView({ state, actions, onGoNext }) {
   const [configOpen, setConfigOpen] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [runProgress, setRunProgress] = useState(0);
-  const [runs, setRuns] = useState([]);
-  const [primaryRunId, setPrimaryRunId] = useState(null);
+  const runs = state.estimationRuns;
+  const setRuns = actions.setEstimationRuns;
+  const primaryRunId = runAlignment(state, state.primaryEstimationRun).compatible ? state.primaryEstimationRun.id : null;
   const [compareIds, setCompareIds] = useState([]);
   const [activeRunId, setActiveRunId] = useState(null);
   const [interpretVersions, setInterpretVersions] = useState([]);
@@ -5742,16 +5744,18 @@ function EstimationView({ state, actions, onGoNext }) {
   const [interpretLockedIdx, setInterpretLockedIdx] = useState(null);
   const [estimationValidation, setEstimationValidation] = useState(null);
   const [estimationStatus, setEstimationStatus] = useState(null);
+  useEffect(() => { setEstimationValidation(null); setEstimationStatus(null); }, [design.key]);
 
   const activeRun = runs.find((r) => r.id === activeRunId) || runs[runs.length - 1] || null;
   const compareRuns = compareIds.length >= 2 ? runs.filter((r) => compareIds.includes(r.id)) : [];
-  const phase7Estimand = analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || {};
-  const phase7Strategy = analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {};
-  const phase7Adjustment = editableAdjustmentSet?.length ? editableAdjustmentSet : estimationAdjustment.length ? estimationAdjustment : adjustmentSet.filter((name) => estimationColumns.includes(name));
+  const phase7Estimand = design.strategy.estimand || {};
+  const phase7Strategy = design.strategy.strategy || {};
+  const phase7Adjustment = design.adjustmentSet;
   const canValidateEstimation = Boolean(
     backendStatus.connected
     && estimationDataset?.savedFilename
-    && (analysisStrategyConfirmed || analysisStrategyValidation?.safe_to_continue_to_estimation)
+    && design.questionConfirmed && design.graphConfirmed && design.strategyConfirmed
+    && [estimationExposure, estimationOutcome, ...phase7Adjustment].every(name => estimationColumns.includes(name))
   );
   const canRunEstimation = Boolean(
     canValidateEstimation
@@ -5766,25 +5770,25 @@ function EstimationView({ state, actions, onGoNext }) {
 
   function buildEstimationPayload(tag = "Primary") {
     const dataset = firstRealDataset(datasets);
-    const exposure = estimationExposure || phase7Estimand.exposure || dataset?.schema?.possible_numeric_columns?.[0] || "";
-    const outcome = estimationOutcome || phase7Estimand.outcome || dataset?.schema?.column_names?.find((name) => name !== exposure) || "";
+    const exposure = estimationExposure;
+    const outcome = estimationOutcome;
     return {
       dataset_filename: dataset?.savedFilename || "",
-      confirmed_question: questionFields?.question || "Among adults in the uploaded EMA/passive sensing dataset, what is the association between accelerometer magnitude and label under the specified model?",
+      confirmed_question: design.question.question || "",
       estimand: {
         label: phase7Estimand.label || (effectType === "direct" ? "Direct effect guidance" : "Total effect guidance"),
         effect_type: phase7Estimand.effect_type || (effectType === "direct" ? "direct_effect" : "total_effect"),
-        population: phase7Estimand.population || "uploaded study population",
+        population: design.question.population || "",
         exposure,
-        comparator: phase7Estimand.comparator || "one-unit change",
+        comparator: design.question.comparator,
         outcome,
-        time_window: phase7Estimand.time_window || `${Math.max(1, Math.round(lagHours / 24))}d lag`,
-        unit_of_analysis: phase7Estimand.unit_of_analysis || "participant-window observation",
+        time_window: design.question.timeWindow,
+        unit_of_analysis: design.question.unitOfAnalysis,
       },
       exposure,
-      comparator: { type: "continuous_unit_change", reference: "one-unit lower", treatment: "one-unit higher" },
+      comparator: { type: "continuous_unit_change", reference: design.question.comparator || null, treatment: design.question.exposure || null },
       outcome,
-      adjustment_set: phase7Adjustment.filter((name) => estimationColumns.includes(name)),
+      adjustment_set: phase7Adjustment,
       strategy: {
         estimator_family: tag === "Exploratory" ? "linear_regression" : "logistic_regression",
         repeated_measures_strategy: phase7Strategy.repeated_measures_strategy || "not_implemented_poc",
@@ -5795,7 +5799,7 @@ function EstimationView({ state, actions, onGoNext }) {
       participant_id: estimationDataset?.participantField || "pid",
       timestamp: estimationDataset?.timestampFields?.[0] || "time_stamp",
       preprocessing: { drop_missing: true, standardize_exposure: false },
-      time_window: { exposure_window: "8h", lag: `${Math.max(1, Math.round(lagHours / 24))}d`, outcome_window: "24h" },
+      time_window: { exposure_window: design.question.timeWindow || null, lag: `${lagHours}h`, outcome_window: null },
       run_label: `${tag} run`,
       random_seed: 42,
       identification_confirmed: Boolean(analysisStrategyConfirmed || analysisStrategyValidation?.safe_to_continue_to_estimation),
@@ -5829,6 +5833,7 @@ function EstimationView({ state, actions, onGoNext }) {
         timestamp: payload.timestamp,
       });
       studyTrace.capture(response);
+      if (design.key !== currentDesign(actions.workflowRef.current).key) return;
       setEstimationValidation(response);
       recordStudyEvent?.("estimation_validated", { status: response.status || "unknown" });
       setEstimationStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Configuration ${response.status}.` });
@@ -5861,7 +5866,7 @@ function EstimationView({ state, actions, onGoNext }) {
       showToast("Upload a dataset first.");
       return;
     }
-    if (!analysisStrategyConfirmed && !analysisStrategyValidation?.safe_to_continue_to_estimation) {
+    if (!canValidateEstimation) {
       setEstimationStatus({ kind: "error", message: "Confirm an analysis strategy before running estimation." });
       pushAssistantNote("Confirm an analysis strategy before running estimation. Phase 8 uses the Phase 7 plan and does not create its own causal design.");
       return;
@@ -5881,7 +5886,7 @@ function EstimationView({ state, actions, onGoNext }) {
       exposure: payload.exposure,
       comparator: `${payload.comparator.reference} vs ${payload.comparator.treatment}`,
       outcome: payload.outcome,
-      timeWindow: `${payload.time_window.exposure_window} exposure, ${payload.time_window.lag} lag, ${payload.time_window.outcome_window} outcome`,
+      timeWindow: `${payload.estimand.time_window}; ${payload.time_window.lag} lag`,
       adjustmentSet: payload.adjustment_set.join(", ") || "(none)",
       effectType: payload.estimand?.effect_type || "specified",
       estimator: "statsmodels",
@@ -5893,7 +5898,9 @@ function EstimationView({ state, actions, onGoNext }) {
       recordStudyEvent?.("estimation_run", { status: response.status || "unknown" });
       clearInterval(backendRunInterval);
       setRunProgress(100);
+      const stillCurrent = design.key === currentDesign(actions.workflowRef.current).key;
       if (response.status === "blocked_not_ready" || response.status === "not_runnable") {
+        if (!stillCurrent) return;
         setEstimationStatus({
           kind: "error",
           message: "This estimation configuration is not runnable yet. Review the blocking issues below.",
@@ -5909,8 +5916,12 @@ function EstimationView({ state, actions, onGoNext }) {
         showToast("Estimation blocked by readiness checks.");
         return;
       }
-      const newRun = backendEstimationToRun(response, tag, fallbackConfig);
+      const newRun = { ...backendEstimationToRun(response, tag, fallbackConfig), designKey: design.key };
       setRuns((prev) => [...prev, newRun]);
+      if (!stillCurrent) {
+        showToast("Previous run saved in history; the current design has changed.");
+        return;
+      }
       setActiveRunId(newRun.id);
       setLatestEstimationRun(newRun);
       if (response.status === "completed_with_warnings") {
@@ -5998,7 +6009,10 @@ function EstimationView({ state, actions, onGoNext }) {
   async function selectPrimaryRun(run) {
     const studyTrace = actions.beginStudyAction("estimation_action", "primary_run_selection", {});
     try {
-    setPrimaryRunId(run.id);
+    if (!runAlignment(actions.workflowRef.current, run).compatible) {
+      showToast(DESIGN_CHANGED_MESSAGE);
+      return;
+    }
     setPrimaryEstimationRun(run);
     recordStudyEvent?.("primary_estimation_selected", { run_id: run.id });
     if (backendStatus.connected) {
@@ -6294,7 +6308,7 @@ function EstimationView({ state, actions, onGoNext }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 6 }}>
                   <div>
                     <span className="feature-label">Run {idx + 1}</span>
-                    {run.tag === "Primary" && <span className="chip chip-success" style={{ fontSize: 10, marginLeft: 6 }}>Primary</span>}
+                    {!runAlignment(state, run).compatible && <span className="chip chip-warning">{PREVIOUS_RUN_LABEL}</span>}
                     {run.tag === "Exploratory" && <span className="chip chip-accent" style={{ fontSize: 10, marginLeft: 6 }}>Exploratory</span>}
                     {run.tag === "Robustness" && <span className="chip chip-muted" style={{ fontSize: 10, marginLeft: 6 }}>Robustness</span>}
                     {primaryRunId === run.id && <span className="chip chip-success" style={{ fontSize: 10, marginLeft: 6 }}>\u2605 Primary result</span>}
@@ -6303,7 +6317,7 @@ function EstimationView({ state, actions, onGoNext }) {
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <span className="mono" style={{ fontSize: 12 }}>Est: {run.results.pointEstimate} [{run.results.ciLower}, {run.results.ciUpper}]</span>
                     {primaryRunId !== run.id && (
-                      <button className="btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); selectPrimaryRun(run); }}>
+                      <button className="btn" disabled={!runAlignment(state, run).compatible} style={{ fontSize: 10, padding: "2px 8px" }} onClick={(e) => { e.stopPropagation(); selectPrimaryRun(run); }}>
                         Select as Primary
                       </button>
                     )}
@@ -6470,71 +6484,28 @@ function sameReportVariableSet(left, right) {
   return normalize(left).join("|") === normalize(right).join("|");
 }
 
-function activeReportConfiguration(state, selectedRun = state.primaryEstimationRun) {
-  const question = state.questionFields || {};
-  const config = selectedRun?.config || {};
-  const runExposure = selectedRun?.results?.exposure || config.exposure || "";
-  const runOutcome = selectedRun?.results?.outcome || config.outcome || "";
-  const estimationCovariates = reportValueList(config.adjustmentSet || config.adjustment_set);
-  const confirmedAdjustmentSet = reportValueList(state.analysisStrategyConfirmed?.adjustmentSet);
-  const editableAdjustmentSet = reportValueList(state.editableAdjustmentSet);
-  const roleAdjustmentSet = reportValueList(computeAdjustment(state.variableRoles || {}).confounders);
-  const reportAdjustmentSet = confirmedAdjustmentSet.length
-    ? confirmedAdjustmentSet
-    : editableAdjustmentSet.length
-      ? editableAdjustmentSet
-      : roleAdjustmentSet;
-  const reportAdjustmentSource = confirmedAdjustmentSet.length
-    ? "confirmed Phase 7 adjustment set"
-    : editableAdjustmentSet.length
-      ? "editable report adjustment draft"
-      : roleAdjustmentSet.length
-        ? "selected variable roles"
-        : "missing";
-  const adjustmentSet = estimationCovariates.length ? estimationCovariates : reportAdjustmentSet;
-  const graphNodes = (state.graphNodes || []).map((node) => node?.id || node?.label).filter(Boolean);
-  const names = [...new Set([
-    ...Object.keys(state.variableRoles || {}),
-    question.exposure, question.outcome, runExposure, runOutcome, ...adjustmentSet,
-  ].filter(Boolean))];
-  const roleTable = names.map((name) => ({
-    variable_name: name,
-    source: name === "binge_drinking_event" ? "Backend-derived from label == BD" : "Active study dataset",
-    final_role: state.variableRoles?.[name]
-      || (name === (runExposure || question.exposure) ? "Exposure" : name === (runOutcome || question.outcome) ? "Outcome" : adjustmentSet.includes(name) ? "Confounder" : "Unassigned"),
-    descriptive_meaning: name === "binge_drinking_event" ? "Derived binary BDE event indicator" : "Selected in the active workflow.",
-    missingness_warning: "",
-  }));
-  const issues = [];
-  if (selectedRun) {
-    if (question.exposure && runExposure && question.exposure !== runExposure) issues.push(`Research-question exposure (${question.exposure}) does not match the selected estimation exposure (${runExposure}).`);
-    if (question.outcome && runOutcome && question.outcome !== runOutcome) issues.push(`Research-question outcome (${question.outcome}) does not match the selected estimation outcome (${runOutcome}).`);
-    const runAdjustment = estimationCovariates;
-    const selectedAdjustment = reportAdjustmentSet;
-    if (runAdjustment.length && !selectedAdjustment.length) {
-      issues.push(`Report adjustment set is missing. The selected estimation run used ${runAdjustment.join(", ")}. Return to Analysis Strategy to confirm this adjustment set, or apply the selected estimation covariates as the report draft.`);
-    } else if (runAdjustment.length && !sameReportVariableSet(selectedAdjustment, runAdjustment)) {
-      issues.push(`Report adjustment set (${selectedAdjustment.join(", ")}) does not match the selected estimation covariates (${runAdjustment.join(", ")}).`);
-    }
-    const expectedGraphNodes = [runExposure, runOutcome, ...runAdjustment].filter(Boolean);
-    if (graphNodes.length && expectedGraphNodes.some((name) => !graphNodes.includes(name))) issues.push("The confirmed graph does not contain all variables used by the selected estimation run.");
-    if (state.studyMode?.active && runExposure && runExposure !== "acc_mean_magnitude") issues.push("The fixed BDE task requires acc_mean_magnitude as the selected exposure.");
-    if (state.studyMode?.active && runOutcome && runOutcome !== "binge_drinking_event") issues.push("The fixed BDE task requires the backend-derived binge_drinking_event outcome (label == BD).");
-  }
+export function activeReportConfiguration(state, selectedRun = state.primaryEstimationRun) {
+  const alignment = runAlignment(state, selectedRun);
+  const design = alignment.design;
+  const adjustmentSet = design.adjustmentSet;
+  const question = design.question;
+  const names = [...new Set([...(design.graph?.nodes || []).map(n => n.id), question.exposure, question.outcome, ...adjustmentSet].filter(Boolean))];
   return {
     adjustmentSet,
-    reportAdjustmentSet,
-    reportAdjustmentSource,
-    estimationCovariates,
-    canApplyEstimationCovariates: Boolean(estimationCovariates.length && !reportAdjustmentSet.length),
-    roleTable,
-    issues: [...new Set(issues)],
-    runExposure,
-    runOutcome,
+    reportAdjustmentSet: adjustmentSet,
+    reportAdjustmentSource: design.strategyConfirmed ? "confirmed Phase 7 adjustment set" : "Phase 7 confirmation required",
+    estimationCovariates: variableSet(selectedRun?.config?.adjustmentSet ?? selectedRun?.config?.adjustment_set),
+    canApplyEstimationCovariates: false,
+    roleTable: names.map(name => ({ variable_name: name, source: "Current confirmed design",
+      final_role: state.variableRoles?.[name] || "Unassigned", descriptive_meaning: "Selected in the active workflow.", missingness_warning: "" })),
+    issues: alignment.issues,
+    runExposure: selectedRun?.results?.exposure || selectedRun?.config?.exposure || "",
+    runOutcome: selectedRun?.results?.outcome || selectedRun?.config?.outcome || "",
   };
 }
 
-function reviewExportPayloadFromState(state, reportPreferences = {}) {
+export function reviewExportPayloadFromState(state, reportPreferences = {}) {
+  state = reviewDesignState(state);
   const {
     objective,
     datasets,
@@ -6644,30 +6615,21 @@ function reviewExportPayloadFromState(state, reportPreferences = {}) {
       feasibility_result: targetedFeasibilityResult || feasibility,
     },
     phase_6_graph: {
-      confirmed_graph: confirmedGraph || {
-        graph_type: "DAG",
-        nodes: (graphNodes || []).map((node) => ({ id: node.id, label: node.label, role: node.role || variableRoles[node.id] })),
-        edges: (graphEdges || []).map((edge) => ({ source: edge.from, target: edge.to, type: edge.type || edge.edgeType })),
-      },
+      confirmed_graph: confirmedGraph || {},
       graph_validation_result: graphValidationResult || confirmedGraph?.validation || {},
       alternative_graphs: graphAlternatives || [],
     },
     phase_7_strategy: {
       identification_result: analysisStrategyResult?.identification || analysisStrategyResult || {},
       adjustment_set: fallbackAdjustmentSet,
-      estimand: analysisStrategyDraft?.estimand || analysisStrategyResult?.estimand || { label: questionFields?.estimand || "Estimand requires review." },
-      strategy: analysisStrategyDraft?.strategy || analysisStrategyResult?.strategy || {
-        estimator_family: state.estimatorFamily,
-        effect_type: state.effectType,
-        adjustment_set: fallbackAdjustmentSet,
-        mediators_for_direct_effect: mediators,
-      },
+      estimand: { ...(state.currentDesign.strategy.estimand || {}), ...confirmedQuestion },
+      strategy: { ...(state.currentDesign.strategy.strategy || {}), adjustment_set: fallbackAdjustmentSet },
       assumption_checklist: analysisStrategyResult?.assumption_checklist || analysisStrategyConfirmed?.assumption_checklist || [],
       validation: analysisStrategyValidation || {},
     },
     phase_8_estimation: {
       selected_primary_run: selectedRun,
-      estimation_runs: [selectedRun, latestEstimationRun].filter(Boolean),
+      estimation_runs: selectedRun ? [selectedRun] : [],
     },
     artifact_consistency: { issues: reportConfiguration.issues, source: "active_dashboard_state" },
     rag_evidence: [
@@ -6755,6 +6717,7 @@ function reportToMarkdown(report, state) {
 }
 
 function ReviewView({ state, actions }) {
+  state = reviewDesignState(state);
   const { questionFields, variableRoles, feasibility, graphEdges, effectType, estimatorFamily, repeatedMeasuresChecks, sensitivityChecks, papers, guidelines, primaryEstimationRun, latestEstimationRun, confirmedGraph, graphValidationResult, backendStatus, ragSummary, studyMode, studyReportDraft } = state;
   const { showToast, pushAssistantNote, runAssistantAction, resetApprovedBdeWorkspaceVariables, applySelectedEstimationCovariatesToReportDraft, goToPage } = actions;
   const { confounders, mediators, proxies } = useMemo(() => computeAdjustment(variableRoles), [variableRoles]);
@@ -6767,20 +6730,24 @@ function ReviewView({ state, actions }) {
   const reportConfiguration = useMemo(() => activeReportConfiguration(state, selectedRun), [state, selectedRun]);
   const consistencyMessage = "Report cannot be exported yet because the selected question, graph, adjustment set, and estimation run are not aligned.";
   const signoffBlockers = [
-    !questionFields?.question && "No confirmed research question.",
-    !(confirmedGraph || graphEdges.length) && "No final graph is available.",
+    !state.currentDesign.questionConfirmed && "No confirmed research question.",
+    !state.currentDesign.graphConfirmed && "No confirmed graph is available.",
+    !state.currentDesign.strategyConfirmed && "Confirm the current Phase 7 strategy.",
     !graphValidationResult && "Graph/identification validation has not been reviewed.",
-    !selectedRun && consistencyMessage,
+    !selectedRun && DESIGN_CHANGED_MESSAGE,
     severeDiagnostics.length > 0 && "Severe diagnostics or estimation warnings remain unresolved.",
     reportConfiguration.issues.length > 0 && consistencyMessage,
   ].filter(Boolean);
-  const [reportDraft, setReportDraft] = useState(() => studyReportDraft ? { package_title: studyReportDraft.title, status: "frozen_study_draft", warnings: ["Prepared draft — editable, not yet confirmed.", "No Phase 8 estimate has been selected yet."], ready_for_export: false, requires_user_review: true } : null);
+  const [reportDraft, setReportDraft] = useState(null);
   const [claimAudit, setClaimAudit] = useState(null);
-  const [reportPreview, setReportPreview] = useState(() => studyReportDraft?.content || "");
+  const [reportPreview, setReportPreview] = useState("");
   const [reportHistory, setReportHistory] = useState([]);
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const reviewMounted = useRef(true);
+  useEffect(() => { reviewMounted.current = true; return () => { reviewMounted.current = false; }; }, []);
+  const reviewStillCurrent = () => reviewMounted.current && actions.workflowRef.current.reviewRevision === state.reviewRevision;
   const reviewExportBlockers = useMemo(() => getReviewExportBlockers({
     selectedRun,
     claimAudit,
@@ -6803,10 +6770,10 @@ function ReviewView({ state, actions }) {
   useEffect(() => () => { actions.reviewContextRef.current = null; }, [actions.reviewContextRef]);
   const approvedBdeWorkspaceActive = Boolean(studyMode?.active || studyMode?.status === "ready");
   const hasAlignmentBlocker = Boolean(reportConfiguration.issues.length || !selectedRun);
-  const firstAlignmentIssue = reportConfiguration.issues[0];
+  const firstAlignmentIssue = selectedRun ? reportConfiguration.issues[0] : null;
   const blockedPreviewExportMessage = firstAlignmentIssue
     ? `Export is blocked because ${firstAlignmentIssue.charAt(0).toLowerCase()}${firstAlignmentIssue.slice(1)}`
-    : "Export is blocked because no selected backend estimation run is available. Return to Analysis Strategy and Phase 8 before exporting.";
+    : DESIGN_CHANGED_MESSAGE;
 
   useEffect(() => {
     if (selectedRun && reportDraft?.status === "frozen_study_draft") {
@@ -6937,6 +6904,7 @@ function ReviewView({ state, actions }) {
     try {
       if (!backendStatus.connected) throw new Error("Backend unavailable - generated local incomplete draft.");
       const report = await assembleReviewPackage(payload);
+      if (!reviewStillCurrent()) return;
       studyTrace.capture(report);
       const preview = reportToMarkdown(report, { ...state, reportClaimAudit: claimAudit });
       setReportDraft(report);
@@ -6947,6 +6915,7 @@ function ReviewView({ state, actions }) {
       showToast("Review package assembled.");
     } catch (error) {
       studyTrace.fail();
+      if (!reviewStillCurrent()) return;
       const localDraft = {
         package_title: "Causal Design Agent Review Package",
         status: selectedRun ? "fallback" : "fallback",
@@ -6982,6 +6951,7 @@ function ReviewView({ state, actions }) {
   async function handleClaimAudit() {
     const studyTrace = actions.beginStudyAction("report_export", "report_claim_audit", {});
     try {
+    if (hasAlignmentBlocker) { notifyPreviewExportBlocked(); return; }
     setAuditLoading(true);
     try {
       const assembled = reportDraft || (backendStatus.connected
@@ -6994,6 +6964,7 @@ function ReviewView({ state, actions }) {
             unresolved_warnings: selectedRun ? [] : ["No primary estimation run has been selected."],
             ready_for_export: false,
           });
+      if (!reviewStillCurrent()) return;
       if (!reportDraft) setReportDraft(assembled);
       const payload = {
         report_text: reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: claimAudit }),
@@ -7010,6 +6981,7 @@ function ReviewView({ state, actions }) {
         safe_language_suggestions: ["under the specified model and assumptions", "requires expert review"],
         ready_for_export: false,
       };
+      if (!reviewStillCurrent()) return;
       studyTrace.capture(audit);
       setClaimAudit(normalizeClaimAuditResult(audit));
       saveReportVersion("Claim-audited draft", reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit }), assembled, audit);
@@ -7050,6 +7022,7 @@ function ReviewView({ state, actions }) {
       return;
     }
     const assembled = reportDraft || (backendStatus.connected ? await assembleReviewPackage(reviewExportPayloadFromState(state)) : reportDraft);
+    if (!reviewStillCurrent()) return;
     if (!reportDraft) setReportDraft(assembled);
     const audit = normalizeClaimAuditResult(claimAudit || {
       status: "warning",
@@ -7069,6 +7042,7 @@ function ReviewView({ state, actions }) {
           content: format === "markdown" ? (reportPreview || reportToMarkdown(assembled, { ...state, reportClaimAudit: audit })) : JSON.stringify({ assembled_package: assembled, claim_audit_result: audit, report_preview: reportPreview }, null, 2),
           warnings: ["Backend unavailable - local export generated."],
         };
+      if (!reviewStillCurrent()) return;
       studyTrace.capture(result);
     const filename = exportReport(format === "markdown" ? { markdown: result.content } : JSON.parse(result.content), format);
     studyTrace.downloadInitiated();
@@ -7109,6 +7083,10 @@ function ReviewView({ state, actions }) {
       </div>
 
       <PostSurvey />
+      {!selectedRun && <div className="inconsistency-card"><p>{DESIGN_CHANGED_MESSAGE}</p>
+        {latestEstimationRun && !runAlignment(state, latestEstimationRun).compatible && <p>{PREVIOUS_RUN_LABEL}</p>}
+        <button className="btn" onClick={() => goToPage("estimation", "recovery")}>Review Phase 8</button>
+      </div>}
 
       {studyMode && <div className="card"><div className="card-head"><div className="card-title">Prepared study report draft</div><span className="chip chip-warning">Prepared draft — editable, not yet confirmed.</span></div><p className="card-desc">This draft preserves warnings, incomplete states, limitations, and claim boundaries. Generate the backend package and complete claim audit before external export.</p><textarea className="text-area" value={reportPreview} onChange={(event) => setReportPreview(event.target.value)} rows={12} aria-label="Editable prepared study report draft" /></div>}
 
@@ -7174,7 +7152,7 @@ function ReviewView({ state, actions }) {
       <div className="card">
         <div className="card-head"><div className="card-title">Adjustment set & identification</div><CardInfo text="The adjustment set and effect type confirmed in Step 7. Defines what the causal estimate controls for and what causal quantity is being estimated (total vs. direct effect)." /></div>
         <div className="filter-pills">
-          {reportConfiguration.adjustmentSet.length ? reportConfiguration.adjustmentSet.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">None identified.</span>}
+          {reportConfiguration.adjustmentSet.length ? reportConfiguration.adjustmentSet.map((v) => <span key={v} className="chip chip-accent mono">{v}</span>) : <span className="helper">{state.currentDesign.strategyConfirmed ? "No adjustment variables confirmed." : "Phase 7 confirmation required."}</span>}
         </div>
         <p className="card-desc" style={{ marginTop: 10, marginBottom: 0 }}>Effect type: {effectType === "direct" ? "Direct effect" : "Total effect"}{mediators.length ? ` \u2014 mediator(s): ${mediators.join(", ")}` : ""}{proxies.length ? ` \u2014 proxy: ${proxies.join(", ")}` : ""}</p>
       </div>
@@ -7237,9 +7215,9 @@ function ReviewView({ state, actions }) {
           </>
         ) : (
           <div className="inconsistency-card">
-            <p style={{ margin: 0 }}>No primary estimation run has been selected. You can still create a design-only draft, but the complete design and analysis package requires a selected estimation run.</p>
+            <p style={{ margin: 0 }}>No compatible primary estimation run is selected for the current design. Report generation and export remain blocked.</p>
             <p style={{ margin: "8px 0 0" }}>Return to Phase 8 to run estimation and select a primary run when you need the complete package.</p>
-            {latestDraftRun && <p style={{ margin: "8px 0 0" }}>A latest draft run exists ({latestDraftRun.id}), but it has not been selected as primary.</p>}
+            {latestDraftRun && <p style={{ margin: "8px 0 0" }}>{runAlignment(state, latestDraftRun).compatible ? "Run available for explicit selection in Phase 8" : PREVIOUS_RUN_LABEL}: {latestDraftRun.id}.</p>}
           </div>
         )}
       </div>
@@ -7407,8 +7385,8 @@ function ReviewView({ state, actions }) {
           <CardInfo text="Final sign-off is blocked until the essential causal design, estimation, diagnostics, evidence, and claim-safety items are reviewed." />
         </div>
         {[
-          ["Confirmed research question", Boolean(questionFields?.question)],
-          ["Confirmed graph", Boolean(confirmedGraph || graphEdges.length)],
+          ["Confirmed research question", state.currentDesign.questionConfirmed],
+          ["Confirmed graph", state.currentDesign.graphConfirmed],
           ["Identification reviewed", Boolean(graphValidationResult)],
           ["Assumptions reviewed", checkedAssumptions.length > 0],
           ["Estimation run selected", Boolean(selectedRun)],
@@ -7478,6 +7456,16 @@ function ReviewView({ state, actions }) {
 }
 
 export default function CausalStudioApp() {
+  const workflow = useWorkflowDesign({
+    graphNodes: DEFAULT_GRAPH_NODES.map(n => ({ ...n })),
+    graphEdges: DEFAULT_GRAPH_EDGES.map(e => ({ ...e })),
+    derivedFeatures: DERIVED_FEATURE_OPTIONS.map(f => ({ ...f, selected: false })),
+  });
+  const [, setConfirmedQuestion] = workflow.fields.confirmedQuestion;
+  const [, setEstimationRuns] = workflow.fields.estimationRuns;
+  const workflowRef = useRef(workflow.state);
+  workflowRef.current = workflow.state;
+
   const study = useStudy();
   const dashboardEventsRef = useRef(null);
   if (!dashboardEventsRef.current) dashboardEventsRef.current = createDashboardEvents(event => study?.logStudyEvent?.(event));
@@ -7490,53 +7478,53 @@ export default function CausalStudioApp() {
   const [objective, setObjective] = useState("");
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackApplied, setFeedbackApplied] = useState(false);
-  const [datasets, setDatasets] = useState([]);
+  const [datasets, setDatasets] = workflow.fields.datasets;
   const [dictionary, setDictionary] = useState(null);
   const [protocol, setProtocol] = useState(null);
   const [papers, setPapers] = useState([]);
   const [guidelines, setGuidelines] = useState([]);
   const [promotedPatterns, setPromotedPatterns] = useState([]);
   const [savedExploreViews, setSavedExploreViews] = useState([]);
-  const [variableRoles, setVariableRoles] = useState({});
+  const [variableRoles, setVariableRoles] = workflow.fields.variableRoles;
   const [selectedQuestionId, setSelectedQuestionId] = useState(null);
-  const [questionFields, setQuestionFields] = useState(null);
+  const [questionFields, setQuestionFields] = workflow.fields.questionFields;
   const [questionCandidates, setQuestionCandidates] = useState([]);
   const [candidateVariables, setCandidateVariables] = useState([]);
   const [derivedFeatureCandidates, setDerivedFeatureCandidates] = useState([]);
   const [phase4Status, setPhase4Status] = useState(null);
   const [phase4Feedback, setPhase4Feedback] = useState("");
-  const [derivedFeatures, setDerivedFeatures] = useState(() => DERIVED_FEATURE_OPTIONS.map((f) => ({ ...f, selected: false })));
+  const [derivedFeatures, setDerivedFeatures] = workflow.fields.derivedFeatures;
   const [lockedContent, setLockedContent] = useState({});
   const lockContent = (key, value) => setLockedContent(c => ({ ...c, [key]: value }));
   const unlockContent = (key) => setLockedContent(c => { const n = { ...c }; delete n[key]; return n; });
 
-  const [lagHours, setLagHours] = useState(24);
-  const [exposureThreshold, setExposureThreshold] = useState(30);
+  const [lagHours, setLagHours] = workflow.fields.lagHours;
+  const [exposureThreshold, setExposureThreshold] = workflow.fields.exposureThreshold;
   const [sensitivityChecks, setSensitivityChecks] = useState({ missingData: true, positivity: true, unmeasuredConf: false, consistency: false, exclusionRestriction: false });
-  const [targetedFeasibilityResult, setTargetedFeasibilityResult] = useState(null);
+  const [targetedFeasibilityResult, setTargetedFeasibilityResult] = workflow.fields.targetedFeasibilityResult;
 
-  const [graphNodes, setGraphNodes] = useState(DEFAULT_GRAPH_NODES.map((n) => ({ ...n })));
-  const [graphEdges, setGraphEdges] = useState(DEFAULT_GRAPH_EDGES.map((e) => ({ ...e })));
+  const [graphNodes, setGraphNodes] = workflow.fields.graphNodes;
+  const [graphEdges, setGraphEdges] = workflow.fields.graphEdges;
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
-  const [graphType, setGraphType] = useState("DAG");
-  const [graphValidationResult, setGraphValidationResult] = useState(null);
-  const [graphAlternatives, setGraphAlternatives] = useState([]);
-  const [confirmedGraph, setConfirmedGraph] = useState(null);
-  const [graphVersionLabel, setGraphVersionLabel] = useState("Version 0");
+  const [graphType, setGraphType] = workflow.fields.graphType;
+  const [graphValidationResult, setGraphValidationResult] = workflow.fields.graphValidationResult;
+  const [graphAlternatives, setGraphAlternatives] = workflow.fields.graphAlternatives;
+  const [confirmedGraph, setConfirmedGraph] = workflow.fields.confirmedGraph;
+  const [graphVersionLabel, setGraphVersionLabel] = workflow.fields.graphVersionLabel;
   const [graphActionStatus, setGraphActionStatus] = useState(null);
 
-  const [effectType, setEffectType] = useState("total");
-  const [estimatorFamily, setEstimatorFamily] = useState("mixed_logistic");
-  const [repeatedMeasuresChecks, setRepeatedMeasuresChecks] = useState({ randomIntercept: true, multipleImputation: false, robustSE: false });
-  const [analysisStrategyResult, setAnalysisStrategyResult] = useState(null);
-  const [analysisStrategyValidation, setAnalysisStrategyValidation] = useState(null);
-  const [analysisStrategyDraft, setAnalysisStrategyDraft] = useState(null);
-  const [editableAdjustmentSet, setEditableAdjustmentSet] = useState([]);
-  const [analysisStrategyConfirmed, setAnalysisStrategyConfirmed] = useState(null);
+  const [effectType, setEffectType] = workflow.fields.effectType;
+  const [estimatorFamily, setEstimatorFamily] = workflow.fields.estimatorFamily;
+  const [repeatedMeasuresChecks, setRepeatedMeasuresChecks] = workflow.fields.repeatedMeasuresChecks;
+  const [analysisStrategyResult, setAnalysisStrategyResult] = workflow.fields.analysisStrategyResult;
+  const [analysisStrategyValidation, setAnalysisStrategyValidation] = workflow.fields.analysisStrategyValidation;
+  const [analysisStrategyDraft, setAnalysisStrategyDraft] = workflow.fields.analysisStrategyDraft;
+  const [editableAdjustmentSet, setEditableAdjustmentSet] = workflow.fields.editableAdjustmentSet;
+  const [analysisStrategyConfirmed, setAnalysisStrategyConfirmed] = workflow.fields.analysisStrategyConfirmed;
   const [analysisStrategyStatus, setAnalysisStrategyStatus] = useState(null);
-  const [latestEstimationRun, setLatestEstimationRun] = useState(null);
-  const [primaryEstimationRun, setPrimaryEstimationRun] = useState(null);
+  const [latestEstimationRun, setLatestEstimationRun] = workflow.fields.latestEstimationRun;
+  const [primaryEstimationRun, setPrimaryEstimationRun] = workflow.fields.primaryEstimationRun;
 
   const [ackOpen, setAckOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -7549,7 +7537,7 @@ export default function CausalStudioApp() {
   const [broadExploration, setBroadExploration] = useState(null);
   const [studyMode, setStudyMode] = useState(null);
   const [studySessionLog, setStudySessionLog] = useState([]);
-  const [studyReportDraft, setStudyReportDraft] = useState(null);
+  const [studyReportDraft, setStudyReportDraft] = workflow.fields.studyReportDraft;
 
   const [assistantThreads, setAssistantThreads] = useState({
     setup: [
@@ -8243,12 +8231,14 @@ export default function CausalStudioApp() {
     }
     setPhase4Status({ kind: "loading", message: mode === "alternative" ? "Generating alternative questions..." : "Generating question candidates..." });
     try {
+      const requestDesignKey = designKeys(workflowRef.current).graph;
       const response = await generateQuestionCandidates(buildPhase4Payload({
         user_feedback: mode === "alternative"
           ? `${phase4Feedback}\nGenerate an alternative set while preserving locked user decisions.`
           : phase4Feedback,
       }));
       studyTrace.capture(response);
+      if (requestDesignKey !== designKeys(workflowRef.current).graph) { setPhase4Status({ kind: "warning", message: "Design changed; previous suggestions ignored." }); return; }
       setQuestionCandidates(response.questions || []);
       setPhase4Status({
         kind: response.status === "fallback" ? "warning" : "success",
@@ -8285,11 +8275,13 @@ export default function CausalStudioApp() {
     }
     setPhase4Status({ kind: "loading", message: "Recommending candidate variables..." });
     try {
+      const requestDesignKey = designKeys(workflowRef.current).graph;
       const response = await recommendCandidateVariables(buildPhase4Payload({
         confirmed_question: confirmed,
         user_feedback: phase4Feedback,
       }));
       studyTrace.capture(response);
+      if (requestDesignKey !== designKeys(workflowRef.current).graph) { setPhase4Status({ kind: "warning", message: "Design changed; previous suggestions ignored." }); return; }
       setCandidateVariables(response.candidate_variables || []);
       setDerivedFeatureCandidates(response.derived_feature_candidates || []);
       setPhase4Status({
@@ -8353,11 +8345,13 @@ export default function CausalStudioApp() {
       showToast(message);
       return;
     }
+    setConfirmedQuestion({ fields: { ...fields }, designKey: designKeys({ ...workflowRef.current, questionFields: fields }).question });
     setPhase4Status({ kind: "success", message: "Question confirmed for targeted feasibility review." });
     recordStudyEvent("question_confirmed");
     pushAssistantNote("Question confirmed for Phase 5 feasibility review. This confirms wording, not causal validity.");
 
     studyTrace.success();
+    return true;
     } catch (studyError) { studyTrace.fail(); throw studyError; }
     finally { studyTrace.finish(); }
   }
@@ -8445,7 +8439,9 @@ export default function CausalStudioApp() {
     }
     setAction("targetedFeasibility", { kind: "loading", message: "Running feasibility checks…" });
     try {
+      const requestDesignKey = designKeys(workflowRef.current).question;
       const response = await runFeasibilityCheck(payload);
+      if (requestDesignKey !== designKeys(workflowRef.current).question) { setAction("targetedFeasibility", { kind: "warning", message: "Design changed; previous feasibility response ignored." }); return; }
       studyTrace.capture(response);
       setTargetedFeasibilityResult(response);
       recordStudyEvent("feasibility_run", { status: response.status || "unknown" });
@@ -8780,7 +8776,9 @@ export default function CausalStudioApp() {
     }
     setAnalysisStrategyStatus({ kind: "loading", message: mode === "alternative" ? "Generating alternative strategy…" : "Generating strategy and validating identification…" });
     try {
+      const requestDesignKey = designKeys(workflowRef.current).graph;
       const response = await generateAnalysisStrategy(analysisStrategyPayload({ user_feedback: userFeedback }));
+      if (requestDesignKey !== designKeys(workflowRef.current).graph) { setAnalysisStrategyStatus({ kind: "warning", message: "Design changed; previous identification response ignored." }); return; }
       studyTrace.capture(response);
       setAnalysisStrategyResult(response);
       const recommended = response.identification?.recommended_adjustment_set || [];
@@ -8811,6 +8809,7 @@ export default function CausalStudioApp() {
     setAnalysisStrategyStatus({ kind: "loading", message: "Validating edited adjustment set..." });
     try {
       const base = analysisStrategyPayload();
+      const requestDesignKey = designKeys(workflowRef.current).strategy;
       const response = await validateAnalysisStrategy({
         graph: base.graph,
         exposure: base.exposure,
@@ -8822,6 +8821,7 @@ export default function CausalStudioApp() {
         schema_summary: base.schema_summary,
       });
       studyTrace.capture(response);
+      if (requestDesignKey !== designKeys(workflowRef.current).strategy) { setAnalysisStrategyStatus({ kind: "warning", message: "Design changed; previous strategy validation ignored." }); return; }
       setAnalysisStrategyValidation(response);
       setAnalysisStrategyStatus({ kind: response.status === "invalid" ? "error" : "success", message: `Adjustment validation ${response.status}.` });
       pushAssistantNote(response.status === "invalid"
@@ -8852,6 +8852,10 @@ export default function CausalStudioApp() {
     setAnalysisStrategyConfirmed(null);
   }
   function confirmAnalysisStrategy() {
+    if (!currentDesign(workflowRef.current).graphConfirmed) {
+      showToast("Confirm the current graph in Phase 6 before confirming the strategy.");
+      return;
+    }
     const studyTrace = beginStudyAction("identification_check", "strategy_confirmation", {});
     try {
     const validation = analysisStrategyValidation;
@@ -8876,6 +8880,7 @@ export default function CausalStudioApp() {
       showToast("This strategy requires expert review before estimation.");
     }
     setAnalysisStrategyConfirmed({
+      designKey: designKeys(workflowRef.current).strategy,
       result: analysisStrategyResult,
       validation,
       adjustmentSet: editableAdjustmentSet,
@@ -8900,7 +8905,9 @@ export default function CausalStudioApp() {
     setGraphActionStatus({ kind: "loading", message: "Generating graph draft..." });
     try {
       const payload = graphBackendPayload({ user_feedback: userFeedback });
+      const requestDesignKey = designKeys(workflowRef.current).graph;
       const response = await generateCausalGraph(payload);
+      if (requestDesignKey !== designKeys(workflowRef.current).graph) { setGraphActionStatus({ kind: "warning", message: "Design changed; previous graph response ignored." }); return; }
       studyTrace.capture(response);
       const converted = backendGraphToFrontend(response);
       if (converted.nodes.length) {
@@ -8936,7 +8943,9 @@ export default function CausalStudioApp() {
     setGraphActionStatus({ kind: "loading", message: "Validating graph…" });
     try {
       const payload = graphBackendPayload();
+      const requestDesignKey = designKeys(workflowRef.current).graph;
       const response = await validateCausalGraph(payload);
+      if (requestDesignKey !== designKeys(workflowRef.current).graph) { setGraphActionStatus({ kind: "warning", message: "Design changed; previous graph response ignored." }); return; }
       studyTrace.capture(response);
       setGraphValidationResult(response);
       recordStudyEvent("graph_saved_or_validated", { status: response.status || "unknown" });
@@ -8971,6 +8980,10 @@ export default function CausalStudioApp() {
     finally { studyTrace.finish(); }
   }
   function confirmGraph() {
+    if (!currentDesign(workflowRef.current).questionConfirmed) {
+      showToast("Confirm the current question in Phase 4 before confirming the graph.");
+      return;
+    }
     const studyTrace = beginStudyAction("graph_action", "graph_confirmation", {});
     try {
     if (graphValidationResult?.status === "invalid") {
@@ -8984,7 +8997,7 @@ export default function CausalStudioApp() {
     if (graphValidationResult.status === "valid_with_warnings") {
       showToast("Confirmed with warnings. These limitations must stay visible in downstream reporting.");
     }
-    setConfirmedGraph({ graphType, graphVersionLabel, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult });
+    setConfirmedGraph({ graphType, graphVersionLabel, nodes: graphNodes, edges: graphEdges, validation: graphValidationResult, designKey: designKeys(workflowRef.current).graph });
     recordStudyEvent("graph_saved_or_validated", { status: "confirmed" });
     pushAssistantNote("Graph confirmed for downstream planning. This confirms a reviewed design draft, not a proven causal structure.");
     showToast("Graph confirmed.");
@@ -9539,6 +9552,7 @@ export default function CausalStudioApp() {
         return;
       }
     }
+    if (page === "question" && !confirmCurrentQuestion()) return;
     if (page === "feasibility" && !targetedFeasibilityResult?.safe_to_continue_to_graph) {
       showToast("Run feasibility checks and review the result before continuing to Causal Graph.");
       return;
@@ -9559,7 +9573,7 @@ export default function CausalStudioApp() {
   }
 
   const actions = {
-    reviewContextRef,
+    reviewContextRef, workflowRef, setEstimationRuns,
     setObjective, setShowFeedback, applyFeedback, reviewObjective, addDatasets, removeDataset, toggleDataset, replaceDataset,
     addDictionary, setDictionary, addProtocol, setProtocol, addPapers, setPapers, addGuidelines, setGuidelines,
     checks, requiredCount, requiredTotal, canContinue, handleContinue, showToast, blockingDatasets, promotePattern, saveExploreView, goToPage,
@@ -9579,6 +9593,7 @@ export default function CausalStudioApp() {
     lockContent, unlockContent, lockedContent,
   };
   const state = {
+    ...workflow.state,
     objective, showFeedback, feedbackApplied, datasets, dictionary, protocol, papers, guidelines, promotedPatterns, savedExploreViews,
     backendStatus, actionStatus, ingestionInfo, ragSummary, broadExploration, studyMode, studySessionLog, studyReportDraft,
     variableRoles, selectedQuestionId, questionFields, questionCandidates, candidateVariables, derivedFeatureCandidates, phase4Status, derivedFeatures,
@@ -9628,7 +9643,7 @@ export default function CausalStudioApp() {
         {page === "estimation" && (
           <EstimationView state={state} actions={actions} onGoNext={() => goToPage("review")} />
         )}
-        {page === "review" && <ReviewView state={state} actions={actions} />}
+        {page === "review" && <ReviewView key={`${workflow.state.reviewRevision}:${primaryEstimationRun?.id || "none"}`} state={state} actions={actions} />}
         </PanelErrorBoundary>
       </div>
 

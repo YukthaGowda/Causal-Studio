@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createDashboardEvents, safeUploadMetadata } from './dashboardEvents.js';
 import { createStudyEventLogger } from './studyEvents.js';
+import { createWorkflowState, designKeys } from './workflowDesign.js';
 const uuid = () => webcrypto.randomUUID();
 function fixture() { const events = []; return { events, tracker: createDashboardEvents(e => events.push(e), uuid) }; }
 const source = readFileSync('src/components/CausalStudioApp.jsx', 'utf8');
@@ -106,7 +107,7 @@ test('native feasibility, graph and identification summaries survive wire filter
 test('actual graph validation handler logs only returned compact summary', async () => {
     const { tracker, events } = fixture();
     const context = { beginStudyAction: (...a) => tracker.begin('graph', ...a), backendStatus: { connected: true }, setGraphActionStatus: noop, graphBackendPayload: () => ({}), validateCausalGraph: async () => ({ status: 'valid', normalized_nodes: [{}, {}], normalized_edges: [{}], warnings: [], errors: [], safe_to_continue: true }), setGraphValidationResult: noop, recordStudyEvent: noop, pushAssistantNote: noop, friendlyError: () => '' };
-    await handler('validateCurrentGraph', context)();
+    await handler('validateCurrentGraph', { ...context, designKeys, workflowRef: { current: createWorkflowState() } })();
     assert.deepEqual(events.at(-1).analysis_result_summary, { status: 'valid', node_count: 2, edge_count: 1, warning_count: 0, error_count: 0, safe_to_continue: true });
 });
 test('actual report export observes blockers and PDF popup result, never requests estimation', async () => {

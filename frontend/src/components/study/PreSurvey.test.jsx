@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PreSurvey } from './PreSurvey.jsx';
-import { StudyGate } from './StudyProvider.jsx';
+import { StudyGate, StudyLoggingNotice } from './StudyProvider.jsx';
 import { PRIVACY_NOTE } from '../../lib/studySession.js';
 
 test('pre-survey has privacy note and only six categorical fields', () => {
@@ -21,6 +21,18 @@ test('dashboard is not rendered before completion, including failed registration
 });
 test('dashboard renders after confirmed completion', () => {
   assert.equal(renderToStaticMarkup(<StudyGate study={{status:'complete'}}><div>Dashboard</div></StudyGate>), '<div>Dashboard</div>');
+});
+
+test('logging notices distinguish pending browser storage, retry, unavailable storage and loss without gating dashboard', () => {
+  assert.equal(renderToStaticMarkup(<StudyLoggingNotice status="all_saved" />), '');
+  for (const status of ['unsaved_retrying', 'unsaved_persisted', 'storage_unavailable', 'error']) {
+    const html = renderToStaticMarkup(<StudyLoggingNotice status={status} />);
+    assert.match(html, /You can continue using Causal Studio/);
+    assert.ok(!/IndexedDB|sqlite|stack|filesystem/.test(html));
+    assert.match(renderToStaticMarkup(<StudyGate study={{status:'complete'}}><div>Dashboard</div></StudyGate>), /Dashboard/);
+  }
+  assert.match(renderToStaticMarkup(<StudyLoggingNotice status="unsaved_persisted" />), /up to 24 hours/);
+  assert.match(renderToStaticMarkup(<StudyLoggingNotice status="storage_unavailable" />), /cannot keep pending records/);
 });
 
 test('study API helpers call only the three requested endpoints', async () => {

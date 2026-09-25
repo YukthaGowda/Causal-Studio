@@ -8,7 +8,7 @@ const identity={participant_id:`participant_${webcrypto.randomUUID()}`,session_i
 const click={event_type:'button_click',event_label:'test_button',phase:9};
 function fixture(options={}) {
  const batches=[], jobs=new Map();let sequence=0;
- const logger=createStudyEventLogger({getIdentity:()=>identity,uuid:()=>webcrypto.randomUUID(),now:()=> '2026-09-22T12:00:00.000Z',send:async events=>{batches.push(events);return {status:'ok',inserted:events.length,duplicates:0};},schedule:fn=>{jobs.set(++sequence,fn);return sequence;},cancel:id=>jobs.delete(id),...options});
+ const logger=createStudyEventLogger({store:{load:async()=>[],put:async()=>true,update:async()=>{},remove:async()=>{}},getIdentity:()=>identity,uuid:()=>webcrypto.randomUUID(),now:()=> '2026-09-22T12:00:00.000Z',send:async events=>{batches.push(events);return {status:'ok',inserted:events.length,duplicates:0};},schedule:fn=>{jobs.set(++sequence,fn);return sequence;},cancel:id=>jobs.delete(id),...options});
  return {logger,batches,jobs};
 }
 test('event UUID, timestamp, identity and normalized phase',async()=>{
@@ -22,13 +22,13 @@ test('metadata allowlist and source/outcome aliases',()=>{
  assert.deepEqual(sanitizeMetadata({...bad,warning_count:2,nested:{secret:1}}),{warning_count:2,metadata_sanitized:true});
 });
 test('batch size, deduplication, and successful queue removal',async()=>{
- const {logger,batches}=fixture({batchSize:2});const id=logger.log(click);logger.log({...click,event_id:id});logger.log(click);logger.log(click);await logger.flush();await logger.flush();assert.deepEqual(batches.map(b=>b.length),[2,1]);logger.log({...click,event_id:id});await logger.flush();assert.equal(batches.length,2);assert.equal(logger.getSnapshot(),'ready');
+ const {logger,batches}=fixture({batchSize:2});const id=logger.log(click);logger.log({...click,event_id:id});logger.log(click);logger.log(click);await logger.flush();await logger.flush();assert.deepEqual(batches.map(b=>b.length),[2,1]);logger.log({...click,event_id:id});await logger.flush();assert.equal(batches.length,2);assert.equal(logger.getSnapshot(),'all_saved');
 });
 test('bounded retries retain stable events and unsaved state',async()=>{
- const calls=[];const {logger,jobs}=fixture({send:async e=>{calls.push(e);throw Error();}});logger.log(click);for(let n=0;n<6;n++)await logger.flush();assert.equal(calls.length,3);assert.deepEqual(calls[0],calls[2]);assert.equal(logger.getSnapshot(),'unsaved');assert.equal(jobs.size,0);
+ const calls=[];const {logger,jobs}=fixture({send:async e=>{calls.push(e);throw Error();}});logger.log(click);for(let n=0;n<6;n++)await logger.flush();assert.equal(calls.length,3);assert.deepEqual(calls[0],calls[2]);assert.equal(logger.getSnapshot(),'unsaved_persisted');logger.stop();assert.equal(jobs.size,0);
 });
 test('retry success accepts server dedup acknowledgement',async()=>{
- let count=0;const {logger}=fixture({send:async e=>{if(++count===1)throw Error();return {status:'ok',inserted:0,duplicates:e.length};}});logger.log(click);assert.equal(await logger.flush(),false);assert.equal(await logger.flush(),true);assert.equal(logger.getSnapshot(),'ready');
+ let count=0;const {logger}=fixture({send:async e=>{if(++count===1)throw Error();return {status:'ok',inserted:0,duplicates:e.length};}});logger.log(click);assert.equal(await logger.flush(),false);assert.equal(await logger.flush(),true);assert.equal(logger.getSnapshot(),'all_saved');
 });
 test('queue and identity failures do not throw into workflow',()=>{
  const {logger}=fixture({maxQueue:1});logger.log(click);assert.equal(logger.log(click),false);assert.equal(logger.getSnapshot(),'error');assert.doesNotThrow(()=>fixture({getIdentity:()=>{throw Error();}}).logger.log(click));
@@ -59,11 +59,11 @@ test('logger callback failure cannot undo confirmed survey',async()=>{
  const post=createPostSurvey({getIdentity:()=>identity,markPostComplete:()=>{}},async()=>({status:'ok'}),()=>{throw Error();});await post.submit(Object.fromEntries(POST_RATINGS.map(([k])=>[k,3])));assert.equal(post.getSnapshot().status,'complete');
 });
 test('concurrent flush shares request; stopping cancels retries',async()=>{
- let release,count=0;const {logger,jobs}=fixture({send:e=>{count++;return new Promise(resolve=>{release=()=>resolve({status:'ok',inserted:e.length,duplicates:0});});}});logger.log(click);const a=logger.flush(),b=logger.flush();await Promise.resolve();assert.equal(count,1);assert.equal(a,b);logger.stop();release();await a;assert.equal(jobs.size,0);
+ let release,count=0;const {logger,jobs}=fixture({send:e=>{count++;return new Promise(resolve=>{release=()=>resolve({status:'ok',inserted:e.length,duplicates:0});});}});logger.log(click);const a=logger.flush(),b=logger.flush();await new Promise(setImmediate);assert.equal(count,1);assert.equal(a,b);logger.stop();release();await a;assert.equal(jobs.size,0);
 });
 
 test('unconfirmed acknowledgements remain unsaved; new arrivals survive inflight batch',async()=>{
- let release;const {logger}=fixture({send:()=>new Promise(resolve=>{release=resolve;})});logger.log(click);const pending=logger.flush();await Promise.resolve();logger.log(click);release({status:'ok',inserted:0,duplicates:0});await pending;assert.equal(logger.getSnapshot(),'unsaved');logger.stop();
+ let release;const {logger}=fixture({send:()=>new Promise(resolve=>{release=resolve;})});logger.log(click);const pending=logger.flush();await new Promise(setImmediate);logger.log(click);release({status:'ok',inserted:0,duplicates:0});await pending;assert.equal(logger.getSnapshot(),'unsaved_persisted');logger.stop();
 });
 test('restored pre-survey completion does not fabricate submit event',async()=>{
  let called=false;const manager={getIdentity:()=>identity,storageUnavailable:()=>false,isComplete:()=>true,readPending:()=>null};

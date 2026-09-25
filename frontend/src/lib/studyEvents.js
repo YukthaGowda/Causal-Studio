@@ -1,3 +1,5 @@
+import { createStudyEventQueue } from './studyEventQueue.js';
+
 // Explicit semantic events only: no DOM listeners, keystrokes, or API payload capture.
 export const EVENT_TYPES = new Set('page_view phase_change button_click dataset_upload document_upload document_ingestion rag_search chat_user_message chat_assistant_response variable_selection graph_action feasibility_check identification_check estimation_action report_export pre_survey_submit post_survey_submit error'.split(' '));
 const phases = ['setup', 'data-foundation', 'explore', 'question', 'feasibility', 'graph', 'strategy', 'estimation', 'review'];
@@ -74,62 +76,62 @@ export const summarizeIdentification = result => summarizeAnalysis('identificati
 export const summarizeEstimation = result => summarizeAnalysis('estimation', result);
 export const summarizeReportExport = result => summarizeAnalysis('report', result);
 
-export function createStudyEventLogger({ getIdentity, send, uuid = () => globalThis.crypto.randomUUID(), now = () => new Date().toISOString(), schedule = setTimeout, cancel = clearTimeout, maxQueue = 100, batchSize = 10, maxAttempts = 3, delayMs = 2000 }) {
-  const queue = []; const seen = new Set(); const listeners = new Set();
-  let status = 'ready', timer, inFlight, dropped = false, paused = false;
-  const publish = value => { status = value; for (const fn of listeners) { try { fn(); } catch { /* Logging never interrupts callers. */ } } };
-  function scheduleFlush(delay = delayMs) {
-    if (!paused && !timer && queue.some(item => item.attempts < maxAttempts)) timer = schedule(() => { timer = null; void flush(); }, delay);
+function buildEvent(input, identity, id, timestamp) {
+  if (!Number.isFinite(Date.parse(timestamp)) || !/^[A-Za-z0-9_.:-]{1,80}$/.test(identity?.study_version || '')) return false;
+  if (!EVENT_TYPES.has(input.event_type)) return false;
+  const token = value => typeof value === 'string' && /^[a-z][a-z0-9_:-]{0,79}$/.test(value);
+  if (!token(input.event_label) || (input.ui_element && !token(input.ui_element))) return false;
+  if (!/^participant_[0-9a-f-]{36}$/i.test(identity?.participant_id) || !/^session_[0-9a-f-]{36}$/i.test(identity?.session_id)) return false;
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)) return false;
+  const event = { event_id: id, participant_id: identity.participant_id, session_id: identity.session_id, study_version: identity.study_version,
+    client_timestamp: timestamp, phase: normalizePhase(input.phase ?? input.metadata?.phase_number), event_type: input.event_type, event_label: input.event_label,
+    metadata_json: sanitizeMetadata(input.metadata) };
+  if (input.ui_element) event.ui_element = input.ui_element;
+  const textField = input.event_type === 'chat_user_message' && input.submitted === true ? 'user_input_text'
+    : input.event_type === 'chat_assistant_response' && input.displayed === true ? 'assistant_output_text' : null;
+  if (textField) {
+    const original = input[textField];
+    event[textField] = safeText(original);
+    if (event[textField] !== original) event.metadata_json.text_sanitized = true;
+    if (typeof original === 'string' && original.length > 4000) event.metadata_json.text_truncated = true;
   }
+  const kind = { feasibility_check:'feasibility', graph_action:'graph', identification_check:'identification', estimation_action:'estimation', report_export:'report' }[input.event_type];
+  if (kind && input.analysis_result_summary) event.analysis_result_summary = JSON.stringify(summarizeAnalysis(kind, input.analysis_result_summary));
+  return event;
+}
+
+function restoreEvent(saved) {
+  if (!saved || typeof saved !== 'object') return false;
+  let summary;
+  if (typeof saved.analysis_result_summary === 'string' && saved.analysis_result_summary.length <= 2000) {
+    try { summary = JSON.parse(saved.analysis_result_summary); } catch { /* Invalid summary is omitted. */ }
+  }
+  // Explicit reconstruction excludes arbitrary storage keys and reuses the same
+  // submitted/displayed text and metadata filters. Original identity is retained.
+  return buildEvent({ event_type: saved.event_type, event_label: saved.event_label, phase: saved.phase,
+    ui_element: saved.ui_element, metadata: saved.metadata_json,
+    submitted: typeof saved.user_input_text === 'string', displayed: typeof saved.assistant_output_text === 'string', user_input_text: saved.user_input_text,
+    assistant_output_text: saved.assistant_output_text, analysis_result_summary: summary },
+  saved, saved.event_id, saved.client_timestamp);
+}
+
+export function createStudyEventLogger({ getIdentity, uuid = () => globalThis.crypto.randomUUID(), now = () => new Date().toISOString(), ...options }) {
+  const queue = createStudyEventQueue({ ...options, now, sanitizeRestored: restoreEvent });
+  const seen = new Set();
   function log(input = {}) {
     try {
-      if (!EVENT_TYPES.has(input.event_type)) return false;
-      const token = value => typeof value === 'string' && /^[a-z][a-z0-9_:-]{0,79}$/.test(value);
-      if (!token(input.event_label) || (input.ui_element && !token(input.ui_element))) return false;
-      const identity = getIdentity();
-      if (!/^participant_[0-9a-f-]{36}$/i.test(identity?.participant_id) || !/^session_[0-9a-f-]{36}$/i.test(identity?.session_id)) return false;
       const id = input.event_id || uuid();
-      if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)) return false;
       if (seen.has(id)) return id;
-      if (queue.length >= maxQueue) { dropped = true; publish('error'); return false; }
-      const event = { event_id: id, participant_id: identity.participant_id, session_id: identity.session_id, study_version: identity.study_version,
-        client_timestamp: now(), phase: normalizePhase(input.phase ?? input.metadata?.phase_number), event_type: input.event_type, event_label: input.event_label,
-        metadata_json: sanitizeMetadata(input.metadata) };
-      if (input.ui_element) event.ui_element = input.ui_element;
-      const textField = input.event_type === 'chat_user_message' && input.submitted === true ? 'user_input_text'
-        : input.event_type === 'chat_assistant_response' && input.displayed === true ? 'assistant_output_text' : null;
-      if (textField) {
-        const original = input[textField];
-        event[textField] = safeText(original);
-        if (event[textField] !== original) event.metadata_json.text_sanitized = true;
-        if (typeof original === 'string' && original.length > 4000) event.metadata_json.text_truncated = true;
-      }
-      const kind = { feasibility_check:'feasibility', graph_action:'graph', identification_check:'identification', estimation_action:'estimation', report_export:'report' }[input.event_type];
-      if (kind && input.analysis_result_summary) event.analysis_result_summary = JSON.stringify(summarizeAnalysis(kind, input.analysis_result_summary));
-      queue.push({ event, attempts: 0 }); seen.add(id);
-      // Bound session dedup memory. Backend event IDs remain the final dedup authority.
+      const event = buildEvent(input, getIdentity(), id, now());
+      if (!event || !queue.enqueue(event)) return false;
+      seen.add(id);
+      // Backend deduplication remains the final authority, including across tabs.
       if (seen.size > 1000) seen.delete(seen.values().next().value);
-      if (!inFlight) publish(dropped ? 'error' : 'unsaved');
-      scheduleFlush(); return id;
-    } catch { publish('error'); return false; }
+      return id;
+    } catch { return false; }
   }
-  function flush() {
-    if (inFlight) return inFlight;
-    if (timer) { cancel(timer); timer = null; }
-    const batch = queue.filter(item => item.attempts < maxAttempts).slice(0, Math.min(batchSize, 10));
-    if (!batch.length) { publish(dropped ? 'error' : queue.length ? 'unsaved' : 'ready'); return Promise.resolve(false); }
-    batch.forEach(item => item.attempts++);
-    publish('sending');
-    inFlight = Promise.resolve().then(() => send(batch.map(item => structuredClone(item.event)))).then(result => {
-      if (result?.status !== 'ok' || !Number.isInteger(result.inserted) || !Number.isInteger(result.duplicates) || result.inserted < 0 || result.duplicates < 0 || result.inserted + result.duplicates !== batch.length) throw Error('Unconfirmed batch');
-      for (const item of batch) queue.splice(queue.indexOf(item), 1);
-      publish(dropped ? 'error' : queue.length ? 'unsaved' : 'ready'); return true;
-    }).catch(() => { publish('unsaved'); return false; }).finally(() => {
-      inFlight = null; scheduleFlush(delayMs * 2 ** Math.max(...batch.map(item => item.attempts - 1)));
-    });
-    return inFlight;
-  }
-  return { log, flush, getSnapshot: () => status, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); }, start: () => { paused = false; scheduleFlush(); }, stop: () => { paused = true; if (timer) cancel(timer); timer = null; } };
+  const { enqueue, ...controls } = queue;
+  return { ...controls, log };
 }
 
 // Lifecycle effects may repeat under React Strict Mode. Confirmed callbacks alone

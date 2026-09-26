@@ -1,0 +1,4 @@
+# Known synthetic persistence/integration-test participants. No records are deleted.
+participant_35bc6a8b-baa8-4e12-95fe-eb7fbf3baa00
+participant_5e80cfe2-bd0e-40ad-8a2f-26df26e27b65
+participant_493a2281-8fb6-4538-a287-72e37dc177f6

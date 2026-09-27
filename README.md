@@ -48,7 +48,7 @@ The LLM recommends, explains, and drafts. Deterministic Python backend validatio
 
 ## Official 8-Step Workflow
 
-Hansoo's updated workflow is:
+workflow is:
 
 1. Project Setup and Document Upload
 2. Data Foundation and Understanding

@@ -1,15 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createStudyEventLogger, createStudyLifecycle, sanitizeMetadata, summarizeAnalysis, EVENT_TYPES } from './studyEvents.js';
 import { createStudySession, PRE_SURVEY_FIELDS } from './studySession.js';
 import { createPostSurvey, POST_RATINGS } from './postSurvey.js';
 const identity={participant_id:`participant_${webcrypto.randomUUID()}`,session_id:`session_${webcrypto.randomUUID()}`,study_version:'pilot-v1'};
 const click={event_type:'button_click',event_label:'test_button',phase:9};
+const privacyFixtures = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/study_text_privacy.json', import.meta.url), 'utf8'));
 function fixture(options={}) {
  const batches=[], jobs=new Map();let sequence=0;
  const logger=createStudyEventLogger({store:{load:async()=>[],put:async()=>true,update:async()=>{},remove:async()=>{}},getIdentity:()=>identity,uuid:()=>webcrypto.randomUUID(),now:()=> '2026-09-22T12:00:00.000Z',send:async events=>{batches.push(events);return {status:'ok',inserted:events.length,duplicates:0};},schedule:fn=>{jobs.set(++sequence,fn);return sequence;},cancel:id=>jobs.delete(id),...options});
  return {logger,batches,jobs};
+}
+for (const sample of privacyFixtures) {
+ test(`statistical/contact privacy: ${sample.name}`, async () => {
+  const {logger,batches}=fixture();
+  const logText=(text, metadata={})=>{
+   logger.log({...click,event_type:'chat_user_message',submitted:true,user_input_text:text,metadata});
+   logger.log({...click,event_type:'chat_assistant_response',displayed:true,assistant_output_text:text,metadata:{...metadata,response_source:'deterministic_response'}});
+  };
+  logText(sample.text);await logger.flush();
+  const changed=sample.expected!==sample.text;
+  for(const event of batches[0]) {
+   assert.equal(event.user_input_text ?? event.assistant_output_text,sample.expected);
+   assert.equal(event.metadata_json.text_sanitized===true,changed);
+   assert.equal(event.metadata_json.text_truncated,undefined);
+  }
+  logText(sample.expected,changed?{text_sanitized:true}:{});await logger.flush();
+  for(const event of batches[1]) {
+   assert.equal(event.user_input_text ?? event.assistant_output_text,sample.expected,'repeat filtering must be idempotent');
+   assert.equal(event.metadata_json.text_sanitized===true,changed,'retain an earlier sanitization marker');
+  }
+  logger.stop();
+ });
 }
 test('event UUID, timestamp, identity and normalized phase',async()=>{
  const {logger,batches}=fixture();const id=logger.log(click);await logger.flush();const e=batches[0][0];

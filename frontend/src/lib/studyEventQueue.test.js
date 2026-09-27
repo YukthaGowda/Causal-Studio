@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { createDashboardEvents } from './dashboardEvents.js';
 import { createStudyEventLogger, createStudyLifecycle } from './studyEvents.js';
 import { createIndexedDBEventStore, QUEUE_TTL_MS, retryStudyEventsAfter } from './studyEventQueue.js';
 import { createStudySession, PRE_SURVEY_FIELDS } from './studySession.js';
@@ -11,6 +13,7 @@ const identity = () => ({ participant_id: `participant_${uuid()}`, session_id: `
 const click = { event_type: 'button_click', event_label: 'synthetic_test_button', phase: 'review' };
 const offline = async () => { throw Error('Mock outage'); };
 const tick = () => new Promise(setImmediate);
+const privacyFixtures = JSON.parse(readFileSync(new URL('../../../backend/tests/fixtures/study_text_privacy.json', import.meta.url), 'utf8'));
 function mockStore() {
   const rows = new Map(), writes = [];
   return {
@@ -33,6 +36,50 @@ function fixture(options = {}) {
     send: async events => { sent.push(events); return { status: 'ok', inserted: events.length, duplicates: 0 }; }, ...options });
   return { logger, store, sent, jobs, who, advance: ms => { time += ms; } };
 }
+
+test('shared statistical/contact fixtures persist only sanitized text and replay unchanged', async () => {
+  const sources=['llm_response','deterministic_response','fallback_response','error_response'];
+  for(const sample of privacyFixtures) {
+    for(const source of sources) {
+      const original=fixture({send:offline});
+      const tracker=createDashboardEvents(original.logger.log,uuid);
+      const chat=tracker.chat('estimation',sample.text);
+      const message=chat.message(sample.text,{system_prompt:'HIDDEN_PROMPT',retrieved_chunks:['HIDDEN_RAG'],backend_context:'HIDDEN_PAYLOAD'},source);
+      assert.equal(message.text,sample.text,'privacy filtering must not change the displayed response');
+      assert.equal(original.logger.getCounts().pending,1,'assistant text waits for display');
+      tracker.displayMessages('review',[message]);
+      await original.logger.flush();original.logger.stop();
+      assert.equal(original.store.rows.size,2);
+      for(const saved of original.store.writes) {
+        const event=saved.event;
+        assert.equal(event.user_input_text ?? event.assistant_output_text,sample.expected,`${sample.name}: sanitize before persistence`);
+        assert.equal(event.metadata_json.text_sanitized===true,sample.text!==sample.expected);
+        assert.equal(event.metadata_json.text_truncated,undefined);
+        assert.equal(event.phase,'estimation');
+        for(const key of ['participant_id','session_id','study_version']) assert.equal(event[key],original.who[key]);
+      }
+      const before=[...original.store.rows.values()].map(row=>row.event);
+      assert.equal(before[0].metadata_json.request_id,before[1].metadata_json.request_id);
+      assert.equal(before[1].metadata_json.source,source);
+      assert.ok(!JSON.stringify(original.store.writes).includes('HIDDEN_'));
+      const fresh=fixture({store:original.store}); // New identity must not replace restored identity.
+      await fresh.logger.flush();fresh.logger.stop();
+      assert.deepEqual(fresh.sent,[before],sample.name);
+      assert.equal(original.store.rows.size,0);
+    }
+  }
+});
+
+test('replay preserves old redaction markers and the separate truncation marker', async () => {
+  const oldText='Point estimate -2.[phone-like text removed]% CI; [email removed].';
+  const original=fixture({send:offline});
+  original.logger.log({...click,event_type:'chat_assistant_response',displayed:true,assistant_output_text:oldText,metadata:{text_sanitized:true,text_truncated:true,response_source:'deterministic_response'}});
+  await original.logger.flush();original.logger.stop();
+  const fresh=fixture({store:original.store});await fresh.logger.flush();fresh.logger.stop();
+  assert.equal(fresh.sent[0][0].assistant_output_text,oldText);
+  assert.equal(fresh.sent[0][0].metadata_json.text_sanitized,true);
+  assert.equal(fresh.sent[0][0].metadata_json.text_truncated,true);
+});
 
 test('unsent sanitized event and retry bookkeeping are committed before network transmission', async () => {
   const store = mockStore(); let transmissions = 0;

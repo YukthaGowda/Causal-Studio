@@ -1,0 +1,506 @@
+[
+  {
+    "name": "coefficient_positive",
+    "kind": "statistics",
+    "text": "Coefficient 2.345678.",
+    "expected": "Coefficient 2.345678.",
+    "original": true
+  },
+  {
+    "name": "coefficient_negative",
+    "kind": "statistics",
+    "text": "Coefficient -2.345678.",
+    "expected": "Coefficient -2.345678.",
+    "original": true
+  },
+  {
+    "name": "standard_error",
+    "kind": "statistics",
+    "text": "SE 0.456789.",
+    "expected": "SE 0.456789.",
+    "original": true
+  },
+  {
+    "name": "confidence_label",
+    "kind": "statistics",
+    "text": "The 95% CI reflects uncertainty.",
+    "expected": "The 95% CI reflects uncertainty.",
+    "original": true
+  },
+  {
+    "name": "confidence_bounds",
+    "kind": "statistics",
+    "text": "95% CI: (-8.765432, 4.074076).",
+    "expected": "95% CI: (-8.765432, 4.074076).",
+    "original": true
+  },
+  {
+    "name": "p_values",
+    "kind": "statistics",
+    "text": "p=0.012345, p<0.001, p=2.5e-06, p=4E-08.",
+    "expected": "p=0.012345, p<0.001, p=2.5e-06, p=4E-08.",
+    "original": true
+  },
+  {
+    "name": "sample_count",
+    "kind": "statistics",
+    "text": "N=1,106.",
+    "expected": "N=1,106.",
+    "original": true
+  },
+  {
+    "name": "adjacent_labeled_fields",
+    "kind": "statistics",
+    "text": "Coefficient -2.345678, SE 0.456789, p=0.012345, N=1,106.",
+    "expected": "Coefficient -2.345678, SE 0.456789, p=0.012345, N=1,106.",
+    "original": true
+  },
+  {
+    "name": "positive_coefficient_ci",
+    "kind": "statistics",
+    "text": "Point estimate 2.345678 (95% CI: 0.111111, 4.580245).",
+    "expected": "Point estimate 2.345678 (95% CI: 0.111111, 4.580245).",
+    "original": true
+  },
+  {
+    "name": "negative_coefficient_ci",
+    "kind": "statistics",
+    "text": "Point estimate -2.345678 (95% CI: -8.765432, 4.074076).",
+    "expected": "Point estimate -2.345678 (95% CI: -8.765432, 4.074076).",
+    "original": true
+  },
+  {
+    "name": "short_coefficient_ci",
+    "kind": "statistics",
+    "text": "Point estimate -2.3456 (95% CI: -8.7654, 4.0741).",
+    "expected": "Point estimate -2.3456 (95% CI: -8.7654, 4.0741).",
+    "original": true
+  },
+  {
+    "name": "no_space_coefficient_ci",
+    "kind": "statistics",
+    "text": "Point estimate -2.345678(95% CI: -8.765432, 4.074076).",
+    "expected": "Point estimate -2.345678(95% CI: -8.765432, 4.074076).",
+    "original": true
+  },
+  {
+    "name": "no_space_seven_decimals_ci",
+    "kind": "statistics",
+    "text": "Point estimate -2.3456789(95% CI: -8.765432, 4.074076).",
+    "expected": "Point estimate -2.3456789(95% CI: -8.765432, 4.074076).",
+    "original": true
+  },
+  {
+    "name": "long_decimal",
+    "kind": "statistics",
+    "text": "Coefficient 0.1234567890.",
+    "expected": "Coefficient 0.1234567890.",
+    "original": true
+  },
+  {
+    "name": "long_standard_error",
+    "kind": "statistics",
+    "text": "SE 0.1234567890.",
+    "expected": "SE 0.1234567890.",
+    "original": true
+  },
+  {
+    "name": "long_scientific_p",
+    "kind": "statistics",
+    "text": "p=1.2345678901e-06.",
+    "expected": "p=1.2345678901e-06.",
+    "original": true
+  },
+  {
+    "name": "adjacent_integer_bounds",
+    "kind": "statistics",
+    "text": "CI bounds (12345 67890).",
+    "expected": "CI bounds (12345 67890).",
+    "original": true
+  },
+  {
+    "name": "comma_separated_bounds",
+    "kind": "statistics",
+    "text": "CI bounds (12345, 67890).",
+    "expected": "CI bounds (12345, 67890).",
+    "original": true
+  },
+  {
+    "name": "long_unseparated_count",
+    "kind": "statistics",
+    "text": "N=1234567890.",
+    "expected": "N=1234567890.",
+    "original": true
+  },
+  {
+    "name": "long_separated_count",
+    "kind": "statistics",
+    "text": "N=1,234,567,890.",
+    "expected": "N=1,234,567,890.",
+    "original": true
+  },
+  {
+    "name": "complete_synthetic_result",
+    "kind": "statistics",
+    "text": "Synthetic estimation complete with 2 warning(s). Point estimate -2.345678 (95% CI: -8.765432, 4.074076), SE 3.210987, p=0.456789, N=1,106.",
+    "expected": "Synthetic estimation complete with 2 warning(s). Point estimate -2.345678 (95% CI: -8.765432, 4.074076), SE 3.210987, p=0.456789, N=1,106.",
+    "original": true
+  },
+  {
+    "name": "phone_international",
+    "kind": "contact",
+    "text": "Contact +1 (202) 555-0147.",
+    "expected": "Contact [phone-like text removed].",
+    "original": true
+  },
+  {
+    "name": "phone_hyphenated",
+    "kind": "contact",
+    "text": "Contact 202-555-0147.",
+    "expected": "Contact [phone-like text removed].",
+    "original": true
+  },
+  {
+    "name": "phone_digits",
+    "kind": "contact",
+    "text": "Contact 2025550147.",
+    "expected": "Contact [phone-like text removed].",
+    "original": true
+  },
+  {
+    "name": "phone_dotted",
+    "kind": "contact",
+    "text": "Contact 202.555.0147.",
+    "expected": "Contact [phone-like text removed].",
+    "original": true
+  },
+  {
+    "name": "email",
+    "kind": "contact",
+    "text": "Contact synthetic@example.com.",
+    "expected": "Contact [email removed].",
+    "original": true
+  },
+  {
+    "name": "mixed_labeled",
+    "kind": "mixed",
+    "text": "Coefficient -2.345678, SE 0.456789, p=0.012345, N=1,106. Contact +1 (202) 555-0147 or synthetic@example.com.",
+    "expected": "Coefficient -2.345678, SE 0.456789, p=0.012345, N=1,106. Contact [phone-like text removed] or [email removed].",
+    "original": true
+  },
+  {
+    "name": "mixed_coefficient_ci",
+    "kind": "mixed",
+    "text": "Point estimate -2.345678 (95% CI: -8.765432, 4.074076). Contact +1 (202) 555-0147 or synthetic@example.com.",
+    "expected": "Point estimate -2.345678 (95% CI: -8.765432, 4.074076). Contact [phone-like text removed] or [email removed].",
+    "original": true
+  },
+  {
+    "name": "phone_parenthesized",
+    "kind": "boundary_or_contact",
+    "text": "Call (202) 555-0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_parenthesized_compact",
+    "kind": "boundary_or_contact",
+    "text": "Call (202)5550147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_country_hyphen",
+    "kind": "boundary_or_contact",
+    "text": "Call 1-202-555-0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_spaced",
+    "kind": "boundary_or_contact",
+    "text": "Call 202 555 0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_international_compact",
+    "kind": "boundary_or_contact",
+    "text": "Call +442079460958.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_uk",
+    "kind": "boundary_or_contact",
+    "text": "Call +44 20 7946 0958.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_india",
+    "kind": "boundary_or_contact",
+    "text": "Call +91 98765 43210.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_australia",
+    "kind": "boundary_or_contact",
+    "text": "Call +61 2 5550 0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_country_compact_subscriber",
+    "kind": "boundary_or_contact",
+    "text": "Call +1 2025550147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_country_dotted",
+    "kind": "boundary_or_contact",
+    "text": "Call 1.202.555.0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "phone_country_parenthesized",
+    "kind": "boundary_or_contact",
+    "text": "Call +1(202)555-0147.",
+    "expected": "Call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "contact_punctuation",
+    "kind": "boundary_or_contact",
+    "text": "Call [202-555-0147], or synthetic+study@example.org.",
+    "expected": "Call [[phone-like text removed]], or [email removed].",
+    "original": false
+  },
+  {
+    "name": "phone_outer_parentheses",
+    "kind": "boundary_or_contact",
+    "text": "Call (202-555-0147).",
+    "expected": "Call ([phone-like text removed]).",
+    "original": false
+  },
+  {
+    "name": "contact_then_statistics",
+    "kind": "boundary_or_contact",
+    "text": "Call 202.555.0147. 95% CI: (-2.345678, 3.456789).",
+    "expected": "Call [phone-like text removed]. 95% CI: (-2.345678, 3.456789).",
+    "original": false
+  },
+  {
+    "name": "count_then_contact",
+    "kind": "boundary_or_contact",
+    "text": "N=1234567890; phone 2025550147.",
+    "expected": "N=1234567890; phone [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "sample_size",
+    "kind": "boundary_or_contact",
+    "text": "Sample size: 1234567890.",
+    "expected": "Sample size: 1234567890.",
+    "original": false
+  },
+  {
+    "name": "observation_count",
+    "kind": "boundary_or_contact",
+    "text": "Observation count = 1234567890.",
+    "expected": "Observation count = 1234567890.",
+    "original": false
+  },
+  {
+    "name": "bare_ambiguous_integer",
+    "kind": "boundary_or_contact",
+    "text": "Contact 1234567890.",
+    "expected": "Contact [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "statistics_not_sentence_exemption",
+    "kind": "boundary_or_contact",
+    "text": "The point estimate is uncertain; call 2025550147.",
+    "expected": "The point estimate is uncertain; call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "leading_decimal",
+    "kind": "boundary_or_contact",
+    "text": "Coefficient .123456789012345e-06.",
+    "expected": "Coefficient .123456789012345e-06.",
+    "original": false
+  },
+  {
+    "name": "negative_scientific",
+    "kind": "boundary_or_contact",
+    "text": "p=-1.2345678901E+06.",
+    "expected": "p=-1.2345678901E+06.",
+    "original": false
+  },
+  {
+    "name": "integer_mantissa",
+    "kind": "boundary_or_contact",
+    "text": "p=1234567890e-12.",
+    "expected": "p=1234567890e-12.",
+    "original": false
+  },
+  {
+    "name": "long_exponent",
+    "kind": "boundary_or_contact",
+    "text": "p=2e+1234567890.",
+    "expected": "p=2e+1234567890.",
+    "original": false
+  },
+  {
+    "name": "overlong_integer",
+    "kind": "boundary_or_contact",
+    "text": "Integer 1234567890123456.",
+    "expected": "Integer 1234567890123456.",
+    "original": false
+  },
+  {
+    "name": "overlong_grouped_token",
+    "kind": "boundary_or_contact",
+    "text": "Token 202-555-0147123456.",
+    "expected": "Token 202-555-0147123456.",
+    "original": false
+  },
+  {
+    "name": "confidence_levels",
+    "kind": "boundary_or_contact",
+    "text": "Estimate +2.345678 (90% CI: -3.456789, 4.567890); estimate -2.345678 (99.5% CI: -3.456789, 4.567890).",
+    "expected": "Estimate +2.345678 (90% CI: -3.456789, 4.567890); estimate -2.345678 (99.5% CI: -3.456789, 4.567890).",
+    "original": false
+  },
+  {
+    "name": "long_decimal_confidence",
+    "kind": "boundary_or_contact",
+    "text": "Estimate -2.1234567890 (99% CI: -3.1234567890, 0.000001).",
+    "expected": "Estimate -2.1234567890 (99% CI: -3.1234567890, 0.000001).",
+    "original": false
+  },
+  {
+    "name": "incomplete_confidence_parentheses",
+    "kind": "boundary_or_contact",
+    "text": "Estimate -2.345678 (95",
+    "expected": "Estimate -2.345678 (95",
+    "original": false
+  },
+  {
+    "name": "malformed_numeric_groups",
+    "kind": "boundary_or_contact",
+    "text": "Values 12345 (67890) and 12 (34567890).",
+    "expected": "Values 12345 (67890) and 12 (34567890).",
+    "original": false
+  },
+  {
+    "name": "short_phone_like_groups",
+    "kind": "boundary_or_contact",
+    "text": "Values (123) 45-6789 and 123-45-6789.",
+    "expected": "Values (123) 45-6789 and 123-45-6789.",
+    "original": false
+  },
+  {
+    "name": "decimal_prefix_phone_shape",
+    "kind": "boundary_or_contact",
+    "text": "Value 0.2025550147 and .2025550147.",
+    "expected": "Value 0.2025550147 and .2025550147.",
+    "original": false
+  },
+  {
+    "name": "numeric_token_suffix",
+    "kind": "boundary_or_contact",
+    "text": "Value 2025550147e-06 and 2025550147.125.",
+    "expected": "Value 2025550147e-06 and 2025550147.125.",
+    "original": false
+  },
+  {
+    "name": "phones_comma_separated",
+    "kind": "boundary_or_contact",
+    "text": "Call 202-555-0147, 202.555.0148 or synthetic@example.com.",
+    "expected": "Call [phone-like text removed], [phone-like text removed] or [email removed].",
+    "original": false
+  },
+  {
+    "name": "historical_markers",
+    "kind": "boundary_or_contact",
+    "text": "Point estimate -2.[phone-like text removed]% CI; [email removed].",
+    "expected": "Point estimate -2.[phone-like text removed]% CI; [email removed].",
+    "original": false
+  },
+  {
+    "name": "count_label_formatted_phone",
+    "kind": "boundary_or_contact",
+    "text": "N=202-555-0147.",
+    "expected": "N=[phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "unknown_integer_context",
+    "kind": "boundary_or_contact",
+    "text": "Reference=1234567890.",
+    "expected": "Reference=[phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "long_integer_coefficient",
+    "kind": "boundary_or_contact",
+    "text": "Coefficient 1234567890.",
+    "expected": "Coefficient 1234567890.",
+    "original": false
+  },
+  {
+    "name": "signed_long_integer_coefficient",
+    "kind": "boundary_or_contact",
+    "text": "Point estimate +1234567890.",
+    "expected": "Point estimate +1234567890.",
+    "original": false
+  },
+  {
+    "name": "long_integer_se",
+    "kind": "boundary_or_contact",
+    "text": "SE=1234567890.",
+    "expected": "SE=1234567890.",
+    "original": false
+  },
+  {
+    "name": "long_integer_ci_comma",
+    "kind": "boundary_or_contact",
+    "text": "99% CI: (1234567890, 2234567890).",
+    "expected": "99% CI: (1234567890, 2234567890).",
+    "original": false
+  },
+  {
+    "name": "long_integer_ci_spaces",
+    "kind": "boundary_or_contact",
+    "text": "CI bounds (1234567890 2234567890).",
+    "expected": "CI bounds (1234567890 2234567890).",
+    "original": false
+  },
+  {
+    "name": "long_integer_ci_signed",
+    "kind": "boundary_or_contact",
+    "text": "Confidence interval: [-1234567890, +2234567890].",
+    "expected": "Confidence interval: [-1234567890, +2234567890].",
+    "original": false
+  },
+  {
+    "name": "ci_and_phone",
+    "kind": "boundary_or_contact",
+    "text": "95% CI: (1234567890, 2234567890); call 2025550147.",
+    "expected": "95% CI: (1234567890, 2234567890); call [phone-like text removed].",
+    "original": false
+  },
+  {
+    "name": "ci_formatted_phone",
+    "kind": "boundary_or_contact",
+    "text": "CI: 202-555-0147.",
+    "expected": "CI: [phone-like text removed].",
+    "original": false
+  }
+]

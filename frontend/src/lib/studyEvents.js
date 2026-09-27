@@ -27,15 +27,32 @@ export function sanitizeMetadata(metadata = {}) {
   if (removed) clean.metadata_sanitized = true;
   return clean;
 }
+function redactPhones(text) {
+  // Keep these phone formats/boundaries in sync with study_privacy.py. Grouping
+  // must be complete; decimal tails and exponent fragments are not phone tokens.
+  const candidates = /(?:\+?[0-9]{1,3}[ -]?)?\([0-9]{2,4}\)[ -]?[0-9]{3,4}[ -]?[0-9]{3,4}|(?:\+?1[ .-]?)?[0-9]{3}([ .-])[0-9]{3}\1[0-9]{4}|\+[0-9]{1,3}(?:[ -][0-9]{1,6}){2,4}|\+[0-9]{1,3}[ -][0-9]{7,12}|\+?[0-9]{10,15}/g;
+  return text.replace(candidates, (candidate, separator, offset) => {
+    const before = text.slice(0, offset), after = text.slice(offset + candidate.length);
+    if (/[A-Za-z0-9_.+-]$/.test(before) || /^(?:[A-Za-z0-9_]|[.+-][0-9])/.test(after)) return candidate;
+    const digits = candidate.replace(/[^0-9]/g, '').length;
+    if (digits < 10 || digits > 15) return candidate;
+    // Exempt only an integer in an explicitly labeled statistical field or CI
+    // bound. These anchored contexts never exempt contact text elsewhere.
+    const count = /\b(?:n|sample[ _]size|sample[ _]count|observation[ _]count|row[ _]count)\s*[:=]\s*$/i;
+    const scalar = /\b(?:point estimate|coefficient|standard error|se|p-value)\s*(?:[:=]\s*|\s+)$/i;
+    const bound = /\b(?:ci(?: bounds)?|confidence interval)\s*:?\s*[([]?\s*(?:[+-]?[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?(?:\s*,\s*|\s+))?$/i;
+    if (/^\+?[0-9]+$/.test(candidate) && (count.test(before) || scalar.test(before) || bound.test(before))) return candidate;
+    return '[phone-like text removed]';
+  });
+}
 function safeText(text) {
   if (typeof text !== 'string') return '';
   if (/Traceback|\bat\s+\S+\s+\([^)]*:\d+|-----BEGIN|api[_ -]?key|authorization|password|secret/im.test(text)) return '[Content omitted]';
-  return text.slice(0, 4000)
+  return redactPhones(text.slice(0, 4000)
     .replace(/(?:[A-Za-z]:\\|(?:~|\.)?\/)(?:[^\s/\\]+[/\\])+[^\s]*/g, '[path removed]')
     .replace(/https?:\/\/\S+|www\.\S+/gi, '[URL removed]')
     .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[email removed]')
-    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[address removed]')
-    .replace(/\+?\d[\d ()-]{8,}\d/g, '[phone-like text removed]')
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[address removed]'))
     .replace(/\bsk-[\w-]+|Bearer\s+\S+/gi, '[credential removed]')
     .replace(/\b[^\s/\\]+\.(?:csv|xlsx?|pdf|docx?|txt|json)\b/gi, '[filename removed]').slice(0, 4000);
 }

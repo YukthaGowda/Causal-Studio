@@ -17,6 +17,70 @@ from app.services import study_storage
 from scripts import export_study_data as exporter
 
 
+class StudyExportPathTests(unittest.TestCase):
+    """Path-only checks: no database, participant records, or exports are created."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.repo = self.root / 'repo'
+        self.scripts = self.repo / 'backend' / 'scripts'
+        self.scripts.mkdir(parents=True)
+        (self.repo / '.git').mkdir()
+        location = patch.object(exporter, '__file__', str(self.scripts / 'export_study_data.py'))
+        location.start()
+        self.addCleanup(location.stop)
+        # output_path must not open SQLite, even accidentally.
+        database = patch.object(exporter.sqlite3, 'connect', side_effect=AssertionError('Path validation must not access SQLite'))
+        database.start()
+        self.addCleanup(database.stop)
+
+    def test_deployed_layout_protects_app_and_allows_external_output(self):
+        # Model the exact Railway layout without creating /app or /data locally.
+        with patch.object(exporter, '__file__', '/app/scripts/export_study_data.py'), patch.object(Path, 'exists', return_value=False):
+            for value in ('/app', '/app/export', '/app/something/export'):
+                with self.subTest(path=value), self.assertRaisesRegex(exporter.ExportError, 'outside repository/source'):
+                    exporter.output_path(value)
+            for value in ('/tmp/export', '/data/study_exports/export'):
+                with self.subTest(path=value):
+                    self.assertEqual(exporter.output_path(value), Path(value).resolve())
+
+    def test_local_backend_remains_protected_without_git_metadata(self):
+        (self.repo / '.git').rmdir()
+        for value in (self.repo / 'backend', self.repo / 'backend' / 'export', self.scripts / 'nested' / 'export'):
+            with self.subTest(path=value), self.assertRaisesRegex(exporter.ExportError, 'outside repository/source'):
+                exporter.output_path(value)
+
+    def test_local_git_ancestors_protect_entire_repository(self):
+        for marker_type in ('directory', 'file'):
+            if marker_type == 'file':
+                (self.repo / '.git').rmdir()
+                (self.repo / '.git').touch()  # Git worktrees use a .git file.
+            for value in (self.repo, self.repo / 'export', self.repo / 'frontend' / 'nested' / 'export'):
+                with self.subTest(marker=marker_type, path=value), self.assertRaisesRegex(exporter.ExportError, 'outside repository/source'):
+                    exporter.output_path(value)
+
+    def test_local_output_outside_repository_is_allowed(self):
+        output = self.root / 'external' / 'export'
+        self.assertEqual(exporter.output_path(output), output)
+        self.assertFalse(output.exists())
+
+    def test_existing_external_output_directory_is_rejected(self):
+        output = self.root / 'existing'
+        output.mkdir()
+        with self.assertRaisesRegex(exporter.ExportError, 'already exists'):
+            exporter.output_path(output)
+        self.assertTrue(output.is_dir())
+
+    def test_symlink_into_source_or_repository_is_rejected(self):
+        link = self.root / 'source-link'
+        link.symlink_to(self.repo, target_is_directory=True)
+        for value in (link / 'backend' / 'export', link / 'frontend' / 'export'):
+            with self.subTest(path=value), self.assertRaisesRegex(exporter.ExportError, 'outside repository/source'):
+                exporter.output_path(value)
+
+
 class StudyExportTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

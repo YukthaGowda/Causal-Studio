@@ -67,7 +67,9 @@ def read_exclusions(path):
 
 def output_path(value):
     path = Path(value).expanduser().resolve()
-    source_root = Path(__file__).resolve().parents[2]
+    # scripts/ lives directly under /app in deployment, or backend/ locally.
+    # Git-ancestor checks below also protect the rest of a local repository.
+    source_root = Path(__file__).resolve().parents[1]
     if path == source_root or source_root in path.parents or any((p / '.git').exists() for p in (path, *path.parents)):
         raise ExportError('Output must be outside repository/source directories.')
     if path.exists():

@@ -1426,11 +1426,12 @@ const STYLE = `
   .assistant-head span { font-size: 13.5px; font-weight: 600; }
   .assistant-body { padding: 14px 14px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .msg { font-size: 12.5px; line-height: 1.5; padding: 9px 11px; border-radius: 10px; max-width: 92%; white-space: pre-line; }
+  .assistant-col .msg { text-align: left; word-spacing: normal; white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
   .msg-assistant { align-self: flex-start; background: #EFF1F5; color: var(--navy); border-bottom-left-radius: 3px; }
   .assistant-questions { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 4px; flex-shrink: 0; }
   .assistant-next-row { padding: 4px 14px 8px; flex-shrink: 0; }
-  .assistant-next-btn { width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 12px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .assistant-next-btn { text-align: left; width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 12px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
   .assistant-next-btn:hover { background: #223251; }
   .assistant-q { text-align: left; font-size: 11.5px; border: 1px solid var(--border); background: #fff; border-radius: 7px; padding: 6px 10px; cursor: pointer; color: var(--navy); }
   .assistant-q:hover { background: var(--accent-soft); border-color: var(--accent); }
@@ -9652,7 +9653,7 @@ export default function CausalStudioApp() {
         <div className="assistant-head"><Sparkles size={15} color="var(--accent)" /><span>AI research assistant</span></div>
         <div className="assistant-body" ref={assistantScrollRef}>
           {assistantThread.map((m, i) => (
-            <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant text-justify"}`}>
+            <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant"}`}>
               {m.text}
               {m.warning && <div style={{ fontSize: 11, marginTop: 8, color: "var(--text-3)" }}>{m.warning}</div>}
             </div>

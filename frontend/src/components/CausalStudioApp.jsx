@@ -1562,19 +1562,6 @@ function ProjectSetupView({ state, actions }) {
 
   return (
     <>
-      <div className="ps-header">
-        <h1>Project setup</h1>
-        <p>
-          Define the initial study objective and upload the materials needed to understand your data.
-          Each item is reviewed separately because it serves a different purpose in the causal design workflow.
-        </p>
-        <span className="note"><Info size={12} /> Your research objective and variable definitions can be refined later.</span>
-        <div className={`backend-status ${backendStatus.connected ? "backend-status-ok" : "backend-status-warn"}`}>
-          <span>{backendStatus.connected ? "Backend connected" : "Backend not connected"}</span>
-          <small>{backendStatus.message}</small>
-        </div>
-      </div>
-
       <div className="card readiness-card">
         <div className="button-row" style={{ marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={startFixedBdeStudyMode}><Sparkles size={14} /> Load approved BDE study workspace</button>
@@ -1934,8 +1921,6 @@ function DataFoundationView({ state, actions }) {
           <StatusChip status={isComplete ? "complete" : "clarification"} />
         </div>
         <p>Before you explore anything, here's what was found in your data. This page is automated \u2014 it isn't interactive analysis.</p>
-        <span className="note"><Info size={12} /> A written summary and any clarifying questions from this check are in the assistant panel, on the right.</span>
-        <span className="note"><ShieldAlert size={12} /> Phase 2 explains data structure and quality. It does not assign final causal roles.</span>
         <div className="button-row" style={{ marginTop: 10 }}>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Data Structure")}>
             <Sparkles size={13} /> Interpret Data Structure
@@ -2198,10 +2183,6 @@ function ExploreView({ state, actions, onGoNext }) {
       <div className="ps-header">
         <h1>Broad data exploration</h1>
         <p>Look across the whole dataset before committing to a causal question. Nothing here is a causal claim \u2014 it's a map of what the data can plausibly support.</p>
-        <span className="note" style={{ background: "var(--warning-soft)", color: "var(--warning)" }}>
-          <Info size={12} /> Exploratory mode: patterns are observational only. Use "Promote" to carry a pattern into Causal Question and Variables.
-        </span>
-        <span className="note"><ShieldAlert size={12} /> Exploratory patterns can support hypothesis generation, but they do not establish causality.</span>
       </div>
 
       <div className="card">
@@ -6040,7 +6021,6 @@ function EstimationView({ state, actions, onGoNext }) {
       <div className="ps-header">
         <h1>Estimation &amp; calculation</h1>
         <p>Run your pre-specified analysis, review results and diagnostics, and confirm a primary result before continuing to Review &amp; Export.</p>
-        <span className="note"><ShieldAlert size={12} /> Proof-of-concept calculation support only: backend results help review the design, but they do not prove a causal effect or support clinical decisions.</span>
       </div>
 
       {/* ── Section 1: Pre-Run Config Summary ── */}
@@ -9622,7 +9602,6 @@ export default function CausalStudioApp() {
       </div>
 
       <div className={`main-col text-justify ${page === "graph" ? "main-col-canvas" : ""}`}>
-        <WorkflowActivityIndicator page={page} state={state} />
         <PanelErrorBoundary key={page}>
         {page === "setup" && <ProjectSetupView state={state} actions={actions} />}
         {page === "data-foundation" && <DataFoundationView state={state} actions={actions} />}

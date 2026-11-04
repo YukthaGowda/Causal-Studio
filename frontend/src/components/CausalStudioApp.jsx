@@ -1587,6 +1587,10 @@ function ProjectSetupView({ state, actions }) {
 
   return (
     <>
+      <div className="ps-header">
+        <h1>Project setup</h1>
+      </div>
+
       <div className="card readiness-card">
         <div className="button-row" style={{ marginBottom: 12 }}>
           <button className="btn btn-primary" onClick={startFixedBdeStudyMode}><Sparkles size={14} /> Load approved BDE study workspace</button>

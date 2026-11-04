@@ -827,6 +827,70 @@ function friendlyError(error, fallback = "The backend request failed.") {
 
 const ASSISTANT_RESPONSE_UNAVAILABLE = "Assistant response is unavailable. Please try again.";
 
+// Format only the displayed assistant text; stored messages and API payloads stay intact.
+// React text nodes keep model-provided HTML inert. No HTML/Markdown dependency is needed.
+function AssistantResponseText({ text }) {
+  const inline = (value) => value.split(/(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|(?<![\w*])\*(?=\S)(?:[^*\n]*\S)?\*(?![\w*]))/g).map((part, index) => {
+    if (/^\*\*.+\*\*$/.test(part) || /^__.+__$/.test(part)) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (/^`.+`$/.test(part)) return <code key={index}>{part.slice(1, -1)}</code>;
+    if (/^\*.+\*$/.test(part)) return <em key={index}>{part.slice(1, -1)}</em>;
+    return part.replace(/\*\*/g, "");
+  });
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+  const flushParagraph = () => {
+    if (paragraph.length) blocks.push(<p key={blocks.length}>{inline(paragraph.join("\n"))}</p>);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list) {
+      const Tag = list.ordered ? "ol" : "ul";
+      blocks.push(<Tag key={blocks.length}>{list.items.map((item, index) => <li key={index} value={list.ordered ? item.number : undefined}>{inline(item.text)}</li>)}</Tag>);
+    }
+    list = null;
+  };
+  let inCode = false;
+  let code = [];
+  const flushCode = () => {
+    if (code.length) blocks.push(<pre key={blocks.length}><code>{code.join("\n")}</code></pre>);
+    code = [];
+  };
+  for (const line of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
+    if (/^\s*```/.test(line)) {
+      flushParagraph(); flushList();
+      if (inCode) flushCode();
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) { code.push(line); continue; }
+    if (!line.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(line) || /^\s*\*\s*$/.test(line)) {
+      flushParagraph(); flushList(); continue;
+    }
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/);
+    const boldHeading = line.match(/^\s*\*\*(.+?)\*\*:?\s*$/);
+    if (heading || boldHeading) {
+      flushParagraph(); flushList();
+      blocks.push(<div key={blocks.length} className="assistant-section-title">{inline((heading || boldHeading)[1])}</div>);
+      continue;
+    }
+    const item = line.match(/^\s*(?:(\d+)[.)]|([-+*•]))\s+(.+)$/);
+    if (item) {
+      flushParagraph();
+      const ordered = Boolean(item[1]);
+      if (list && list.ordered !== ordered) flushList();
+      if (!list) list = { ordered, items: [] };
+      list.items.push({ number: ordered ? Number(item[1]) : undefined, text: item[3] });
+    } else if (list && /^\s+\S/.test(line)) {
+      list.items[list.items.length - 1].text += "\n" + line.trim();
+    } else {
+      flushList(); paragraph.push(line);
+    }
+  }
+  flushCode(); flushParagraph(); flushList();
+  return <div className="assistant-response-text">{blocks}</div>;
+}
+
 function assistantMessageFromResponse(response) {
   if (!response || typeof response !== "object") return ASSISTANT_RESPONSE_UNAVAILABLE;
 
@@ -1428,7 +1492,19 @@ const STYLE = `
   .msg { font-size: 12.5px; line-height: 1.65; padding: 10px 12px; border-radius: 8px; max-width: 100%; flex-shrink: 0; white-space: pre-wrap; }
   .assistant-col .msg { text-align: left; word-spacing: normal; overflow-wrap: anywhere; }
   .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; max-width: 92%; }
-  .msg-assistant { align-self: flex-start; background: #F3F5F8; color: var(--navy); border-bottom-left-radius: 3px; }
+  .msg-assistant { align-self: flex-start; width: 100%; background: #F2F6FA; color: var(--navy); border: 1px solid #E5ECF3; border-radius: 12px; padding: 14px; }
+  .assistant-response-text { display: flex; flex-direction: column; gap: 10px; white-space: normal; min-width: 0; }
+  .assistant-response-text p { margin: 0; white-space: pre-wrap; }
+  .assistant-response-text .assistant-section-title { color: var(--accent); font-size: 12.5px; font-weight: 600; line-height: 1.5; }
+  .assistant-response-text .assistant-section-title:not(:first-child) { margin-top: 4px; padding-top: 10px; border-top: 1px solid #DFE8F1; }
+  .assistant-response-text ul, .assistant-response-text ol { margin: 0; padding-left: 20px; }
+  .assistant-response-text li { padding-left: 2px; white-space: pre-wrap; }
+  .assistant-response-text li + li { margin-top: 6px; }
+  .assistant-response-text li::marker { color: var(--accent); }
+  .assistant-response-text strong { font-weight: 600; }
+  .assistant-response-text code { font-family: ui-monospace, monospace; font-size: 0.92em; background: #E7EEF6; border-radius: 4px; padding: 1px 4px; overflow-wrap: anywhere; }
+  .assistant-response-text pre { margin: 0; padding: 10px; background: #E7EEF6; border-radius: 6px; white-space: pre-wrap; }
+  .assistant-response-text pre code { padding: 0; background: transparent; }
   .assistant-questions { display: flex; flex-direction: column; gap: 4px; padding: 4px 14px 6px; flex-shrink: 0; }
   .assistant-next-row { padding: 2px 14px 6px; flex-shrink: 0; }
   .assistant-next-btn { text-align: left; width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 11px; min-height: 36px; font-size: 12px; line-height: 1.45; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -9676,7 +9752,7 @@ export default function CausalStudioApp() {
         <div className="assistant-body" ref={assistantScrollRef}>
           {assistantThread.map((m, i) => (
             <div key={i} className={`msg ${m.role === "user" ? "msg-user" : "msg-assistant"}`}>
-              {m.text}
+              {m.role === "user" ? m.text : <AssistantResponseText text={m.text} />}
               {m.warning && <div style={{ fontSize: 11, marginTop: 8, color: "var(--text-3)" }}>{m.warning}</div>}
             </div>
           ))}

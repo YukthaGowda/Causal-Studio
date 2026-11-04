@@ -1589,6 +1589,10 @@ function ProjectSetupView({ state, actions }) {
     <>
       <div className="ps-header">
         <h1>Project setup</h1>
+        <p>
+          Define the initial study objective and upload the materials needed to understand your data.
+          Each item is reviewed separately because it serves a different purpose in the causal design workflow.
+        </p>
       </div>
 
       <div className="card readiness-card">

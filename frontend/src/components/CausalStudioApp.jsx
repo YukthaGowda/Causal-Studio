@@ -1230,7 +1230,7 @@ const STYLE = `
   }
   .ps-root * { box-sizing: border-box; }
   .ps-root h1, .ps-root h2, .ps-root h3 { font-family: 'IBM Plex Sans', 'Inter', sans-serif; color: var(--navy); margin: 0; }
-  @media (max-width: 980px) { .ps-root { grid-template-columns: 1fr; height: auto; max-height: none; } .leftnav, .assistant-col { display: none; } }
+
 
   .leftnav { background: var(--navy); color: #fff; padding: 18px 14px; display: flex; flex-direction: column; overflow-y: auto; height: 100%; min-height: 0; }
   .leftnav-brand { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 600; padding: 4px 6px 20px; }
@@ -1243,7 +1243,7 @@ const STYLE = `
   .nav-item .lock { margin-left: auto; opacity: 0.5; }
   .nav-footer { margin-top: auto; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 11.5px; color: rgba(255,255,255,0.5); }
 
-  .main-col { padding: 12px 18px 24px; overflow-y: auto; min-height: 0; }
+  .main-col { padding: 12px 18px 24px; overflow-y: auto; min-height: 0; min-width: 0; }
   .text-justify { text-align: justify; }
   .main-col-canvas { padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .ps-header { margin-bottom: 8px; }
@@ -1421,26 +1421,51 @@ const STYLE = `
 
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--navy); color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 60; }
 
-  .assistant-col { background: #FAFBFC; border-left: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; max-height: 100%; min-height: 0; }
-  .assistant-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
-  .assistant-head span { font-size: 13.5px; font-weight: 600; }
-  .assistant-body { padding: 14px 14px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .msg { font-size: 12.5px; line-height: 1.5; padding: 9px 11px; border-radius: 10px; max-width: 92%; white-space: pre-line; }
-  .assistant-col .msg { text-align: left; word-spacing: normal; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
-  .msg-assistant { align-self: flex-start; background: #EFF1F5; color: var(--navy); border-bottom-left-radius: 3px; }
-  .assistant-questions { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px 4px; flex-shrink: 0; }
-  .assistant-next-row { padding: 4px 14px 8px; flex-shrink: 0; }
-  .assistant-next-btn { text-align: left; width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 12px; font-size: 12.5px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
+  .assistant-col { background: #FAFBFC; border-left: 1px solid var(--border); display: flex; flex-direction: column; height: 100%; max-height: 100%; min-height: 0; min-width: 0; }
+  .assistant-head { padding: 11px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+  .assistant-head span { font-size: 13px; font-weight: 600; }
+  .assistant-body { padding: 12px 14px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; overscroll-behavior: contain; }
+  .msg { font-size: 12.5px; line-height: 1.65; padding: 10px 12px; border-radius: 8px; max-width: 100%; flex-shrink: 0; white-space: pre-wrap; }
+  .assistant-col .msg { text-align: left; word-spacing: normal; overflow-wrap: anywhere; }
+  .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; max-width: 92%; }
+  .msg-assistant { align-self: flex-start; background: #F3F5F8; color: var(--navy); border-bottom-left-radius: 3px; }
+  .assistant-questions { display: flex; flex-direction: column; gap: 4px; padding: 4px 14px 6px; flex-shrink: 0; }
+  .assistant-next-row { padding: 2px 14px 6px; flex-shrink: 0; }
+  .assistant-next-btn { text-align: left; width: 100%; background: var(--navy); color: #fff; border: none; border-radius: 8px; padding: 9px 11px; min-height: 36px; font-size: 12px; line-height: 1.45; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .assistant-next-btn svg { flex-shrink: 0; }
   .assistant-next-btn:hover { background: #223251; }
-  .assistant-q { text-align: left; font-size: 11.5px; border: 1px solid var(--border); background: #fff; border-radius: 7px; padding: 6px 10px; cursor: pointer; color: var(--navy); }
-  .assistant-q:hover { background: var(--accent-soft); border-color: var(--accent); }
-  .assistant-caveat { font-size: 10px; color: var(--text-3); padding: 8px 14px; line-height: 1.4; flex-shrink: 0; }
-  .assistant-inputbar { display: flex; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--border); flex-shrink: 0; }
-  .assistant-inputbar input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit; }
+  .assistant-q { text-align: left; font-family: inherit; font-size: 11.5px; line-height: 1.45; border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 7px 10px; min-height: 34px; cursor: pointer; color: var(--navy); white-space: normal; overflow-wrap: anywhere; }
+  .assistant-q:hover { background: #F3F6FA; border-color: #BCCBDD; }
+  .assistant-q:focus-visible, .assistant-next-btn:focus-visible, .assistant-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .assistant-caveat { font-size: 10.5px; color: var(--text-2); padding: 6px 14px 8px; line-height: 1.45; flex-shrink: 0; }
+  .assistant-inputbar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: #FAFBFC; flex-shrink: 0; }
+  .assistant-inputbar input { flex: 1; min-width: 0; width: 100%; height: 38px; border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font-size: 12.5px; font-family: inherit; }
   .assistant-inputbar input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .assistant-send { background: var(--navy); color: #fff; border: none; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .assistant-send { background: var(--navy); color: #fff; border: none; border-radius: 8px; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
   .assistant-send:hover { background: #223251; }
+  .connection-notice { margin-bottom: 10px; }
+  .connection-notice .backend-status { margin-top: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  @media (max-width: 980px) {
+    .ps-root { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; height: auto; max-height: none; overflow: visible; }
+    .leftnav { height: auto; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 10px 12px; }
+    .leftnav-brand { width: 100%; padding: 2px 4px 8px; }
+    .nav-item { width: auto; margin: 0; font-size: 11.5px; padding: 7px 8px; }
+    .nav-footer { display: none; }
+    .main-col { max-width: 100%; }
+    .main-col-canvas { height: 720px; }
+    .assistant-col { height: 680px; max-height: none; border-left: none; border-top: 1px solid var(--border); }
+  }
+  @media (max-width: 480px) {
+    .main-col { padding: 12px 10px 20px; }
+    .assistant-col { height: 740px; }
+    .assistant-inputbar input { font-size: 16px; }
+    .readiness-grid { grid-template-columns: minmax(0, 1fr); }
+    .card-head, .next-bar { flex-wrap: wrap; }
+    .ps-root .btn { white-space: normal; max-width: 100%; }
+    .upload-detail-row { flex-wrap: wrap; }
+    .ps-root .mini-table { display: block; overflow-x: auto; }
+    .ps-root .graph-toolbar-title { white-space: normal; flex-wrap: wrap; }
+  }
 
   .paper-row, .guideline-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; margin-top: 8px; }
   .paper-meta { flex: 1; min-width: 0; }
@@ -1921,6 +1946,7 @@ function DataFoundationView({ state, actions }) {
           <StatusChip status={isComplete ? "complete" : "clarification"} />
         </div>
         <p>Before you explore anything, here's what was found in your data. This page is automated \u2014 it isn't interactive analysis.</p>
+        <p className="helper">Phase 2 explains data structure and quality. It does not assign final causal roles.</p>
         <div className="button-row" style={{ marginTop: 10 }}>
           <button className="btn btn-secondary btn-sm" onClick={() => runAssistantAction?.("Interpret Data Structure")}>
             <Sparkles size={13} /> Interpret Data Structure
@@ -6021,6 +6047,7 @@ function EstimationView({ state, actions, onGoNext }) {
       <div className="ps-header">
         <h1>Estimation &amp; calculation</h1>
         <p>Run your pre-specified analysis, review results and diagnostics, and confirm a primary result before continuing to Review &amp; Export.</p>
+        <p className="helper">Proof-of-concept calculation support only: backend results help review the design, but they do not prove a causal effect or support clinical decisions.</p>
       </div>
 
       {/* ── Section 1: Pre-Run Config Summary ── */}
@@ -9602,6 +9629,14 @@ export default function CausalStudioApp() {
       </div>
 
       <div className={`main-col text-justify ${page === "graph" ? "main-col-canvas" : ""}`}>
+        {(backendStatus.checked && !backendStatus.connected || page === "setup") && (
+          <div className="connection-notice" role="status" aria-live="polite">
+            <div className={`backend-status ${backendStatus.connected ? "backend-status-ok" : "backend-status-warn"}`}>
+              <span>{backendStatus.connected ? "Backend connected" : backendStatus.checked ? "Backend unavailable" : "Checking backend..."}</span>
+              <small>{backendStatus.message}</small>
+            </div>
+          </div>
+        )}
         <PanelErrorBoundary key={page}>
         {page === "setup" && <ProjectSetupView state={state} actions={actions} />}
         {page === "data-foundation" && <DataFoundationView state={state} actions={actions} />}
@@ -9663,7 +9698,7 @@ export default function CausalStudioApp() {
         )}
         <div className="assistant-caveat">LLM guidance only — not numerical estimation. The assistant uses the current dashboard state and FastAPI responses to explain the workflow; it does not make clinical decisions, diagnose patients, or judge whether data are sufficient for causal inference.</div>
         <div className="assistant-inputbar">
-          <input placeholder="Ask a question\u2026" value={assistantInput} onChange={(e) => setAssistantInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAssistantInput()} />
+          <input aria-label="Ask a question" placeholder="Ask a question..." value={assistantInput} onChange={(e) => setAssistantInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAssistantInput()} />
           <button className="assistant-send" aria-label="Send" onClick={submitAssistantInput}><Send size={15} /></button>
         </div>
         </PanelErrorBoundary>
